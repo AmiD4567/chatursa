@@ -1,0 +1,226 @@
+# 🔧 ДОРАБОТАТЬ - Поиск по сообщениям и пользователям
+
+## 📋 Описание проблемы
+
+Поиск по сообщениям не работает из-за проблем с API endpoint `/api/messages/:chatId`.
+
+## 🗓️ Дата создания
+19 марта 2026 г.
+
+## 🎯 Что должно работать
+
+### Функционал поиска:
+1. **Поиск пользователей** - по username и fullName
+2. **Поиск сообщений** - по тексту во всех чатах
+3. **Быстрый переход** - клик по пользователю открывает диалог с ним
+4. **Навигация** - кнопки ↑ и ↓ для перемещения между результатами
+5. **Подсветка** - найденные элементы подсвечиваются жёлтым
+
+### Расположение:
+- Панель поиска в sidebar (над списком чатов)
+- Поиск работает по всем чатам одновременно
+
+## ❌ Текущая проблема
+
+### Ошибка API:
+```
+GET /api/messages/:chatId?userId=xxx
+Ошибка: db.prepare(...).all is not a function
+```
+
+### Причина:
+В проекте используется **sqlite3** (асинхронный), а не **better-sqlite3** (синхронный).
+
+Методы которые НЕ работают:
+- `db.prepare().all()`
+- `db.prepare().iterate()`
+- `stmt.step()`
+- `stmt.getAsObject()`
+
+Методы которые РАБОТАЮТ:
+- `db.all(sql, params, callback)`
+- `db.get(sql, params, callback)`
+- `db.run(sql, params, callback)`
+
+## 📝 Что было сделано
+
+### 1. Добавлен API endpoint (backend/server.js)
+```javascript
+app.get('/api/messages/:chatId', (req, res) => {
+  // ...
+  db.all(`SELECT ...`, [chatId], (err, rows) => {
+    // Обработка результатов
+  });
+});
+```
+
+### 2. Добавлен поиск в frontend (frontend/src/App.js)
+- Состояния: `searchQuery`, `searchResults`, `userSearchResults`, `isSearching`
+- Функции: `handleSearchMessages()`, `handleSearchNext()`, `handleSearchPrev()`
+- Компоненты: панель поиска в sidebar
+
+### 3. Добавлен CSS (frontend/src/index.css)
+- Стили для `.search-section`, `.search-input`, `.search-nav-btn`
+- Анимации: `.search-loading`, `.chat-highlight`, `.message-highlight`
+
+## 🔍 Код для восстановления
+
+### Frontend - функция поиска (App.js):
+```javascript
+const handleSearchMessages = async () => {
+  if (!searchQuery.trim()) {
+    setSearchResults([]);
+    setUserSearchResults([]);
+    setIsSearching(false);
+    return;
+  }
+  
+  setIsSearching(true);
+  const query = searchQuery.toLowerCase().trim();
+  const results = [];
+  const userResults = [];
+  
+  // 1. Ищем пользователей
+  users.forEach(user => {
+    const username = (user.username || '').toLowerCase();
+    const fullName = (user.fullName || '').toLowerCase();
+    
+    if (username.includes(query) || fullName.includes(query)) {
+      userResults.push({
+        ...user,
+        type: 'user',
+        searchIndex: userResults.length
+      });
+    }
+  });
+  
+  // 2. Ищем по всем чатам - загружаем сообщения для каждого чата
+  for (const chat of chats) {
+    try {
+      const response = await fetch(`${SOCKET_URL}/api/messages/${chat.id}?userId=${currentUser?.id}`);
+      if (response.ok) {
+        const data = await response.json();
+        const chatMessages = data.messages || [];
+        
+        chatMessages.forEach(msg => {
+          if (msg.text && msg.text.toLowerCase().includes(query)) {
+            results.push({
+              ...msg,
+              chatId: chat.id,
+              chatName: getChatDisplayName(chat),
+              type: 'message',
+              searchIndex: results.length
+            });
+          }
+        });
+      }
+    } catch (err) {
+      console.error('Ошибка поиска в чате:', chat.id, err);
+    }
+  }
+  
+  // Объединяем результаты: сначала пользователи, потом сообщения
+  const allResults = [...userResults, ...results];
+  setSearchResults(allResults);
+  setUserSearchResults(userResults);
+  setCurrentSearchIndex(0);
+  setIsSearching(false);
+  
+  if (allResults.length > 0) {
+    const firstResult = allResults[0];
+    
+    if (firstResult.type === 'user') {
+      // Переход к пользователю
+      const existingChat = chats.find(c => 
+        c.type === 'direct' && 
+        c.participantsDetails && 
+        c.participantsDetails.some(p => p.id === firstResult.id)
+      );
+      
+      if (existingChat) {
+        handleSelectChat(existingChat);
+      } else {
+        createDirectChat(firstResult.id);
+      }
+      setTimeout(() => scrollToUser(firstResult.id), 300);
+    } else {
+      // Переход к сообщению
+      if (firstResult.chatId !== activeChatId) {
+        handleSelectChat(chats.find(c => c.id === firstResult.chatId));
+      }
+      setTimeout(() => scrollToMessage(firstResult.id), 300);
+    }
+  }
+};
+```
+
+### Backend - API endpoint (server.js):
+```javascript
+// API для получения сообщений чата
+app.get('/api/messages/:chatId', (req, res) => {
+  const { chatId } = req.params;
+  const { userId } = req.query;
+
+  if (!chatId || !userId) {
+    return res.status(400).json({ error: 'chatId и userId обязательны' });
+  }
+
+  db.all(`
+    SELECT m.*, u.username as senderName, u.avatar as senderAvatar
+    FROM messages m
+    LEFT JOIN users u ON m.sender_id = u.id
+    WHERE m.chat_id = ?
+    ORDER BY m.timestamp ASC
+  `, [chatId], (err, rows) => {
+    if (err) {
+      console.error('Ошибка загрузки сообщений:', err);
+      return res.status(500).json({ error: 'Ошибка при загрузке сообщений' });
+    }
+    
+    const messages = (rows || []).map(row => {
+      let file = null;
+      if (row.file_data) {
+        try {
+          file = JSON.parse(row.file_data);
+        } catch (e) {
+          file = null;
+        }
+      }
+      
+      return {
+        id: row.id,
+        chatId: row.chat_id,
+        senderId: row.sender_id,
+        text: row.text,
+        file: file,
+        timestamp: row.timestamp,
+        senderName: row.senderName,
+        senderAvatar: row.senderAvatar
+      };
+    });
+
+    console.log(`✅ Найдено ${messages.length} сообщений для чата ${chatId}`);
+    res.json({ messages });
+  });
+});
+```
+
+## 🚀 Следующие шаги
+
+1. **Проверить тип БД** - уточнить какой sqlite используется
+2. **Исправить API** - переписать на правильные методы
+3. **Раскомментировать поиск** - убрать комментарии в App.js
+4. **Протестировать** - проверить поиск по пользователям и сообщениям
+
+## 📁 Затронутые файлы
+
+- `backend/server.js` - API endpoint `/api/messages/:chatId`
+- `frontend/src/App.js` - функция поиска, состояния, UI
+- `frontend/src/index.css` - стили для поиска
+
+## 💡 Примечания
+
+- Поиск по пользователям работает (ищет по `users` массиву)
+- Проблема только с загрузкой сообщений из БД
+- В логах backend видно: `📩 Запрос сообщений для чата: xxx`
+- Ошибка: `db.prepare(...).all is not a function`
