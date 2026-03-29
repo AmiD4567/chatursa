@@ -78,13 +78,8 @@ function formatVersion(version, date, description, type, commits) {
 // Генерация CHANGELOG
 function generateChangelog(commits) {
   let changelog = `# 📋 История изменений\n\n`;
-  changelog += `> Автоматически сгенерировано: ${new Date().toLocaleDateString('ru-RU', { \n`;
-  changelog += `  year: 'numeric',\n`;
-  changelog += `  month: 'long',\n`;
-  changelog += `  day: 'numeric',\n`;
-  changelog += `  hour: '2-digit',\n`;
-  changelog += `  minute: '2-digit'\n`;
-  changelog += `})}\n\n`;
+  const today = new Date().toLocaleDateString('ru-RU', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  changelog += `> Автоматически сгенерировано: ${today}\n\n`;
   changelog += `---\n\n`;
   
   let currentVersion = null;

@@ -18,6 +18,8 @@ function App() {
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [birthDate, setBirthDate] = useState('');
+  const [rememberMe, setRememberMe] = useState(false); // Запомнить меня
   const [authError, setAuthError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
@@ -176,6 +178,7 @@ function App() {
     is_admin: 0
   });
   const [isCreatingUser, setIsCreatingUser] = useState(false);
+  const [hostCounts, setHostCounts] = useState({}); // Подсчёт пользователей по host
   
   // Сброс пароля
   const [showResetPasswordModal, setShowResetPasswordModal] = useState(false);
@@ -221,6 +224,10 @@ function App() {
   // Получаем правильное имя для чата (для личных чатов - имя собеседника)
   const getChatDisplayName = (chat) => {
     if (!chat) return '';
+    // Для чата с помощником возвращаем название из чата
+    if (chat.id?.startsWith('bot-chat-')) {
+      return chat.name || '🤖 Помощник';
+    }
     if (chat.type !== 'direct' || !chat.participantsDetails) {
       return chat.name;
     }
@@ -536,10 +543,24 @@ function App() {
       console.error('Ошибка подключения:', err.message);
     });
 
-    // Проверяем сохраненные данные пользователя
+    // Проверяем сохраненные данные пользователя (для авто-входа)
     const savedData = localStorage.getItem(STORAGE_KEY);
+    const savedCredentials = localStorage.getItem('chat_credentials');
 
     console.log('Сохранённые данные:', savedData);
+    console.log('Сохранённые учётные данные:', savedCredentials);
+
+    // Если есть учётные данные, заполняем форму
+    if (savedCredentials) {
+      try {
+        const creds = JSON.parse(savedCredentials);
+        setEmail(creds.email || '');
+        setPassword(creds.password || '');
+        setRememberMe(true);
+      } catch (e) {
+        console.error('Ошибка парсинга credentials:', e);
+      }
+    }
 
     // Отправляем событие подключения пользователя
     if (savedData) {
@@ -567,7 +588,8 @@ function App() {
           const statusText = data.user.status_text || '';
           const fullUser = {
             ...user,
-            status_text: statusText
+            status_text: statusText,
+            is_admin: data.user.is_admin || 0
           };
           setCurrentUser(fullUser);
         } else {
@@ -1014,6 +1036,16 @@ function App() {
       const data = await response.json();
 
       if (response.ok) {
+        // Сохраняем учётные данные если выбрана опция "Запомнить меня"
+        if (rememberMe) {
+          localStorage.setItem('chat_credentials', JSON.stringify({
+            email: email,
+            password: password
+          }));
+        } else {
+          localStorage.removeItem('chat_credentials');
+        }
+
         // Подключаемся к сокету с данными пользователя
         socket.emit('join', {
           username: data.user.username,
@@ -1046,11 +1078,17 @@ function App() {
       return;
     }
 
+    if (!birthDate) {
+      setAuthError('Дата рождения обязательна');
+      setIsLoading(false);
+      return;
+    }
+
     try {
       const response = await fetch(`${SOCKET_URL}/api/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, email, password })
+        body: JSON.stringify({ username, email, password, birthDate })
       });
 
       const data = await response.json();
@@ -1072,6 +1110,7 @@ function App() {
           setUsername('');
           setEmail('');
           setPassword('');
+          setBirthDate('');
           // Проверяем статус админа после регистрации
           checkAdminStatus(loginData.user.id);
         }
@@ -1174,6 +1213,14 @@ function App() {
       if (response.ok) {
         const data = await response.json();
         setAdminUsers(data.users);
+        
+        // Подсчитываем количество пользователей на каждый host
+        const counts = {};
+        data.users.forEach(user => {
+          const host = user.host || 'unknown';
+          counts[host] = (counts[host] || 0) + 1;
+        });
+        setHostCounts(counts);
       }
     } catch (err) {
       console.error('Ошибка загрузки пользователей:', err);
@@ -1686,7 +1733,12 @@ function App() {
     setActiveChatId(chat.id);
     activeChatIdRef.current = chat.id;
     socket.emit('join_chat', chat.id);
+    socket.emit('mark_read', { chatId: chat.id });
     setMessages([]);
+    // Сбрасываем счетчик непрочитанных для этого чата
+    setChats(prev => prev.map(c => 
+      c.id === chat.id ? { ...c, unreadCount: 0 } : c
+    ));
     // Сбрасываем поиск при переключении чата
     setShowSearchMessages(false);
     setSearchQuery('');
@@ -2011,6 +2063,48 @@ function App() {
       setViewUserProfileData(user);
     }
     setViewingUserProfile(true);
+  };
+
+  // Загрузка аватара помощника (только для админов)
+  const handleUploadHelperAvatar = async (e, helperData) => {
+    const file = e.target.files[0];
+    if (!file || !currentUser) return;
+
+    const formData = new FormData();
+    formData.append('avatar', file);
+    formData.append('userId', currentUser.id);
+
+    try {
+      const response = await fetch(`${SOCKET_URL}/api/upload-helper-avatar`, {
+        method: 'POST',
+        body: formData
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        // Обновляем аватар в просмотре профиля
+        setViewUserProfileData(prev => ({ ...prev, avatar: data.avatar }));
+        // Обновляем аватар в списке чатов
+        setChats(prev => prev.map(chat => {
+          if (chat.participantsDetails) {
+            return {
+              ...chat,
+              participantsDetails: chat.participantsDetails.map(p =>
+                p.id === helperData.id ? { ...p, avatar: data.avatar } : p
+              )
+            };
+          }
+          return chat;
+        }));
+        alert('Аватар помощника успешно обновлён!');
+      } else {
+        const errorData = await response.json();
+        alert(`Ошибка: ${errorData.error || 'Не удалось загрузить аватар'}`);
+      }
+    } catch (err) {
+      console.error('Ошибка загрузки аватара помощника:', err);
+      alert('Ошибка соединения с сервером');
+    }
   };
 
   // Открытие аватара в полном размере
@@ -2882,6 +2976,88 @@ function App() {
     return <span className="message-status">✓</span>;
   };
 
+  // Форматирование текста бота (поддержка markdown-подобного синтаксиса)
+  const formatBotText = (text) => {
+    if (!text) return text;
+    
+    // Разбиваем на строки для обработки
+    const lines = text.split('\n');
+    
+    return lines.map((line, lineIndex) => {
+      let formattedLine = line;
+      
+      // Обработка заголовков (*** текст ***)
+      if (formattedLine.startsWith('***') && formattedLine.endsWith('***')) {
+        return <h4 key={lineIndex} style={{ margin: '10px 0 5px', color: '#667eea' }}>{formattedLine.slice(3, -3)}</h4>;
+      }
+      
+      // Обработка жирного текста (**текст**)
+      const parts = formattedLine.split(/(\*\*.*?\*\*)/g);
+      const formattedParts = parts.map((part, i) => {
+        if (part.startsWith('**') && part.endsWith('**')) {
+          return <strong key={i}>{part.slice(2, -2)}</strong>;
+        }
+        return part;
+      });
+      
+      // Обработка списков
+      if (formattedLine.trim().startsWith('• ')) {
+        return <li key={lineIndex} style={{ marginLeft: '20px' }}>{formattedParts}</li>;
+      }
+      
+      // Обработка нумерованных списков
+      const numberedMatch = formattedLine.match(/^(\d+)\.\s+(.*)/);
+      if (numberedMatch) {
+        return <li key={lineIndex} style={{ marginLeft: '20px', listStyleType: 'decimal' }}><strong>{numberedMatch[1]}.</strong> {numberedMatch[2]}</li>;
+      }
+      
+      // Пустые строки
+      if (formattedLine.trim() === '') {
+        return <br key={lineIndex} />;
+      }
+      
+      // Обычный текст
+      return <span key={lineIndex}>{formattedParts}</span>;
+    });
+  };
+
+  // Форматирование шагов онбординга
+  const renderOnboardingSteps = (steps) => {
+    if (!steps || !Array.isArray(steps)) return null;
+    
+    return (
+      <div className="onboarding-steps">
+        {steps.map((step, idx) => (
+          <div key={idx} className="onboarding-step">
+            <div className="onboarding-step-title">{step.title}</div>
+            <div className="onboarding-step-desc">{step.desc}</div>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  // Проверка, является ли сообщение от помощника
+  const isBotMessage = (message) => {
+    return message.senderName === 'Помощник' || message.senderId?.includes('helper-bot');
+  };
+
+  // Обработка клика по кнопке бота
+  const handleBotButtonClick = (action) => {
+    if (!socket || !activeChatId) return;
+
+    // Отправляем команду боту
+    socket.emit('send_message', {
+      chatId: activeChatId,
+      text: action
+    });
+
+    // Закрываем мобильное меню если открыто
+    if (windowWidth <= 1600) {
+      setShowChatMenu(false);
+    }
+  };
+
   const formatLastMessageTime = (timestamp) => {
     const date = new Date(timestamp);
     const now = new Date();
@@ -2938,7 +3114,7 @@ function App() {
           {authMode === 'login' ? (
             <form onSubmit={handleLogin} className="auth-form">
               <p className="auth-subtitle">Введите данные для входа</p>
-              
+
               <div className="form-group">
                 <label>Email</label>
                 <input
@@ -2961,6 +3137,17 @@ function App() {
                 />
               </div>
 
+              <div className="form-group remember-me-group">
+                <label className="remember-me-label">
+                  <input
+                    type="checkbox"
+                    checked={rememberMe}
+                    onChange={(e) => setRememberMe(e.target.checked)}
+                  />
+                  <span>Запомнить меня</span>
+                </label>
+              </div>
+
               {authError && <div className="auth-error">{authError}</div>}
 
               <button type="submit" disabled={isLoading} className="auth-btn">
@@ -2970,7 +3157,7 @@ function App() {
           ) : (
             <form onSubmit={handleRegister} className="auth-form">
               <p className="auth-subtitle">Создайте аккаунт</p>
-              
+
               <div className="form-group">
                 <label>Имя пользователя</label>
                 <input
@@ -3003,6 +3190,17 @@ function App() {
                   onChange={(e) => setPassword(e.target.value)}
                   required
                   minLength={6}
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Дата рождения <span style={{ color: '#ff6b6b' }}>*</span></label>
+                <input
+                  type="date"
+                  value={birthDate}
+                  onChange={(e) => setBirthDate(e.target.value)}
+                  required
+                  max={new Date().toISOString().split('T')[0]}
                 />
               </div>
 
@@ -3437,12 +3635,25 @@ function App() {
                   <div className="admin-users-list">
                     <div className="admin-users-header">
                       <h4>Все пользователи</h4>
-                      <button 
-                        className="btn-primary" 
+                      <button
+                        className="btn-primary"
                         onClick={() => setShowCreateUserModal(true)}
                       >
                         ➕ Создать пользователя
                       </button>
+                    </div>
+                    <div className="host-warning">
+                      <strong>⚠️ Подозрительные хосты:</strong>{' '}
+                      {Object.entries(hostCounts)
+                        .filter(([_, count]) => count > 3)
+                        .map(([host, count]) => (
+                          <span key={host} className="host-warning-item">
+                            {host} ({count} учётных записей)
+                          </span>
+                        ))}
+                      {Object.entries(hostCounts).filter(([_, count]) => count > 3).length === 0 && (
+                        <span className="no-warning">подозрительных хостов не обнаружено</span>
+                      )}
                     </div>
                     <table className="admin-table">
                       <thead>
@@ -3451,71 +3662,85 @@ function App() {
                           <th>Email</th>
                           <th>Статус</th>
                           <th>Роль</th>
+                          <th>Host</th>
+                          <th>IP</th>
                           <th>Бронирование</th>
                           <th>Действия</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {adminUsers.map(user => (
-                          <tr key={user.id}>
-                            <td>
-                              <div className="user-cell">
-                                <img src={user.avatar || `https://ui-avatars.com/api/?name=${user.username}`} alt={user.username} className="user-avatar-small" />
-                                <span>{user.username}</span>
-                              </div>
-                            </td>
-                            <td>{user.email || '-'}</td>
-                            <td>
-                              <span className={`status-badge ${user.status}`}>
-                                {user.status === 'online' ? '🟢 Онлайн' : '⚫ Офлайн'}
-                              </span>
-                            </td>
-                            <td>
-                              {user.is_admin === 1 ? (
-                                <span className="admin-badge">👑 Админ</span>
-                              ) : (
-                                <span>Пользователь</span>
-                              )}
-                            </td>
-                            <td>
-                              <label className="toggle-switch">
-                                <input
-                                  type="checkbox"
-                                  checked={user.can_book_meeting_room === 1 || user.username === 'Root'}
-                                  onChange={() => handleToggleMeetingRoomRights(user.id, user.can_book_meeting_room)}
-                                  disabled={user.username === 'Root'}
-                                  title={user.username === 'Root' ? 'Root имеет право по умолчанию' : 'Переключить право на бронирование'}
-                                />
-                                <span className="toggle-slider"></span>
-                              </label>
-                            </td>
-                            <td>
-                              <div className="action-buttons">
-                                <button
-                                  className="action-btn edit"
-                                  onClick={() => handleToggleAdminRights(user.id, user.is_admin)}
-                                  title={user.is_admin === 1 ? 'Снять права админа' : 'Дать права админа'}
-                                >
-                                  {user.is_admin === 1 ? '👤' : '👑'}
-                                </button>
-                                <button
-                                  className="action-btn reset"
-                                  onClick={() => handleOpenResetPassword(user)}
-                                  title="Сбросить пароль"
-                                >
-                                  🔑
-                                </button>
-                                <button
-                                  className="action-btn delete"
-                                  onClick={() => handleDeleteUser(user.id)}
-                                  title="Удалить"
-                                >
-                                  🗑️
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
+                        {adminUsers.map(user => {
+                          const userHostCount = hostCounts[user.host] || 1;
+                          return (
+                            <tr key={user.id} className={userHostCount > 3 ? 'suspicious-row' : ''}>
+                              <td>
+                                <div className="user-cell">
+                                  <img src={user.avatar || `https://ui-avatars.com/api/?name=${user.username}`} alt={user.username} className="user-avatar-small" />
+                                  <span>{user.username}</span>
+                                  {userHostCount > 3 && (
+                                    <span className="suspicious-badge" title={`Этот host создал ${userHostCount} учётных записей`}>
+                                      ⚠️ {userHostCount}
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+                              <td>{user.email || '-'}</td>
+                              <td>
+                                <span className={`status-badge ${user.status}`}>
+                                  {user.status === 'online' ? '🟢 Онлайн' : '⚫ Офлайн'}
+                                </span>
+                              </td>
+                              <td>
+                                {user.is_admin === 1 ? (
+                                  <span className="admin-badge">👑 Админ</span>
+                                ) : (
+                                  <span>Пользователь</span>
+                                )}
+                              </td>
+                              <td className="host-cell" title={user.host}>
+                                <code>{user.host || 'unknown'}</code>
+                              </td>
+                              <td className="ip-cell">{user.ip_address || 'unknown'}</td>
+                              <td>
+                                <label className="toggle-switch">
+                                  <input
+                                    type="checkbox"
+                                    checked={user.can_book_meeting_room === 1 || user.username === 'Root'}
+                                    onChange={() => handleToggleMeetingRoomRights(user.id, user.can_book_meeting_room)}
+                                    disabled={user.username === 'Root'}
+                                    title={user.username === 'Root' ? 'Root имеет право по умолчанию' : 'Переключить право на бронирование'}
+                                  />
+                                  <span className="toggle-slider"></span>
+                                </label>
+                              </td>
+                              <td>
+                                <div className="action-buttons">
+                                  <button
+                                    className="action-btn edit"
+                                    onClick={() => handleToggleAdminRights(user.id, user.is_admin)}
+                                    title={user.is_admin === 1 ? 'Снять права админа' : 'Дать права админа'}
+                                  >
+                                    {user.is_admin === 1 ? '👤' : '👑'}
+                                  </button>
+                                  <button
+                                    className="action-btn reset"
+                                    onClick={() => handleOpenResetPassword(user)}
+                                    title="Сбросить пароль"
+                                  >
+                                    🔑
+                                  </button>
+                                  <button
+                                    className="action-btn delete"
+                                    onClick={() => handleDeleteUser(user.id)}
+                                    title="Удалить"
+                                  >
+                                    🗑️
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -3891,7 +4116,7 @@ function App() {
               return (
                 <div
                   key={chat.id}
-                  className={`chat-item ${activeChat?.id === chat.id ? 'active' : ''}`}
+                  className={`chat-item ${activeChat?.id === chat.id ? 'active' : ''} ${chat.id?.startsWith('bot-chat-') ? 'bot-chat' : ''}`}
                   data-user-id={otherUserId || ''}
                 >
                 <div
@@ -3905,7 +4130,7 @@ function App() {
                       );
                       return otherUser ? (
                         <img
-                          src={otherUser.avatar}
+                          src={otherUser.avatar || chat.avatar || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(otherUser.username)}
                           alt={otherUser.username}
                           className="chat-avatar"
                         />
@@ -4018,7 +4243,7 @@ function App() {
                     );
                     return otherUser ? (
                       <img
-                        src={otherUser.avatar}
+                        src={otherUser.avatar || activeChat.avatar || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(otherUser.username)}
                         alt={otherUser.username}
                         className="chat-header-avatar"
                         onClick={() => {
@@ -4105,7 +4330,7 @@ function App() {
                 <div
                   id={`message-${message.id}`}
                   key={message.id}
-                  className={`message-main ${message.senderId === currentUser?.id ? 'own' : ''}`}
+                  className={`message-main ${message.senderId === currentUser?.id ? 'own' : ''} ${isBotMessage(message) ? 'message-bot' : ''}`}
                   onContextMenu={(e) => handleContextMenu(e, message.id, message.text, message.chatId)}
                 >
                   <img
@@ -4129,8 +4354,27 @@ function App() {
                         </button>
                       </div>
                     </div>
-                    {message.text && <p className="message-text-main" onContextMenu={(e) => handleContextMenu(e, message.id, message.text, message.chatId)}>{message.text}</p>}
-                    {message.forwarded_from && (
+                    {message.text && (
+                      <p className="message-text-main" onContextMenu={(e) => handleContextMenu(e, message.id, message.text, message.chatId)}>
+                        {isBotMessage(message) ? formatBotText(message.text) : message.text}
+                      </p>
+                    )}
+                    {/* Кнопки бота */}
+                    {isBotMessage(message) && message.buttons && message.buttons.length > 0 && (
+                      <div className="bot-buttons">
+                        {message.buttons.map((btn, idx) => (
+                          <button
+                            key={idx}
+                            className="bot-button"
+                            onClick={() => handleBotButtonClick(btn.action)}
+                          >
+                            {btn.label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {/* Файлы и пересылка только для обычных сообщений (не бота) */}
+                    {!isBotMessage(message) && message.forwarded_from && (
                       <div className="forwarded-indicator">
                         <span className="forwarded-icon">↗️</span>
                         <span className="forwarded-text">
@@ -4138,7 +4382,7 @@ function App() {
                         </span>
                       </div>
                     )}
-                    {message.file && (
+                    {!isBotMessage(message) && message.file && (
                       <div className="message-file-main">
                         {message.file.mimetype?.startsWith('image/') ? (
                           <img
@@ -4248,7 +4492,7 @@ function App() {
                     <div className="chat-menu-item" onClick={handleViewUserInfo}>
                       <span className="menu-icon">
                         {otherUser ? (
-                          <img src={otherUser.avatar} alt={otherUser.username} className="menu-avatar" />
+                          <img src={otherUser.avatar || activeChat.avatar || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(otherUser.username)} alt={otherUser.username} className="menu-avatar" />
                         ) : (
                           <span className="emoji-animated">👤</span>
                         )}
@@ -5300,13 +5544,47 @@ function App() {
 
             <div className="modal-body">
               <div className="view-profile-header">
-                <img
-                  src={viewUserProfileData.avatar || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(viewUserProfileData.username)}
-                  alt={viewUserProfileData.username}
-                  className="view-profile-avatar"
-                  onClick={() => handleOpenAvatar(viewUserProfileData.avatar, viewUserProfileData.username)}
-                  style={{ cursor: viewUserProfileData.avatar ? 'zoom-in' : 'default' }}
-                />
+                <div className="view-profile-avatar-wrapper" style={{ position: 'relative', display: 'inline-block' }}>
+                  <img
+                    src={viewUserProfileData.avatar || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(viewUserProfileData.username)}
+                    alt={viewUserProfileData.username}
+                    className="view-profile-avatar"
+                    onClick={() => handleOpenAvatar(viewUserProfileData.avatar, viewUserProfileData.username)}
+                    style={{ cursor: viewUserProfileData.avatar ? 'zoom-in' : 'default' }}
+                  />
+                  {/* Кнопка смены аватара для помощника (только для админов) */}
+                  {viewUserProfileData.username === 'Помощник' && currentUser?.is_admin === 1 && (
+                    <label
+                      htmlFor="helper-avatar-upload"
+                      className="change-avatar-btn"
+                      title="Сменить аватар помощника"
+                      style={{
+                        position: 'absolute',
+                        bottom: '0',
+                        right: '0',
+                        background: 'rgba(102, 126, 234, 0.9)',
+                        borderRadius: '50%',
+                        width: '32px',
+                        height: '32px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        cursor: 'pointer',
+                        fontSize: '18px',
+                        border: '2px solid white'
+                      }}
+                    >
+                      📷
+                    </label>
+                  )}
+                  <input
+                    id="helper-avatar-upload"
+                    type="file"
+                    accept="image/*"
+                    style={{ display: 'none' }}
+                    onChange={(e) => handleUploadHelperAvatar(e, viewUserProfileData)}
+                  />
+                </div>
                 <div className="view-profile-names">
                   <h4>{viewUserProfileData.username}</h4>
                   {viewUserProfileData.full_name && (

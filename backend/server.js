@@ -138,6 +138,13 @@ async function initDatabase() {
     // Колонка уже существует
   }
 
+  // Миграция для добавления has_seen_welcome
+  try {
+    db.run('ALTER TABLE users ADD COLUMN has_seen_welcome INTEGER DEFAULT 0');
+  } catch (e) {
+    // Колонка уже существует
+  }
+
   // Установим админа для первого пользователя (Root)
   try {
     db.run("UPDATE users SET is_admin = 1 WHERE username = 'Root'");
@@ -314,7 +321,19 @@ async function initDatabase() {
     `);
     saveDatabase();
   }
-  
+
+  // Создание помощника если не существует
+  const botCheck = db.exec("SELECT * FROM users WHERE username = 'Помощник'");
+  if (botCheck.length === 0 || botCheck[0].values.length === 0) {
+    const botId = 'helper-bot-' + uuidv4().substring(0, 8);
+    db.run(`
+      INSERT INTO users (id, username, avatar, status, is_admin)
+      VALUES (?, ?, ?, 'online', 0)
+    `, [botId, 'Помощник', 'http://localhost:3001/uploads/УРСА.jpg']);
+    saveDatabase();
+    console.log('Создан помощник');
+  }
+
   console.log('База данных инициализирована');
 }
 
@@ -412,8 +431,8 @@ app.get('/api/admin/users', (req, res) => {
   if (!checkAdmin(userId)) {
     return res.status(403).json({ error: 'Доступ запрещён' });
   }
-  
-  const users = db.exec('SELECT id, username, email, full_name, status, is_admin, created_at, last_seen FROM users ORDER BY username');
+
+  const users = db.exec('SELECT id, username, email, full_name, status, is_admin, created_at, last_seen, host, ip_address FROM users ORDER BY username');
   const userList = users[0]?.values.map(row => ({
     id: row[0],
     username: row[1],
@@ -422,9 +441,11 @@ app.get('/api/admin/users', (req, res) => {
     status: row[4],
     is_admin: row[5],
     created_at: row[6],
-    last_seen: row[7]
+    last_seen: row[7],
+    host: row[8] || 'unknown',
+    ip_address: row[9] || 'unknown'
   })) || [];
-  
+
   res.json({ users: userList });
 });
 
@@ -821,9 +842,9 @@ app.put('/api/admin/ui-settings', (req, res) => {
 
 // API для регистрации
 app.post('/api/register', (req, res) => {
-  const { username, email, password } = req.body;
+  const { username, email, password, birthDate } = req.body;
 
-  if (!username || !email || !password) {
+  if (!username || !email || !password || !birthDate) {
     return res.status(400).json({ error: 'Все поля обязательны' });
   }
 
@@ -850,9 +871,9 @@ app.post('/api/register', (req, res) => {
 
   try {
     db.run(`
-      INSERT INTO users (id, username, email, password_hash, avatar, status)
-      VALUES (?, ?, ?, ?, ?, 'offline')
-    `, [userId, username, emailLower, passwordHash, avatar]);
+      INSERT INTO users (id, username, email, password_hash, avatar, status, birth_date)
+      VALUES (?, ?, ?, ?, ?, 'offline', ?)
+    `, [userId, username, emailLower, passwordHash, avatar, birthDate]);
     saveDatabase();
 
     res.json({
@@ -908,7 +929,7 @@ app.post('/api/login', (req, res) => {
 
 // API для получения профиля пользователя
 app.get('/api/profile/:userId', (req, res) => {
-  const userStmt = db.prepare('SELECT id, username, email, avatar, full_name, birth_date, about, mobile_phone, work_phone, status_text FROM users WHERE id = ?');
+  const userStmt = db.prepare('SELECT id, username, email, avatar, full_name, birth_date, about, mobile_phone, work_phone, status_text, is_admin FROM users WHERE id = ?');
   userStmt.bind([req.params.userId]);
   if (!userStmt.step()) {
     userStmt.free();
@@ -1063,6 +1084,48 @@ app.post('/api/upload-avatar', upload.single('avatar'), (req, res) => {
     });
   } catch (err) {
     console.error('Ошибка загрузки аватара:', err);
+    res.status(500).json({ error: 'Ошибка при загрузке аватара' });
+  }
+});
+
+// API для загрузки аватара помощника (только для админов)
+app.post('/api/upload-helper-avatar', upload.single('avatar'), (req, res) => {
+  const { userId } = req.body;
+
+  if (!userId) {
+    return res.status(400).json({ error: 'userId обязателен' });
+  }
+
+  // Проверяем, является ли пользователь администратором
+  const userStmt = db.prepare('SELECT is_admin FROM users WHERE id = ?');
+  userStmt.bind([userId]);
+  let isAdmin = false;
+  if (userStmt.step()) {
+    const row = userStmt.getAsObject();
+    isAdmin = row['is_admin'] === 1;
+  }
+  userStmt.free();
+
+  if (!isAdmin) {
+    return res.status(403).json({ error: 'Только администраторы могут менять аватар помощника' });
+  }
+
+  if (!req.file) {
+    return res.status(400).json({ error: 'Файл аватара обязателен' });
+  }
+
+  const avatarUrl = `http://localhost:${PORT}/uploads/${req.file.filename}`;
+
+  try {
+    db.run('UPDATE users SET avatar = ? WHERE username = ?', [avatarUrl, 'Помощник']);
+    saveDatabase();
+
+    res.json({
+      success: true,
+      avatar: avatarUrl
+    });
+  } catch (err) {
+    console.error('Ошибка загрузки аватара помощника:', err);
     res.status(500).json({ error: 'Ошибка при загрузке аватара' });
   }
 });
@@ -1796,6 +1859,155 @@ app.post('/api/messages/:messageId/forward', (req, res) => {
   }
 });
 
+// ============================================
+// API для бота-помощника
+// ============================================
+
+// Статистика пользователя
+app.get('/api/bot/stats/:userId', (req, res) => {
+  const { userId } = req.params;
+
+  try {
+    // Количество сообщений
+    const messagesCount = db.exec(`SELECT COUNT(*) as count FROM messages WHERE sender_id = '${userId}'`);
+    const totalMessages = messagesCount[0]?.values[0][0] || 0;
+
+    // Количество файлов
+    const filesCount = db.exec(`SELECT COUNT(*) as count FROM messages WHERE sender_id = '${userId}' AND file_data IS NOT NULL`);
+    const totalFiles = filesCount[0]?.values[0][0] || 0;
+
+    // Количество задач
+    const tasksCount = db.exec(`SELECT COUNT(*) as count FROM calendar_tasks WHERE user_id = '${userId}'`);
+    const totalTasks = tasksCount[0]?.values[0][0] || 0;
+
+    // Дата регистрации
+    const userDate = db.exec(`SELECT created_at FROM users WHERE id = '${userId}'`);
+    const createdAt = userDate[0]?.values[0][0] || new Date().toISOString();
+
+    // Дней в чате
+    const daysInChat = Math.floor((new Date() - new Date(createdAt)) / (1000 * 60 * 60 * 24));
+
+    res.json({
+      success: true,
+      stats: {
+        messages: totalMessages,
+        files: totalFiles,
+        tasks: totalTasks,
+        daysInChat: daysInChat,
+        createdAt: createdAt
+      }
+    });
+  } catch (err) {
+    console.error('Ошибка получения статистики:', err);
+    res.status(500).json({ error: 'Ошибка при получении статистики' });
+  }
+});
+
+// Контакты пользователей
+app.get('/api/bot/contacts', (req, res) => {
+  try {
+    const users = db.exec(`
+      SELECT id, username, email, full_name, mobile_phone, work_phone, avatar, status
+      FROM users
+      WHERE username != 'Помощник'
+      ORDER BY username
+    `);
+
+    const contacts = users[0]?.values.map(row => ({
+      id: row[0],
+      username: row[1],
+      email: row[2],
+      full_name: row[3],
+      mobile_phone: row[4],
+      work_phone: row[5],
+      avatar: row[6],
+      status: row[7]
+    })) || [];
+
+    res.json({ success: true, contacts });
+  } catch (err) {
+    console.error('Ошибка получения контактов:', err);
+    res.status(500).json({ error: 'Ошибка при получении контактов' });
+  }
+});
+
+// События на сегодня
+app.get('/api/bot/today/:userId', (req, res) => {
+  const { userId } = req.params;
+
+  try {
+    const today = new Date();
+    const todayStr = today.toISOString().split('T')[0];
+
+    // Задачи на сегодня
+    const tasksToday = db.exec(`
+      SELECT id, title, description, task_date, task_time, color
+      FROM calendar_tasks
+      WHERE user_id = '${userId}' AND task_date LIKE '${todayStr}%'
+    `);
+
+    const tasks = tasksToday[0]?.values.map(row => ({
+      id: row[0],
+      title: row[1],
+      description: row[2],
+      task_date: row[3],
+      task_time: row[4],
+      color: row[5]
+    })) || [];
+
+    // Дни рождения сегодня
+    const todayDay = today.getDate();
+    const todayMonth = today.getMonth() + 1;
+
+    const birthdays = db.exec(`
+      SELECT id, username, avatar, birth_date
+      FROM users
+      WHERE birth_date IS NOT NULL
+    `);
+
+    const birthdaysToday = birthdays[0]?.values
+      .filter(row => {
+        const birthDate = new Date(row[3]);
+        return birthDate.getDate() === todayDay && (birthDate.getMonth() + 1) === todayMonth;
+      })
+      .map(row => ({
+        id: row[0],
+        username: row[1],
+        avatar: row[2],
+        birth_date: row[3]
+      })) || [];
+
+    // Встречи сегодня
+    const meetingsToday = db.exec(`
+      SELECT id, title, description, meeting_date, start_time, end_time
+      FROM meeting_room_bookings
+      WHERE meeting_date LIKE '${todayStr}%'
+    `);
+
+    const meetings = meetingsToday[0]?.values.map(row => ({
+      id: row[0],
+      title: row[1],
+      description: row[2],
+      meeting_date: row[3],
+      start_time: row[4],
+      end_time: row[5]
+    })) || [];
+
+    res.json({
+      success: true,
+      today: {
+        date: todayStr,
+        tasks,
+        birthdays: birthdaysToday,
+        meetings
+      }
+    });
+  } catch (err) {
+    console.error('Ошибка получения событий на сегодня:', err);
+    res.status(500).json({ error: 'Ошибка при получении событий' });
+  }
+});
+
 // Получение IP адреса клиента
 function getClientIp(req) {
   return req.headers['x-forwarded-for']?.split(',')[0] || 
@@ -2030,6 +2242,27 @@ function getChatMessages(chatId, limit = 100) {
   const messages = [];
   while (stmt.step()) {
     const row = stmt.getAsObject();
+    
+    // Проверяем, есть ли кнопки в file_data
+    let buttons = [];
+    let isBotMessage = false;
+    
+    if (row.file_data) {
+      try {
+        const fileData = JSON.parse(row.file_data);
+        // Проверяем, это кнопки бота
+        if (fileData.type === 'bot_buttons' && fileData.buttons) {
+          buttons = fileData.buttons;
+          isBotMessage = true;
+        } else {
+          // Это обычный файл
+          buttons = [];
+        }
+      } catch (e) {
+        buttons = [];
+      }
+    }
+    
     messages.push({
       id: row.id,
       chatId: row.chat_id,
@@ -2037,11 +2270,13 @@ function getChatMessages(chatId, limit = 100) {
       senderName: row.senderName,
       senderAvatar: row.senderAvatar,
       text: row.text || '',
-      file: row.file_data ? JSON.parse(row.file_data) : null,
+      file: row.file_data && !isBotMessage ? JSON.parse(row.file_data) : null,
       timestamp: row.timestamp,
       read_at: row.read_at,
       forwarded_from: row.forwarded_from ? JSON.parse(row.forwarded_from) : null,
-      readBy: []
+      readBy: [],
+      buttons: buttons,
+      isBotMessage: isBotMessage
     });
   }
   stmt.free();
@@ -2056,6 +2291,566 @@ function getAllUsers() {
   }
   stmt.free();
   return users;
+}
+
+// ============================================
+// База знаний бота-помощника (УЛУЧШЕННАЯ ВЕРСИЯ 2026)
+// ============================================
+
+const botKnowledge = {
+  commands: {
+    '/помощь': {
+      text: '🤖 *Я помогу вам разобраться с чатом!*\n\nВыберите тему или введите команду:',
+      buttons: [
+        { label: '📱 Создать чат', action: '/чат' },
+        { label: '📅 Задача', action: '/задача' },
+        { label: '📅 Сегодня', action: '/сегодня' },
+        { label: '📞 Контакты', action: '/контакты' },
+        { label: '🔔 Уведомления', action: '/уведомления' }
+      ]
+    },
+
+    '/чат': {
+      text: '📱 *Как создать чат:*\n\n1. Нажмите кнопку ✏️ в разделе "Чаты"\n2. Выберите тип чата:\n   • 🌐 Общий — доступен всем\n   • 👤 Личный — чат с одним пользователем\n   • 👥 Групповой — чат с несколькими участниками\n3. Выберите участников из списка\n4. Нажмите "Создать"\n\n💡 *Совет:* В личном чате имя автоматически подставляется из выбранного пользователя',
+      buttons: [
+        { label: '🔙 Назад', action: '/помощь' },
+        { label: '📅 Задачи', action: '/задача' },
+        { label: '👥 Групповой чат', action: '/групповой_чат' }
+      ]
+    },
+
+    '/задача': {
+      text: '📅 *Как создать задачу:*\n\n1. Откройте раздел 📅 Календарь\n2. Переключитесь на вкладку "Задачи"\n3. Нажмите "+ Добавить задачу"\n4. Заполните:\n   • Название задачи\n   • Описание (необязательно)\n   • Дату выполнения\n   • Время (необязательно)\n   • Цвет для визуального выделения\n5. Нажмите "Сохранить"\n\n💡 *Совет:* Задачи отображаются в календаре выбранным цветом',
+      buttons: [
+        { label: '🔙 Назад', action: '/помощь' },
+        { label: '📅 Календарь', action: '/календарь' },
+        { label: '👥 Поделиться', action: '/поделиться_задачей' }
+      ]
+    },
+
+    '/календарь': {
+      text: '📅 *Календарь:*\n\nКалендарь показывает задачи в виде сетки месяца.\n\n*Управление:*\n• ← → — переключение месяцев\n• Клик на день — показать задачи за этот день\n• Клик на задачу — редактировать/удалить\n• Фильтр по цвету — показать задачи определённого цвета\n\n*Виды отображения:*\n• Задачи — личные задачи\n• Переговорка — бронирование комнат',
+      buttons: [
+        { label: '🔙 Назад', action: '/помощь' },
+        { label: '🏢 Переговорка', action: '/переговорка' },
+        { label: '📅 Мои задачи', action: '/задача' }
+      ]
+    },
+
+    '/переговорка': {
+      text: '🏢 *Бронирование переговорной:*\n\n1. Откройте 📅 Календарь\n2. Переключитесь на вкладку "Переговорка"\n3. Нажмите "Забронировать"\n4. Заполните:\n   • Название встречи\n   • Описание (необязательно)\n   • Дата и время начала/окончания\n5. Нажмите "Сохранить"\n\n⚠️ *Важно:* Право на бронирование выдаётся ответственным лицом',
+      buttons: [
+        { label: '🔙 Назад', action: '/помощь' },
+        { label: '📅 Календарь', action: '/календарь' },
+        { label: '📋 Мои брони', action: '/мои_брони' }
+      ]
+    },
+
+    '/файлы': {
+      text: '📎 *Загрузка файлов:*\n\n1. В поле ввода сообщения нажмите 📎\n2. Выберите файл (до 50 МБ)\n3. Отправьте сообщение\n\n*Поддерживаемые файлы:*\n• Изображения — показываются с превью\n• Документы — PDF, DOC, XLS и др.\n• Видео и аудио\n\n💡 *Совет:* Кликните на изображение для просмотра в полном размере',
+      buttons: [
+        { label: '🔙 Назад', action: '/помощь' },
+        { label: '📁 Мои файлы', action: '/мои_файлы' },
+        { label: '🔍 Поиск файлов', action: '/поиск_файлов' }
+      ]
+    },
+
+    '/статус': {
+      text: '🟢 *Статусы:*\n\n*Как изменить:*\n1. Нажмите на свой аватар внизу слева\n2. Выберите статус:\n   • 🟢 Онлайн\n   • 🌙 Не беспокоить\n   • ⛔ Занят\n   • 🔴 Офлайн\n\n*Статус текста:*\nМожно добавить текстовый статус (например, "На обеде до 14:00")',
+      buttons: [
+        { label: '🔙 Назад', action: '/помощь' },
+        { label: '👤 Профиль', action: '/профиль' }
+      ]
+    },
+
+    '/профиль': {
+      text: '👤 *Редактирование профиля:*\n\n1. Нажмите на свой аватар\n2. Выберите "Профиль"\n3. Можно изменить:\n   • Фото профиля\n   • ФИО\n   • Дату рождения\n   • О себе\n   • Мобильный телефон\n   • Рабочий телефон\n   • Статус\n4. Нажмите "Сохранить"',
+      buttons: [
+        { label: '🔙 Назад', action: '/помощь' },
+        { label: '🟢 Статусы', action: '/статус' },
+        { label: '📞 Телефоны', action: '/телефоны' }
+      ]
+    },
+
+    '/уведомления': {
+      text: '🔔 *Уведомления:*\n\n*Типы уведомлений:*\n• Новые сообщения — push-уведомления\n• Дни рождения — напоминания о днях рождениях коллег\n• Задачи — напоминания о предстоящих задачах\n• Общие задачи — уведомления о задачах, которыми поделились\n\n*Настройки:*\nОткройте Настройки → Уведомления для включения/отключения',
+      buttons: [
+        { label: '🔙 Назад', action: '/помощь' },
+        { label: '⚙️ Настройки', action: '/настройки' }
+      ]
+    },
+
+    '/поиск': {
+      text: '🔍 *Поиск:*\n\n*Поиск сообщений:*\n1. Откройте чат\n2. Нажмите 🔍 вверху\n3. Введите поисковый запрос\n4. Используйте ↑ ↓ для навигации по результатам\n\n*Поиск пользователей:*\nВведите имя в поле поиска в разделе "Чаты"',
+      buttons: [
+        { label: '🔙 Назад', action: '/помощь' },
+        { label: '📁 Поиск файлов', action: '/поиск_файлов' }
+      ]
+    },
+
+    '/сегодня': {
+      text: '📅 *Сегодня в календаре:*\n\nЭта команда покажет:\n• Задачи на сегодня\n• Дни рождения коллег\n• Запланированные встречи\n\n*Использование:*\nПросто введите /сегодня и бот покажет все события на текущий день.\n\n💡 *Совет:* Используйте команду каждое утро для планирования!',
+      buttons: [
+        { label: '📅 Календарь', action: '/календарь' },
+        { label: '🔔 Уведомления', action: '/уведомления' },
+        { label: '🔙 Назад', action: '/помощь' }
+      ]
+    },
+
+    '/контакты': {
+      text: '📞 *Телефонная книга:*\n\nБыстрый доступ к контактам коллег:\n• Мобильные телефоны\n• Рабочие телефоны\n• Email\n\n*Использование:*\nВведите /контакты для просмотра всех контактов или начните вводить имя для поиска.\n\n💡 *Совет:* Контакты синхронизируются с профилями пользователей',
+      buttons: [
+        { label: '👤 Профиль', action: '/профиль' },
+        { label: '🔙 Назад', action: '/помощь' }
+      ]
+    },
+
+    '/онбординг': {
+      text: '🎯 *Добро пожаловать в корпоративный чат!*\n\nДавайте быстро освоим основные функции:',
+      steps: [
+        { title: '📱 Чаты', desc: 'Создавайте личные и групповые чаты с коллегами' },
+        { title: '📅 Календарь', desc: 'Планируйте задачи и бронируйте переговорки' },
+        { title: '📎 Файлы', desc: 'Обменивайтесь документами и изображениями' },
+        { title: '🔔 Уведомления', desc: 'Получайте важные уведомления вовремя' },
+        { title: '👤 Профиль', desc: 'Настройте информацию о себе' }
+      ],
+      buttons: [
+        { label: '🚀 Начать обучение', action: '/онбординг_шаг1' },
+        { label: '⏭️ Пропустить', action: '/помощь' }
+      ]
+    },
+
+    '/онбординг_шаг1': {
+      text: '📱 *Шаг 1: Чаты*\n\nВы можете создавать:\n• 👤 Личные чаты — для общения один на один\n• 👥 Групповые чаты — для командной работы\n• 🌐 Общий чат — доступен всем сотрудникам\n\n*Как создать:*\nНажмите ✏️ в разделе "Чаты"',
+      buttons: [
+        { label: '➡️ Далее: Календарь', action: '/онбординг_шаг2' },
+        { label: '🔙 Назад', action: '/онбординг' }
+      ]
+    },
+
+    '/онбординг_шаг2': {
+      text: '📅 *Шаг 2: Календарь*\n\nПланируйте задачи и встречи:\n• Создавайте задачи с дедлайнами\n• Бронируйте переговорные комнаты\n• Отслеживайте дни рождения коллег\n\n*Совет:* Используйте цвета для приоритетов!',
+      buttons: [
+        { label: '➡️ Далее: Файлы', action: '/онбординг_шаг3' },
+        { label: '🔙 Назад', action: '/онбординг_шаг1' }
+      ]
+    },
+
+    '/онбординг_шаг3': {
+      text: '📎 *Шаг 3: Файлы*\n\nЗагружайте и делитесь файлами:\n• Изображения с превью\n• Документы (PDF, DOC, XLS)\n• Видео и аудио до 50 МБ\n\n*Как:* Нажмите 📎 в поле ввода',
+      buttons: [
+        { label: '➡️ Далее: Профиль', action: '/онбординг_шаг4' },
+        { label: '🔙 Назад', action: '/онбординг_шаг2' }
+      ]
+    },
+
+    '/онбординг_шаг4': {
+      text: '👤 *Шаг 4: Профиль*\n\nНастройте информацию о себе:\n• Фото профиля\n• ФИО и дата рождения\n• Контактные телефоны\n• Статус (онлайн/занят/офлайн)\n\n*Где:* Нажмите на аватар внизу',
+      buttons: [
+        { label: '✅ Завершить', action: '/онбординг_финиш' },
+        { label: '🔙 Назад', action: '/онбординг_шаг3' }
+      ]
+    },
+
+    '/онбординг_финиш': {
+      text: '🎉 *Поздравляем!*\n\nВы освоили основы работы с чатом!\n\n*Что дальше:*\n• Начните с создания первого чата\n• Добавьте задачу в календарь\n• Загрузите файл\n\nЯ всегда на связи! Введите /помощь в любой момент.',
+      buttons: [
+        { label: '📱 Создать чат', action: '/чат' },
+        { label: '📅 Добавить задачу', action: '/задача' },
+        { label: '🔙 Главное меню', action: '/помощь' }
+      ]
+    },
+
+    'по умолчанию': {
+      text: '🤖 Привет! Я бот-помощник.\n\nЯ помогу вам разобраться с функциями чата.\n\n*Быстрые команды:*\n/помощь — все команды\n/онбординг — обучение для новых\n/чат — как создать чат\n/задача — как создать задачу',
+      buttons: [
+        { label: '📚 Обучение', action: '/онбординг' },
+        { label: '📱 Чаты', action: '/чат' },
+        { label: '📅 Задачи', action: '/задача' },
+        { label: '🔙 Главное', action: '/помощь' }
+      ]
+    }
+  },
+
+  // Ответы на вопросы (ключевые слова)
+  responses: {
+    'привет': {
+      text: '👋 Здравствуйте! Я бот-помощник.\n\nЧем могу помочь сегодня?',
+      buttons: [
+        { label: '📚 Обучение', action: '/онбординг' },
+        { label: '❓ Помощь', action: '/помощь' }
+      ]
+    },
+    'здравствуй': {
+      text: '👋 Здравствуйте! Я бот-помощник.\n\nЧем могу помочь сегодня?',
+      buttons: [
+        { label: '📚 Обучение', action: '/онбординг' },
+        { label: '❓ Помощь', action: '/помощь' }
+      ]
+    },
+    'как дела': {
+      text: 'У меня всё отлично! Готов помочь вам с вопросами по чату.',
+      buttons: [
+        { label: '❓ Помощь', action: '/помощь' }
+      ]
+    },
+    'кто ты': {
+      text: '🤖 Я бот-помощник! Моя задача — помогать пользователям разбираться с функциями этого чата.',
+      buttons: [
+        { label: '📚 Что ты умеешь?', action: '/что_ты_умеешь' },
+        { label: '❓ Помощь', action: '/помощь' }
+      ]
+    },
+    'что ты умеешь': {
+      text: 'Я умею:\n• Рассказывать о функциях чата\n• Помогать с созданием чатов и задач\n• Объяснять как загружать файлы\n• Подсказывать по настройкам\n• Проводить обучение для новых пользователей',
+      buttons: [
+        { label: '📚 Обучение', action: '/онбординг' },
+        { label: '❓ Все команды', action: '/помощь' }
+      ]
+    },
+    'спасибо': {
+      text: 'Пожалуйста! 😊 Обращайтесь ещё!',
+      buttons: [
+        { label: '⭐ Оценить помощь', action: '/оценить' }
+      ]
+    },
+    'пока': {
+      text: 'До свидания! Если будут вопросы — я всегда на связи! 👋',
+      buttons: []
+    },
+    'до свидания': {
+      text: 'До свидания! Хорошего дня! 👋',
+      buttons: []
+    },
+    'как создать чат': {
+      text: '📱 Чтобы создать чат:\n1. Нажмите ✏️ в разделе "Чаты"\n2. Выберите тип чата\n3. Выберите участников\n4. Нажмите "Создать"',
+      buttons: [
+        { label: '📱 Подробнее', action: '/чат' },
+        { label: '👥 Групповой чат', action: '/групповой_чат' }
+      ]
+    },
+    'как создать задачу': {
+      text: '📅 Чтобы создать задачу:\n1. Откройте 📅 Календарь\n2. Вкладка "Задачи"\n3. Нажмите "+ Добавить задачу"\n4. Заполните поля и сохраните',
+      buttons: [
+        { label: '📅 Подробнее', action: '/задача' }
+      ]
+    },
+    'как загрузить файл': {
+      text: '📎 Чтобы загрузить файл:\n1. В поле ввода нажмите 📎\n2. Выберите файл (до 50 МБ)\n3. Отправьте сообщение',
+      buttons: [
+        { label: '📎 Подробнее', action: '/файлы' }
+      ]
+    },
+    'как изменить статус': {
+      text: '🟢 Чтобы изменить статус:\n1. Нажмите на свой аватар внизу\n2. Выберите нужный статус',
+      buttons: [
+        { label: '🟢 Подробнее', action: '/статус' }
+      ]
+    },
+    'как забронировать': {
+      text: '🏢 Чтобы забронировать переговорку:\n1. Откройте 📅 Календарь\n2. Вкладка "Переговорка"\n3. Нажмите "Забронировать"\n4. Заполните форму',
+      buttons: [
+        { label: '🏢 Подробнее', action: '/переговорка' }
+      ]
+    },
+    'не работает': {
+      text: '😕 Что именно не работает? Опишите проблему подробнее.\n\nЕсли проблема техническая — обратитесь в службу технической поддержки.',
+      buttons: [
+        { label: '🔙 Помощь', action: '/помощь' },
+        { label: '📞 Поддержка', action: '/поддержка' }
+      ]
+    },
+    'ошибка': {
+      text: '😕 Какую ошибку вы видите? Опишите подробнее.\n\nДля технических проблем обратитесь в службу технической поддержки.',
+      buttons: [
+        { label: '📞 Поддержка', action: '/поддержка' }
+      ]
+    },
+    'помощь': {
+      text: '🤖 Введите /помощь чтобы увидеть все доступные команды!',
+      buttons: [
+        { label: '❓ Все команды', action: '/помощь' }
+      ]
+    },
+    'команда': {
+      text: '🤖 Все команды начинаются с /. Введите /помощь для полного списка!',
+      buttons: [
+        { label: '❓ Все команды', action: '/помощь' }
+      ]
+    },
+    'бот': {
+      text: '🤖 Да, я здесь! Чем могу помочь?',
+      buttons: [
+        { label: '📚 Обучение', action: '/онбординг' },
+        { label: '❓ Помощь', action: '/помощь' }
+      ]
+    },
+    'как пользоваться': {
+      text: '🤖 Я помогу! Пройдите быстрое обучение или выберите тему:',
+      buttons: [
+        { label: '📚 Обучение', action: '/онбординг' },
+        { label: '📱 Чаты', action: '/чат' },
+        { label: '📅 Задачи', action: '/задача' }
+      ]
+    },
+    'функции': {
+      text: '🤖 *Функции чата:*\n\n• 💬 Личные и групповые чаты\n• 📎 Обмен файлами\n• 📅 Календарь задач\n• 🏢 Бронирование переговорок\n• 🔔 Уведомления\n• 👤 Профили пользователей',
+      buttons: [
+        { label: '📚 Обучение', action: '/онбординг' },
+        { label: '❓ Все команды', action: '/помощь' }
+      ]
+    },
+    'обучение': {
+      text: '🎯 Отлично! Давайте пройдём быстрое обучение.',
+      buttons: [
+        { label: '🚀 Начать', action: '/онбординг' },
+        { label: '❓ Помощь', action: '/помощь' }
+      ]
+    },
+    'оценить': {
+      text: '⭐ *Оцените мою помощь:*\n\nНажмите на оценку:',
+      buttons: [
+        { label: '😞 1', action: '/оценка_1' },
+        { label: '😐 2', action: '/оценка_2' },
+        { label: '😐 3', action: '/оценка_3' },
+        { label: '😊 4', action: '/оценка_4' },
+        { label: '🤩 5', action: '/оценка_5' }
+      ]
+    },
+    'оценка_1': 'Спасибо за оценку! Я стараюсь стать лучше. 😊',
+    'оценка_2': 'Спасибо за оценку! Буду работать над ошибками. 😊',
+    'оценка_3': 'Спасибо! Стараюсь быть полезным! 😊',
+    'оценка_4': 'Рад, что смог помочь! 😊',
+    'оценка_5': 'Спасибо за высокую оценку! 🎉',
+    'мои_файлы': '📁 *Мои файлы:*\n\nВсе загруженные вами файлы сохраняются в сообщениях. Для поиска используйте 🔍 в чате.',
+    'поиск_файлов': '🔍 *Поиск файлов:*\n\nВведите название файла в поиске по чату.',
+    'мои_брони': '📋 *Мои брони:*\n\nВсе ваши бронирования переговорки отображаются во вкладке "Переговорка" в календаре.',
+    'групповой_чат': '👥 *Групповой чат:*\n\n1. Нажмите ✏️ в "Чаты"\n2. Выберите "Групповой"\n3. Назовите чат\n4. Добавьте участников\n5. Нажмите "Создать"',
+    'поделиться_задачей': '👥 *Как поделиться задачей:*\n\n1. Откройте 📅 Календарь\n2. Найдите нужную задачу в списке\n3. Нажмите на иконку "📤" рядом с задачей\n4. Выберите коллегу из списка\n5. Нажмите "Поделиться"\n\n*Что произойдёт:*\n• Задача появится у коллеги в списке "Полученные задачи"\n• Коллега сможет принять или отклонить задачу\n• После принятия задача будет в календаре коллеги\n\n💡 *Совет:* Так можно делегировать задачи коллегам',
+    'телефоны': '📞 *Телефоны в профиле:*\n\n• Мобильный — для связи\n• Рабочий — офисный номер\n\nДобавьте в разделе Профиль → Телефоны',
+    'настройки': '⚙️ *Настройки:*\n\nОткройте ⚙️ внизу слева для настройки:\n• Тема оформления\n• Уведомления\n• Язык\n• Приватность',
+    'поддержка': '📞 *Техническая поддержка:*\n\nПо вопросам работы чата обратитесь:\n• К ответственному за чат в вашей организации\n• В IT-отдел',
+    'помощь_по_чату': '📚 *Помощь по чату:*\n\nВоспользуйтесь командами:\n/помощь — все команды\n/онбординг — обучение\n/чат, /задача, /файлы — по функциям'
+  },
+
+  // Поиск по функциям
+  searchIndex: {
+    'чат': ['/чат', '/групповой_чат'],
+    'задач': ['/задача', '/календарь'],
+    'календар': ['/календарь', '/задача'],
+    'файл': ['/файлы', '/мои_файлы', '/поиск_файлов'],
+    'статус': ['/статус', '/профиль'],
+    'профил': ['/профиль', '/статус'],
+    'уведомлен': ['/уведомления', '/настройки'],
+    'поиск': ['/поиск', '/поиск_файлов'],
+    'переговор': ['/переговорка', '/календарь'],
+    'брон': ['/переговорка', '/мои_брони'],
+    'обучен': ['/онбординг'],
+    'оцен': ['/оценить'],
+    'настрой': ['/настройки', '/уведомления'],
+    'поддерж': ['/поддержка'],
+    'помощ': ['/помощь', '/помощь_по_чату'],
+    'техническ': ['/поддержка'],
+    'ошибк': ['/поддержка'],
+    'не работ': ['/поддержка']
+  }
+};
+
+// Функция для получения ответа бота (ПОЛНОСТЬЮ КНОПОЧНАЯ)
+function getBotResponse(message) {
+  const text = message.trim().toLowerCase();
+
+  // Проверка команд (с / или без)
+  const cleanCommand = text.replace('/', '').split(' ')[0];
+  
+  if (text.startsWith('/') || botKnowledge.commands['/' + cleanCommand]) {
+    const command = '/' + cleanCommand;
+    if (botKnowledge.commands[command]) {
+      const cmd = botKnowledge.commands[command];
+      return {
+        text: cmd.text,
+        buttons: cmd.buttons || [],
+        steps: cmd.steps || null
+      };
+    }
+  }
+
+  // Расширенный поиск по ключевым словам
+  const keywordMap = {
+    'привет': '/помощь',
+    'здравствуй': '/помощь',
+    'помощь': '/помощь',
+    'помоги': '/помощь',
+    'команда': '/помощь',
+    'меню': '/помощь',
+    'главное': '/помощь',
+    
+    'чат': '/чат',
+    'сообщение': '/чат',
+    'беседа': '/чат',
+    'разговор': '/чат',
+    'создать чат': '/чат',
+    
+    'задач': '/задача',
+    'задание': '/задача',
+    'дело': '/задача',
+    'план': '/задача',
+    'создать задачу': '/задача',
+    
+    'календар': '/календарь',
+    'дата': '/календарь',
+    'планер': '/календарь',
+    'расписани': '/календарь',
+    
+    'переговор': '/переговорка',
+    'встреч': '/переговорка',
+    'комнат': '/переговорка',
+    'брон': '/переговорка',
+    'забронировать': '/переговорка',
+    
+    'файл': '/файлы',
+    'документ': '/файлы',
+    'загрузить': '/файлы',
+    'отправить файл': '/файлы',
+    'картинк': '/файлы',
+    'фото': '/файлы',
+    
+    'статус': '/статус',
+    'онлайн': '/статус',
+    'офлайн': '/статус',
+    'занят': '/статус',
+    
+    'профил': '/профиль',
+    'аватар': '/профиль',
+    'настройк': '/профиль',
+    'данные': '/профиль',
+    'информация': '/профиль',
+    
+    'уведомлен': '/уведомления',
+    'уведомить': '/уведомления',
+    'звонок': '/уведомления',
+    'оповещен': '/уведомления',
+    
+    'сегодня': '/сегодня',
+    'сейчас': '/сегодня',
+    'текущий': '/сегодня',
+    'день': '/сегодня',
+    'события': '/сегодня',
+    'план на день': '/сегодня',
+    
+    'контакт': '/контакты',
+    'телефон': '/контакты',
+    'сотрудник': '/контакты',
+    'коллега': '/контакты',
+    'список сотрудников': '/контакты',
+    
+    'обучен': '/онбординг',
+    'обучи': '/онбординг',
+    'начать': '/онбординг',
+    'урок': '/онбординг',
+    'инструкц': '/онбординг',
+    
+    'поиск': '/поиск',
+    'найти': '/поиск',
+    'искать': '/поиск',
+    
+    'оцен': '/оценить',
+    'рейтинг': '/оценить',
+    
+    'поддерж': '/поддержка',
+    'помощь поддержка': '/поддержка',
+    'ошибка': '/поддержка',
+    'не работ': '/поддержка',
+    'проблем': '/поддержка',
+    'слом': '/поддержка'
+  };
+
+  // Поиск по ключевым словам
+  for (const [keyword, command] of Object.entries(keywordMap)) {
+    if (text.includes(keyword)) {
+      const cmd = botKnowledge.commands[command];
+      if (cmd) {
+        return {
+          text: cmd.text,
+          buttons: cmd.buttons || [],
+          steps: cmd.steps || null
+        };
+      }
+    }
+  }
+
+  // Проверка ответов на вопросы
+  for (const [keyword, response] of Object.entries(botKnowledge.responses)) {
+    if (text.includes(keyword)) {
+      if (typeof response === 'object') {
+        return response;
+      }
+      return { text: response, buttons: [] };
+    }
+  }
+
+  // Ответ по умолчанию с кнопками
+  const defaultCmd = botKnowledge.commands['по умолчанию'];
+  return {
+    text: '🤖 *Я вас не совсем понял.*\n\nВыберите раздел, который вас интересует:',
+    buttons: [
+      { label: '📚 Обучение', action: '/онбординг' },
+      { label: '📱 Чаты', action: '/чат' },
+      { label: '📅 Задачи', action: '/задача' },
+      { label: '📞 Контакты', action: '/контакты' },
+      { label: '❓ Помощь', action: '/помощь' }
+    ],
+    steps: null
+  };
+}
+
+// Отправка сообщения от имени помощника (ОБНОВЛЁННАЯ — с сохранением кнопок в БД)
+function sendBotMessage(socket, chatId, text, buttons = []) {
+  // Находим помощника в базе по имени
+  const botResult = db.exec("SELECT id, username, avatar FROM users WHERE username = 'Помощник'");
+  if (!botResult || botResult.length === 0 || botResult[0].values.length === 0) {
+    console.error('Помощник не найден в базе');
+    return;
+  }
+
+  const botId = botResult[0].values[0][0];
+  const botUsername = botResult[0].values[0][1];
+  const botAvatar = botResult[0].values[0][2];
+
+  const messageId = uuidv4();
+  const timestamp = new Date().toISOString();
+
+  // Сохраняем кнопки в file_data (как JSON)
+  const buttonsData = buttons.length > 0 ? JSON.stringify({ type: 'bot_buttons', buttons: buttons }) : null;
+
+  try {
+    // Вставляем сообщение в БД с кнопками в file_data
+    db.run(`
+      INSERT INTO messages (id, chat_id, sender_id, text, timestamp, file_data)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `, [messageId, chatId, botId, text, timestamp, buttonsData]);
+    saveDatabase();
+
+    // Отправляем сообщение клиенту с кнопками
+    socket.emit('new_message', {
+      message: {
+        id: messageId,
+        chatId: chatId,
+        senderId: botId,
+        senderName: botUsername,
+        senderAvatar: botAvatar,
+        text: text,
+        timestamp: timestamp,
+        isBotMessage: true,
+        buttons: buttons
+      },
+      chat: { id: chatId }
+    });
+
+    console.log(`Бот отправил сообщение в чат ${chatId}: ${text.substring(0, 50)}...`);
+  } catch (err) {
+    console.error('Ошибка отправки сообщения ботом:', err);
+  }
 }
 
 // Socket.IO подключение
@@ -2136,10 +2931,37 @@ io.on('connection', (socket) => {
     
     // Автоматически присоединяем к комнате общего чата
     socket.join('general');
-    
+
     // Получаем список чатов пользователя
-    const userChats = getUserChats(user.id);
+    let userChats = getUserChats(user.id);
     
+    // Создаём чат с помощником если не существует
+    const botResult = db.exec("SELECT id FROM users WHERE username = 'Помощник'");
+    const botId = botResult && botResult.length > 0 && botResult[0].values.length > 0 ? botResult[0].values[0][0] : null;
+    const botChatId = `bot-chat-${user.id}`;
+    const botChatCheck = db.exec(`SELECT * FROM chats WHERE id = '${botChatId}'`);
+    if (botChatCheck.length === 0 || botChatCheck[0].values.length === 0) {
+      // Создаём чат с помощником
+      db.run(`
+        INSERT INTO chats (id, type, name, created_by, created_at)
+        VALUES (?, 'direct', '🤖 Помощник', ?, CURRENT_TIMESTAMP)
+      `, [botChatId, user.id]);
+
+      // Добавляем пользователя в чат с помощником
+      db.run(`INSERT OR IGNORE INTO chat_participants (chat_id, user_id) VALUES (?, ?)`, [botChatId, user.id]);
+
+      // Добавляем помощника в чат
+      if (botId) {
+        db.run(`INSERT OR IGNORE INTO chat_participants (chat_id, user_id) VALUES (?, ?)`, [botChatId, botId]);
+      }
+      saveDatabase();
+
+      // Обновляем список чатов
+      userChats = getUserChats(user.id);
+
+      console.log(`Создан чат с помощником для пользователя ${user.username}`);
+    }
+
     // Отправляем пользователю его данные
     socket.emit('user_joined_success', {
       user: {
@@ -2150,14 +2972,94 @@ io.on('connection', (socket) => {
       },
       chats: userChats
     });
-    
+
+    // Проверяем, первый ли это вход пользователя (по полю has_seen_welcome)
+    const userWelcomeCheck = db.exec(`SELECT has_seen_welcome FROM users WHERE id = '${user.id}'`);
+    const hasSeenWelcome = userWelcomeCheck && userWelcomeCheck.length > 0 && userWelcomeCheck[0].values.length > 0 && userWelcomeCheck[0].values[0][0] === 1;
+    const isFirstJoin = !hasSeenWelcome;
+
+    // Отправляем приветственное сообщение от бота при первом входе
+    if (isFirstJoin) {
+      // Помечаем, что пользователь видел приветствие
+      db.run('UPDATE users SET has_seen_welcome = 1 WHERE id = ?', [user.id]);
+      saveDatabase();
+
+      setTimeout(() => {
+        const welcomeMessage = `👋 Здравствуйте, ${user.username}!
+
+Я 🤖 Помощник. Рад видеть вас в нашей команде!
+
+🎯 *Рекомендую начать с обучения!*
+Это займёт всего 2 минуты и поможет быстро освоиться в чате.
+
+*Что вы узнаете:*
+• Как создавать чаты
+• Как управлять задачами
+• Как загружать файлы
+• Как настроить профиль
+
+*Начните обучение или выберите тему:*
+/онбординг — пошаговое обучение
+/помощь — все команды`;
+
+        const welcomeButtons = [
+          { label: '🎯 Пройти обучение', action: '/онбординг' },
+          { label: '❓ Помощь', action: '/помощь' },
+          { label: '📱 Чаты', action: '/чат' },
+          { label: '📅 Задачи', action: '/задача' }
+        ];
+
+        sendBotMessage(socket, botChatId, welcomeMessage, welcomeButtons);
+      }, 1000);
+    }
+
     // Уведомляем остальных о новом пользователе
     socket.broadcast.emit('user_status_changed', {
       userId: user.id,
       username: user.username,
       status: 'online'
     });
-    
+
+    // Приветствие нового пользователя в общем чате (только при первом входе)
+    if (isFirstJoin) {
+      setTimeout(() => {
+        const welcomeText = `👋 Коллеги, поприветствуйте нового участника — **${user.username}**!
+
+Рады видеть вас в нашей команде! 🎉`;
+
+        // Отправляем сообщение в общий чат от имени помощника
+        const botResult = db.exec("SELECT id FROM users WHERE username = 'Помощник'");
+        if (botResult && botResult.length > 0) {
+          const botId = botResult[0].values[0][0];
+          const messageId = uuidv4();
+
+          db.run(`
+            INSERT INTO messages (id, chat_id, sender_id, text, timestamp)
+            VALUES (?, 'general', ?, ?, ?)
+          `, [messageId, botId, welcomeText, new Date().toISOString()]);
+          saveDatabase();
+
+          // Отправляем всем в общий чат
+          io.to('general').emit('new_message', {
+            message: {
+              id: messageId,
+              chatId: 'general',
+              senderId: botId,
+              senderName: 'Помощник',
+              senderAvatar: 'https://ui-avatars.com/api/?name=🤖+Бот&background=667eea&color=fff',
+              text: welcomeText,
+              timestamp: new Date().toISOString(),
+              isBotMessage: true,
+              buttons: []
+            },
+            chat: { id: 'general' }
+          });
+
+          console.log(`Помощник приветствовал ${user.username} в общем чате`);
+        }
+      }, 2000);
+    }
+
     console.log(`${user.username} присоединился`);
   });
 
@@ -2413,6 +3315,148 @@ io.on('connection', (socket) => {
     });
 
     console.log('✓ Сообщение отправлено');
+    
+    // ============================================
+    // Обработка сообщений для бота-помощника
+    // ============================================
+    // Проверяем, является ли чат чатом с ботом
+    const isBotChat = chatId.startsWith('bot-chat-');
+
+    if (isBotChat && text && !file) {
+      const command = text.trim().toLowerCase().split(' ')[0];
+
+      // Обработка специальных команд с данными
+      if (command === '/сегодня') {
+        // Команда /сегодня
+        setTimeout(async () => {
+          try {
+            const today = new Date();
+            const todayStr = today.toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' });
+            const todayIso = today.toISOString().split('T')[0];
+
+            // Задачи на сегодня
+            const tasksToday = db.exec(`
+              SELECT id, title, task_time FROM calendar_tasks
+              WHERE user_id = '${onlineUser.id}' AND task_date LIKE '${todayIso}%'
+            `);
+            const tasks = tasksToday[0]?.values.map(row => ({
+              title: row[1],
+              time: row[2]
+            })) || [];
+
+            // Дни рождения сегодня
+            const todayDay = today.getDate();
+            const todayMonth = today.getMonth() + 1;
+            const birthdays = db.exec(`SELECT username, avatar FROM users WHERE birth_date IS NOT NULL`);
+            const birthdaysToday = birthdays[0]?.values
+              .filter(row => {
+                const bd = new Date(row[1]);
+                return bd.getDate() === todayDay && (bd.getMonth() + 1) === todayMonth;
+              })
+              .map(row => row[0]) || [];
+
+            // Встречи сегодня
+            const meetings = db.exec(`
+              SELECT title, start_time, end_time FROM meeting_room_bookings
+              WHERE meeting_date LIKE '${todayIso}%' AND organizer_id = '${onlineUser.id}'
+            `);
+            const meetingsList = meetings[0]?.values.map(row => ({
+              title: row[0],
+              time: `${row[1]} - ${row[2]}`
+            })) || [];
+
+            // Формируем ответ
+            let responseText = `📅 *${todayStr}*\n\n`;
+
+            if (tasks.length > 0) {
+              responseText += `✅ *Задачи (${tasks.length}):*\n`;
+              tasks.forEach((t, i) => {
+                responseText += `${i + 1}. ${t.title}${t.time ? ` ⏰ ${t.time}` : ''}\n`;
+              });
+              responseText += '\n';
+            } else {
+              responseText += `✅ *Задачи:* Нет на сегодня\n\n`;
+            }
+
+            if (birthdaysToday.length > 0) {
+              responseText += `🎂 *Дни рождения:*\n`;
+              birthdaysToday.forEach(name => {
+                responseText += `• ${name}\n`;
+              });
+              responseText += '\n';
+            }
+
+            if (meetingsList.length > 0) {
+              responseText += `🏢 *Встречи (${meetingsList.length}):*\n`;
+              meetingsList.forEach((m, i) => {
+                responseText += `${i + 1}. ${m.title} ⏰ ${m.time}\n`;
+              });
+            } else {
+              responseText += `🏢 *Встречи:* Нет на сегодня\n`;
+            }
+
+            responseText += '\n💡 *Совет:* Начинайте день с проверки этой команды!';
+
+            sendBotMessage(socket, chatId, responseText, [
+              { label: '📅 Календарь', action: '/календарь' },
+              { label: '🔔 Напоминания', action: '/уведомления' }
+            ]);
+          } catch (err) {
+            console.error('Ошибка команды /сегодня:', err);
+            sendBotMessage(socket, chatId, '😕 Произошла ошибка при получении данных. Попробуйте позже.', []);
+          }
+        }, 500);
+        return;
+      }
+
+      if (command === '/контакты') {
+        // Команда /контакты
+        setTimeout(() => {
+          try {
+            const users = db.exec(`
+              SELECT username, mobile_phone, work_phone, email, status
+              FROM users
+              WHERE username != 'Помощник'
+              ORDER BY username
+            `);
+
+            const contacts = users[0]?.values || [];
+
+            if (contacts.length === 0) {
+              sendBotMessage(socket, chatId, '📞 *Контакты:*\n\nСписок контактов пуст.', []);
+              return;
+            }
+
+            let responseText = `📞 *Телефонная книга (${contacts.length}):*\n\n`;
+            contacts.forEach(row => {
+              const status = row[4] === 'online' ? '🟢' : '⚫';
+              responseText += `${status} *${row[0]}*\n`;
+              if (row[1]) responseText += `  📱 Моб: ${row[1]}\n`;
+              if (row[2]) responseText += `  📞 Раб: ${row[2]}\n`;
+              if (row[3]) responseText += `  ✉️ ${row[3]}\n`;
+              responseText += '\n';
+            });
+
+            sendBotMessage(socket, chatId, responseText, [
+              { label: '👤 Профиль', action: '/профиль' },
+              { label: '🔙 Назад', action: '/помощь' }
+            ]);
+          } catch (err) {
+            console.error('Ошибка команды /контакты:', err);
+            sendBotMessage(socket, chatId, '😕 Произошла ошибка при получении контактов.', []);
+          }
+        }, 500);
+        return;
+      }
+
+      // Обычные команды через базу знаний
+      const botResponse = getBotResponse(text);
+
+      // Отправляем ответ с небольшой задержкой для естественности
+      setTimeout(() => {
+        sendBotMessage(socket, chatId, botResponse.text, botResponse.buttons || []);
+      }, 500);
+    }
   } catch (err) {
     console.error('=== ОШИБКА ПРИ ОТПРАВКЕ СООБЩЕНИЯ ===', err);
     console.error('Stack:', err.stack);
@@ -2695,18 +3739,122 @@ io.on('connection', (socket) => {
     if (onlineUser) {
       db.run('UPDATE users SET status = ?, last_seen = CURRENT_TIMESTAMP WHERE id = ?', ['offline', onlineUser.id]);
       saveDatabase();
-      
+
       io.emit('user_status_changed', {
         userId: onlineUser.id,
         username: onlineUser.username,
         status: 'offline'
       });
-      
+
       onlineUsers.delete(socket.id);
       console.log(`${onlineUser.username} отключился`);
     }
   });
 });
+
+// ============================================
+// Напоминания о задачах (интервальная проверка)
+// ============================================
+
+// Проверка каждые 15 минут
+const REMINDER_INTERVAL = 15 * 60 * 1000;
+
+function checkTaskReminders() {
+  try {
+    const now = new Date();
+    const today = now.toISOString().split('T')[0];
+    const tomorrow = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrowStr = tomorrow.toISOString().split('T')[0];
+
+    // Находим задачи на завтра
+    const tasksTomorrow = db.exec(`
+      SELECT ct.id, ct.title, ct.task_date, ct.task_time, ct.user_id, u.username
+      FROM calendar_tasks ct
+      JOIN users u ON ct.user_id = u.id
+      WHERE ct.task_date LIKE '${tomorrowStr}%'
+    `);
+
+    if (!tasksTomorrow || tasksTomorrow.length === 0) return;
+
+    // Отправляем напоминания
+    tasksTomorrow[0].values.forEach(row => {
+      const taskId = row[0];
+      const taskTitle = row[1];
+      const taskDate = row[2];
+      const taskTime = row[3];
+      const userId = row[4];
+      const username = row[5];
+
+      // Проверяем, онлайн ли пользователь
+      let isOnline = false;
+      onlineUsers.forEach(user => {
+        if (user.id === userId) isOnline = true;
+      });
+
+      if (isOnline) {
+        // Находим чат с ботом
+        const botChatId = `bot-chat-${userId}`;
+        const reminderText = `⏰ *Напоминание о задаче:*\n\n📅 **${taskTitle}**\n\nДата: ${new Date(taskDate).toLocaleDateString('ru-RU')}${taskTime ? `\nВремя: ${taskTime}` : ''}\n\n💡 *Совет:* Подготовьтесь заранее!`;
+
+        // Отправляем сообщение
+        const botResult = db.exec("SELECT id FROM users WHERE username = 'Помощник'");
+        if (botResult && botResult.length > 0) {
+          const botId = botResult[0].values[0][0];
+          const messageId = uuidv4();
+
+          db.run(`
+            INSERT INTO messages (id, chat_id, sender_id, text, timestamp)
+            VALUES (?, ?, ?, ?, ?)
+          `, [messageId, botChatId, botId, reminderText, new Date().toISOString()]);
+          saveDatabase();
+
+          // Находим сокет пользователя
+          let userSocket = null;
+          onlineUsers.forEach((user, socketId) => {
+            if (user.id === userId) userSocket = socketId;
+          });
+
+          const socketItem = Array.from(onlineUsers.entries()).find(([sid, u]) => u.id === userId);
+          if (socketItem) {
+            const userSocket = io.sockets.sockets.get(socketItem[0]);
+            if (userSocket) {
+              userSocket.emit('new_message', {
+                message: {
+                  id: messageId,
+                  chatId: botChatId,
+                  senderId: botId,
+                  senderName: 'Помощник',
+                  senderAvatar: 'https://ui-avatars.com/api/?name=🤖+Бот&background=667eea&color=fff',
+                  text: reminderText,
+                  timestamp: new Date().toISOString(),
+                  isBotMessage: true,
+                  buttons: [
+                    { label: '📅 Календарь', action: '/календарь' },
+                    { label: '✅ Отметить выполненной', action: '/задача' }
+                  ]
+                },
+                chat: { id: botChatId }
+              });
+            }
+          }
+
+          console.log(`Напоминание отправлено ${username} о задаче "${taskTitle}"`);
+        }
+      }
+    });
+  } catch (err) {
+    console.error('Ошибка проверки напоминаний:', err);
+  }
+}
+
+// Запускаем проверку после старта сервера
+setTimeout(() => {
+  checkTaskReminders();
+  // Затем проверяем каждые 15 минут
+  setInterval(checkTaskReminders, REMINDER_INTERVAL);
+  console.log('Напоминания о задачах активированы (проверка каждые 15 минут)');
+}, 5000);
 
 // Закрытие и сохранение БД при завершении
 process.on('SIGINT', () => {

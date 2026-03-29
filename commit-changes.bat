@@ -1,71 +1,73 @@
 @echo off
+chcp 65001 > nul
 setlocal enabledelayedexpansion
 
+title Commit Changes - Chat App Backup
+
 echo ========================================
-echo   Бэкап изменений кода
+echo   Code Change Backup
 echo ========================================
 echo.
 
-:: Проверка Git
+:: Check Git
 git --version > nul 2>&1
 if errorlevel 1 (
-    echo ❌ Git не установлен!
-    echo    Скачайте с https://git-scm.com/
+    echo ERROR: Git not installed!
+    echo Download from https://git-scm.com/
     pause
     exit /b 1
 )
 
-:: Запрос комментария
-set /p COMMENT="Введите описание изменений: "
+:: Get comment
+set /p COMMENT="Enter change description: "
 
 if "%COMMENT%"=="" (
-    echo ❌ Комментарий не введён!
+    echo ERROR: Comment required!
     pause
     exit /b 1
 )
 
-:: Дата и время
+:: Version
 set DATE=%DATE:~-4,4%%DATE:~-7,2%%DATE:~-10,2%
 set TIME=%TIME:~0,2%%TIME:~3,2%
 set VERSION=v%DATE%-%TIME%
 
 echo.
-echo 📝 Версия: %VERSION%
-echo 📝 Изменения: %COMMENT%
+echo Version: %VERSION%
+echo Changes: %COMMENT%
 echo.
 
-:: Переход в папку проекта
 cd /d "%~dp0"
 
-:: Проверка изменений
+:: Check changes
 git status --porcelain > nul 2>&1
 if errorlevel 1 (
-    echo ❌ Нет изменений для коммита
+    echo No changes to commit
     pause
     exit /b 1
 )
 
-:: Добавление всех файлов
-echo [1/4] Добавление файлов...
+:: Add files
+echo [1/4] Adding files...
 git add -A
 
-:: Коммит
-echo [2/4] Создание коммита...
+:: Commit
+echo [2/4] Creating commit...
 git commit -m "%VERSION% - %COMMENT%"
 
-:: Создание тега
-echo [3/4] Создание тега...
+:: Tag
+echo [3/4] Creating tag...
 git tag -a "%VERSION%" -m "%COMMENT%"
 
-echo [4/4] Готово!
+echo [4/4] Done!
 echo.
 echo ========================================
-echo ✅ Бэкап создан: %VERSION%
+echo Backup created: %VERSION%
 echo ========================================
 echo.
 
-:: Показать историю
-echo 📜 Последние 5 версий:
+:: Show history
+echo Last 5 versions:
 git log --oneline -5
 
 pause
