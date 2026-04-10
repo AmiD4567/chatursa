@@ -28,10 +28,28 @@ if (fs.existsSync(configPath)) {
 }
 
 // Используем переменные окружения от Electron или значения из config
+const HOST = process.env.CHAT_APP_HOST || config.server?.host || '0.0.0.0';
 const PORT = process.env.CHAT_APP_PORT || config.server?.port || 3001;
 const DATA_PATH = process.env.CHAT_APP_DATA_PATH || __dirname;
 const DB_PATH = process.env.CHAT_APP_DB_PATH || path.join(__dirname, 'chat.db');
 const UPLOADS_PATH = process.env.CHAT_APP_UPLOADS_PATH || config.uploads?.path || path.join(__dirname, 'uploads');
+
+// URL сервера для доступа из локальной сети
+const SERVER_URL = process.env.CHAT_APP_SERVER_URL || config.server?.url || `http://${getLocalIP()}:${PORT}`;
+
+// Функция для получения локального IP
+function getLocalIP() {
+  const os = require('os');
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      if (iface.family === 'IPv4' && !iface.internal) {
+        return iface.address;
+      }
+    }
+  }
+  return 'localhost';
+}
 
 const app = express();
 const server = http.createServer(app);
@@ -117,6 +135,13 @@ async function initDatabase() {
     // Колонка уже существует
   }
 
+  // Миграция для добавления task_end_time
+  try {
+    db.run('ALTER TABLE calendar_tasks ADD COLUMN task_end_time TEXT');
+  } catch (e) {
+    // Колонка уже существует
+  }
+
   // Миграция для добавления read_at в сообщения
   try {
     db.run('ALTER TABLE messages ADD COLUMN read_at TEXT');
@@ -156,6 +181,13 @@ async function initDatabase() {
   // Миграция для добавления task_time
   try {
     db.run('ALTER TABLE calendar_tasks ADD COLUMN task_time TEXT');
+  } catch (e) {
+    // Колонка уже существует
+  }
+
+  // Миграция для добавления task_end_time
+  try {
+    db.run('ALTER TABLE calendar_tasks ADD COLUMN task_end_time TEXT');
   } catch (e) {
     // Колонка уже существует
   }
@@ -227,6 +259,7 @@ async function initDatabase() {
       description TEXT,
       task_date TEXT NOT NULL,
       task_time TEXT,
+      task_end_time TEXT,
       color TEXT DEFAULT '#667eea',
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
@@ -261,6 +294,18 @@ async function initDatabase() {
       file_data TEXT,
       timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
       read_at TEXT
+    );
+
+    -- Таблица реакций на сообщения
+    CREATE TABLE IF NOT EXISTS message_reactions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      message_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      emoji TEXT NOT NULL,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(message_id, user_id, emoji),
+      FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
 
     -- Таблица непрочитанных сообщений
@@ -329,12 +374,32 @@ async function initDatabase() {
     db.run(`
       INSERT INTO users (id, username, avatar, status, is_admin)
       VALUES (?, ?, ?, 'online', 0)
-    `, [botId, 'Помощник', 'http://localhost:3001/uploads/УРСА.jpg']);
+    `, [botId, 'Помощник', `${SERVER_URL}/uploads/ursa.jpg`]);
     saveDatabase();
     console.log('Создан помощник');
   }
 
+  // Миграция: очищаем пустые номера телефонов
+  try {
+    db.run("UPDATE users SET mobile_phone = NULL WHERE TRIM(mobile_phone) = '' OR mobile_phone = ' '");
+    db.run("UPDATE users SET work_phone = NULL WHERE TRIM(work_phone) = '' OR work_phone = ' '");
+    saveDatabase();
+    console.log('Миграция телефонов выполнена');
+  } catch (e) {
+    // Игнорируем ошибки миграции
+  }
+
+  // Миграция: убираем эмодзи из имени помощника
+  try {
+    db.run("UPDATE chats SET name = 'Помощник' WHERE name = '🤖 Помощник'");
+    saveDatabase();
+    console.log('Миграция имени помощника выполнена');
+  } catch (e) {
+    // Игнорируем ошибки миграции
+  }
+
   console.log('База данных инициализирована');
+  return Promise.resolve();
 }
 
 // Сохранение базы данных на диск
@@ -432,7 +497,7 @@ app.get('/api/admin/users', (req, res) => {
     return res.status(403).json({ error: 'Доступ запрещён' });
   }
 
-  const users = db.exec('SELECT id, username, email, full_name, status, is_admin, created_at, last_seen, host, ip_address FROM users ORDER BY username');
+  const users = db.exec('SELECT id, username, email, full_name, status, is_admin, created_at, last_seen, host, ip_address, can_book_meeting_room FROM users ORDER BY username');
   const userList = users[0]?.values.map(row => ({
     id: row[0],
     username: row[1],
@@ -443,7 +508,8 @@ app.get('/api/admin/users', (req, res) => {
     created_at: row[6],
     last_seen: row[7],
     host: row[8] || 'unknown',
-    ip_address: row[9] || 'unknown'
+    ip_address: row[9] || 'unknown',
+    can_book_meeting_room: row[10] || 0
   })) || [];
 
   res.json({ users: userList });
@@ -840,12 +906,116 @@ app.put('/api/admin/ui-settings', (req, res) => {
   }
 });
 
+// ============================================
+// API для удаления сообщений администратором
+// ============================================
+
+// Удаление сообщения администратором
+app.delete('/api/admin/messages/:messageId', (req, res) => {
+  const { messageId } = req.params;
+  const { adminId } = req.query;
+
+  if (!adminId) {
+    return res.status(400).json({ error: 'adminId обязателен' });
+  }
+
+  // Проверяем админа
+  const isAdmin = checkAdmin(adminId);
+
+  if (!isAdmin) {
+    return res.status(403).json({ error: 'Доступ запрещён' });
+  }
+
+  if (!messageId) {
+    return res.status(400).json({ error: 'messageId обязателен' });
+  }
+
+  try {
+    // Получаем информацию о сообщении для логирования
+    const messageData = db.exec(`
+      SELECT m.id, m.chat_id, m.sender_id, m.text, m.file_data, m.timestamp,
+             u.username as sender_username
+      FROM messages m
+      JOIN users u ON m.sender_id = u.id
+      WHERE m.id = '${messageId.replace(/'/g, "''")}'
+    `);
+
+    if (!messageData[0] || messageData[0].values.length === 0) {
+      return res.status(404).json({ error: 'Сообщение не найдено' });
+    }
+
+    const row = messageData[0].values[0];
+    const chatId = row[1];
+    const senderId = row[2];
+    const text = row[3] || '';
+    const fileData = row[4];
+    const senderUsername = row[6];
+
+    // Удаляем файл если он есть
+    if (fileData) {
+      try {
+        const parsedFileData = JSON.parse(fileData);
+        const fileName = parsedFileData.url?.split('/').pop();
+        if (fileName) {
+          const filePath = path.join(UPLOADS_PATH, fileName);
+          if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+          }
+        }
+      } catch (e) {
+        console.error('Ошибка удаления файла:', e);
+      }
+    }
+
+    // Удаляем сообщение из БД
+    db.run('DELETE FROM messages WHERE id = ?', [messageId]);
+    saveDatabase();
+
+    // Логируем событие удаления
+    const logId = uuidv4();
+    const adminUser = db.exec(`SELECT username FROM users WHERE id = '${adminId.replace(/'/g, "''")}'`);
+    const adminName = adminUser[0]?.values[0][0] || 'Admin';
+    db.run(`INSERT INTO security_logs (id, event_type, event, user_id, username, status) VALUES (?, ?, ?, ?, ?, ?)`,
+      [logId, 'message_deleted', `Сообщение от ${senderUsername} удалено администратором ${adminName}`, senderId, senderUsername, 'warning']);
+    saveDatabase();
+
+    // Уведомляем клиентов через socket о удалении сообщения
+    const deletedMessage = {
+      id: messageId,
+      chat_id: chatId,
+      sender_id: senderId,
+      text: text,
+      file_data: fileData,
+      deleted_by: adminId,
+      deleted_at: new Date().toISOString()
+    };
+
+    // Отправляем событие всем подключенным клиентам в этом чате
+    io.to(chatId).emit('message_deleted', deletedMessage);
+
+    res.json({
+      success: true,
+      messageId,
+      chatId,
+      deletedMessage: deletedMessage
+    });
+  } catch (err) {
+    console.error('Ошибка удаления сообщения:', err);
+    res.status(500).json({ error: 'Ошибка при удалении сообщения' });
+  }
+});
+
 // API для регистрации
 app.post('/api/register', (req, res) => {
-  const { username, email, password, birthDate } = req.body;
+  const { username, email, password, confirmPassword, birthDate } = req.body;
 
   if (!username || !email || !password || !birthDate) {
     return res.status(400).json({ error: 'Все поля обязательны' });
+  }
+
+  // Проверка совпадения паролей
+  if (password !== confirmPassword) {
+    return res.status(400).json({ error: 'Пароли не совпадают' });
   }
 
   if (password.length < 6) {
@@ -978,8 +1148,12 @@ app.put('/api/profile', (req, res) => {
   const safeFullName = fullName === undefined || fullName === '' ? null : fullName;
   const safeBirthDate = birthDate === undefined || birthDate === '' ? null : birthDate;
   const safeAbout = about === undefined || about === '' ? null : about;
-  const safeMobilePhone = mobilePhone === undefined || mobilePhone === '' ? null : mobilePhone;
-  const safeWorkPhone = workPhone === undefined || workPhone === '' ? null : workPhone;
+  
+  // Обработка телефонов: если не переданы - оставляем null (не меняем)
+  // Если переданы пустые - сохраняем NULL в БД
+  // Если переданы с значением - сохраняем значение
+  const safeMobilePhone = mobilePhone === undefined ? undefined : (mobilePhone === '' ? null : mobilePhone);
+  const safeWorkPhone = workPhone === undefined ? undefined : (workPhone === '' ? null : workPhone);
 
   // Проверка существования пользователя
   const userStmt = db.prepare('SELECT * FROM users WHERE id = ?');
@@ -993,17 +1167,45 @@ app.put('/api/profile', (req, res) => {
   userStmt.free();
 
   try {
+    // Получаем текущие номера из БД, если они не были переданы
+    let finalMobilePhone = safeMobilePhone;
+    let finalWorkPhone = safeWorkPhone;
+    
+    if (safeMobilePhone === undefined) {
+      // Номер не передан, оставляем текущий
+      const currentStmt = db.prepare('SELECT mobile_phone FROM users WHERE id = ?');
+      currentStmt.bind([userId]);
+      if (currentStmt.step()) {
+        finalMobilePhone = currentStmt.getAsObject().mobile_phone;
+      }
+      currentStmt.free();
+    }
+    
+    if (safeWorkPhone === undefined) {
+      // Номер не передан, оставляем текущий
+      const currentStmt = db.prepare('SELECT work_phone FROM users WHERE id = ?');
+      currentStmt.bind([userId]);
+      if (currentStmt.step()) {
+        finalWorkPhone = currentStmt.getAsObject().work_phone;
+      }
+      currentStmt.free();
+    }
+    
+    // Очищаем пустые значения
+    const mobilePhoneValue = finalMobilePhone && String(finalMobilePhone).trim() !== '' ? finalMobilePhone : null;
+    const workPhoneValue = finalWorkPhone && String(finalWorkPhone).trim() !== '' ? finalWorkPhone : null;
+
     db.run(`
       UPDATE users
       SET username = COALESCE(?, username),
           full_name = COALESCE(?, full_name),
           birth_date = COALESCE(?, birth_date),
           about = COALESCE(?, about),
-          mobile_phone = COALESCE(?, mobile_phone),
-          work_phone = COALESCE(?, work_phone),
+          mobile_phone = ?,
+          work_phone = ?,
           status_text = COALESCE(?, status_text)
       WHERE id = ?
-    `, [safeUsername, safeFullName, safeBirthDate, safeAbout, safeMobilePhone, safeWorkPhone, safeStatusText, userId]);
+    `, [safeUsername, safeFullName, safeBirthDate, safeAbout, mobilePhoneValue, workPhoneValue, safeStatusText, userId]);
     saveDatabase();
 
     const updatedUser = db.prepare('SELECT id, username, email, avatar, full_name, birth_date, about, mobile_phone, work_phone, status_text FROM users WHERE id = ?')
@@ -1072,7 +1274,7 @@ app.post('/api/upload-avatar', upload.single('avatar'), (req, res) => {
     return res.status(400).json({ error: 'userId и файл обязательны' });
   }
   
-  const avatarUrl = `http://localhost:${PORT}/uploads/${req.file.filename}`;
+  const avatarUrl = `${SERVER_URL}/uploads/${req.file.filename}`;
   
   try {
     db.run('UPDATE users SET avatar = ? WHERE id = ?', [avatarUrl, userId]);
@@ -1114,7 +1316,7 @@ app.post('/api/upload-helper-avatar', upload.single('avatar'), (req, res) => {
     return res.status(400).json({ error: 'Файл аватара обязателен' });
   }
 
-  const avatarUrl = `http://localhost:${PORT}/uploads/${req.file.filename}`;
+  const avatarUrl = `${SERVER_URL}/uploads/${req.file.filename}`;
 
   try {
     db.run('UPDATE users SET avatar = ? WHERE username = ?', [avatarUrl, 'Помощник']);
@@ -1361,7 +1563,7 @@ app.put('/api/meeting-room/bookings/:id', (req, res) => {
 
 // API для создания задачи
 app.post('/api/calendar/tasks', (req, res) => {
-  const { userId, title, description, taskDate, taskTime, color } = req.body;
+  const { userId, title, description, taskDate, taskTime, taskEndTime, color } = req.body;
 
   if (!userId || !title || !taskDate) {
     return res.status(400).json({ error: 'userId, title и taskDate обязательны' });
@@ -1371,16 +1573,16 @@ app.post('/api/calendar/tasks', (req, res) => {
 
   try {
     db.run(`
-      INSERT INTO calendar_tasks (id, user_id, title, description, task_date, task_time, color, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-    `, [taskId, userId, title, description || null, taskDate, taskTime || null, color || '#667eea']);
+      INSERT INTO calendar_tasks (id, user_id, title, description, task_date, task_time, task_end_time, color, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    `, [taskId, userId, title, description || null, taskDate, taskTime || null, taskEndTime || null, color || '#667eea']);
     saveDatabase();
 
     const task = db.prepare('SELECT * FROM calendar_tasks WHERE id = ?').get(taskId);
-    
+
     // Уведомляем все подключенные клиенты о создании задачи
     io.emit('task_created', { task, userId });
-    
+
     res.json({ success: true, task });
   } catch (err) {
     console.error('Ошибка создания задачи:', err);
@@ -1391,7 +1593,7 @@ app.post('/api/calendar/tasks', (req, res) => {
 // API для обновления задачи
 app.put('/api/calendar/tasks/:taskId', (req, res) => {
   const { taskId } = req.params;
-  const { title, description, taskDate, taskTime, color } = req.body;
+  const { title, description, taskDate, taskTime, taskEndTime, color } = req.body;
 
   if (!title || !taskDate) {
     return res.status(400).json({ error: 'title и taskDate обязательны' });
@@ -1400,16 +1602,16 @@ app.put('/api/calendar/tasks/:taskId', (req, res) => {
   try {
     db.run(`
       UPDATE calendar_tasks
-      SET title = ?, description = ?, task_date = ?, task_time = ?, color = ?
+      SET title = ?, description = ?, task_date = ?, task_time = ?, task_end_time = ?, color = ?
       WHERE id = ?
-    `, [title, description || null, taskDate, taskTime || null, color || '#667eea', taskId]);
+    `, [title, description || null, taskDate, taskTime || null, taskEndTime || null, color || '#667eea', taskId]);
     saveDatabase();
 
     const task = db.prepare('SELECT * FROM calendar_tasks WHERE id = ?').get(taskId);
-    
+
     // Уведомляем все подключенные клиенты об обновлении задачи
     io.emit('task_updated', { task, taskId });
-    
+
     res.json({ success: true, task });
   } catch (err) {
     console.error('Ошибка обновления задачи:', err);
@@ -1910,6 +2112,11 @@ app.get('/api/bot/contacts', (req, res) => {
       SELECT id, username, email, full_name, mobile_phone, work_phone, avatar, status
       FROM users
       WHERE username != 'Помощник'
+        AND (
+          (mobile_phone IS NOT NULL AND TRIM(mobile_phone) != '')
+          OR
+          (work_phone IS NOT NULL AND TRIM(work_phone) != '')
+        )
       ORDER BY username
     `);
 
@@ -2010,10 +2217,11 @@ app.get('/api/bot/today/:userId', (req, res) => {
 
 // Получение IP адреса клиента
 function getClientIp(req) {
-  return req.headers['x-forwarded-for']?.split(',')[0] || 
-         req.headers['x-real-ip'] || 
-         req.connection?.remoteAddress || 
+  return req.headers['x-forwarded-for']?.split(',')[0] ||
+         req.headers['x-real-ip'] ||
+         req.connection?.remoteAddress ||
          req.socket?.remoteAddress ||
+         (req.request?.connection?.remoteAddress) ||
          'unknown';
 }
 
@@ -2169,12 +2377,13 @@ function getChatWithDetails(chatId, userId = null) {
 
 function getUserChats(userId) {
   const chatsStmt = db.prepare(`
-    SELECT c.*, 
-           (SELECT COUNT(*) FROM unread_messages WHERE chat_id = c.id AND user_id = ?) as unreadCount
+    SELECT c.*,
+           (SELECT COUNT(*) FROM unread_messages WHERE chat_id = c.id AND user_id = ?) as unreadCount,
+           (SELECT MAX(timestamp) FROM messages WHERE chat_id = c.id) as last_msg_time
     FROM chats c
     JOIN chat_participants cp ON c.id = cp.chat_id
     WHERE cp.user_id = ?
-    ORDER BY c.created_at DESC
+    ORDER BY last_msg_time DESC, c.created_at DESC
   `);
   chatsStmt.bind([userId, userId]);
   const chats = [];
@@ -2230,23 +2439,31 @@ function getUserChats(userId) {
 }
 
 function getChatMessages(chatId, limit = 100) {
+  // Сначала получаем последние N сообщений в обратном порядке (новые первые)
   const stmt = db.prepare(`
     SELECT m.*, u.username as senderName, u.avatar as senderAvatar
     FROM messages m
     JOIN users u ON m.sender_id = u.id
     WHERE m.chat_id = ?
-    ORDER BY m.timestamp ASC
+    ORDER BY m.timestamp DESC
     LIMIT ?
   `);
   stmt.bind([chatId, limit]);
-  const messages = [];
+  const messagesReversed = [];
   while (stmt.step()) {
-    const row = stmt.getAsObject();
-    
+    messagesReversed.push(stmt.getAsObject());
+  }
+  stmt.free();
+  
+  // Переворачиваем чтобы получить в правильном порядке (старые первые)
+  const messages = [];
+  for (let i = messagesReversed.length - 1; i >= 0; i--) {
+    const row = messagesReversed[i];
+
     // Проверяем, есть ли кнопки в file_data
     let buttons = [];
     let isBotMessage = false;
-    
+
     if (row.file_data) {
       try {
         const fileData = JSON.parse(row.file_data);
@@ -2262,7 +2479,30 @@ function getChatMessages(chatId, limit = 100) {
         buttons = [];
       }
     }
-    
+
+    // Загружаем реакции для сообщения
+    const reactionsStmt = db.prepare(`
+      SELECT mr.emoji, mr.user_id, u.username, u.avatar
+      FROM message_reactions mr
+      JOIN users u ON mr.user_id = u.id
+      WHERE mr.message_id = ?
+    `);
+    reactionsStmt.bind([row.id]);
+    const reactions = {};
+    while (reactionsStmt.step()) {
+      const reactionRow = reactionsStmt.getAsObject();
+      const emoji = reactionRow.emoji;
+      if (!reactions[emoji]) {
+        reactions[emoji] = [];
+      }
+      reactions[emoji].push({
+        userId: reactionRow.user_id,
+        username: reactionRow.username,
+        avatar: reactionRow.avatar
+      });
+    }
+    reactionsStmt.free();
+
     messages.push({
       id: row.id,
       chatId: row.chat_id,
@@ -2276,10 +2516,10 @@ function getChatMessages(chatId, limit = 100) {
       forwarded_from: row.forwarded_from ? JSON.parse(row.forwarded_from) : null,
       readBy: [],
       buttons: buttons,
-      isBotMessage: isBotMessage
+      isBotMessage: isBotMessage,
+      reactions: Object.keys(reactions).length > 0 ? reactions : undefined
     });
   }
-  stmt.free();
   return messages;
 }
 
@@ -2855,44 +3095,72 @@ function sendBotMessage(socket, chatId, text, buttons = []) {
 
 // Socket.IO подключение
 io.on('connection', (socket) => {
-  const clientIp = getClientIp(socket.handshake);
-  const clientHost = getClientHost(socket.handshake);
-  const userAgent = socket.handshake.headers['user-agent'] || 'unknown';
-  
-  console.log(`Подключение: ${socket.id} с IP: ${clientIp}`);
+  // Получаем IP из socket.handshake.address (работает для Socket.IO)
+  const clientIp = socket.handshake?.address?.replace(/^::ffff:/, '') || 'unknown';
+  const clientHost = socket.handshake?.headers?.host || 'unknown';
+  const userAgent = socket.handshake?.headers?.['user-agent'] || 'unknown';
+
+  console.log(`Подключение: ${socket.id} с IP: ${clientIp}, Host: ${clientHost}`);
+
+  // Функция для обновления имени компьютера в БД
+  const updateComputerName = (userId, name) => {
+    if (userId && name && name !== 'unknown') {
+      db.run('UPDATE users SET host = ? WHERE id = ?', [name, userId]);
+      saveDatabase();
+    }
+  };
+
+  // Пытаемся получить имя компьютера через reverse DNS lookup
+  if (clientIp !== 'unknown' && clientIp !== '127.0.0.1' && !clientIp.startsWith('::')) {
+    const dns = require('dns');
+    dns.reverse(clientIp, (err, hostnames) => {
+      if (!err && hostnames && hostnames.length > 0) {
+        // Берём первое имя хоста и убираем доменную часть
+        const computerName = hostnames[0].split('.')[0];
+        console.log(`Reverse DNS для ${clientIp}: ${computerName}`);
+        // Обновляем для текущего пользователя если он уже подключился
+        const currentUser = onlineUsers.get(socket.id);
+        if (currentUser) {
+          updateComputerName(currentUser.id, computerName);
+        }
+      } else {
+        console.log(`Reverse DNS не удался для ${clientIp}: ${err?.message || 'no hostname'}`);
+      }
+    });
+  }
 
   // Пользователь присоединяется
   socket.on('join', (data) => {
     const { username, userId: existingUserId } = data;
-    
+
     let user = null;
-    
+
     // Проверяем, есть ли существующий пользователь с таким ID
     if (existingUserId) {
       user = getUserById(existingUserId);
       if (user) {
-        // Обновляем статус и last_seen
-        db.run('UPDATE users SET status = ?, last_seen = CURRENT_TIMESTAMP WHERE id = ?', ['online', existingUserId]);
+        // Обновляем статус, last_seen и ip_address (host обновится позже через reverse DNS)
+        db.run('UPDATE users SET status = ?, last_seen = CURRENT_TIMESTAMP, ip_address = ? WHERE id = ?', ['online', clientIp, existingUserId]);
         saveDatabase();
         console.log(`Пользователь ${user.username} вошел повторно`);
       }
     }
-    
+
     // Если пользователь не найден, ищем по username
     if (!user) {
       user = getUserByUsername(username);
     }
-    
+
     // Создаем нового пользователя если не найден
     if (!user) {
       const newUserId = existingUserId || generateUserId(clientIp, userAgent);
       const avatar = `https://ui-avatars.com/api/?name=${encodeURIComponent(username)}&background=random`;
-      
+
       try {
         db.run(`
           INSERT INTO users (id, username, avatar, host, ip_address, status)
           VALUES (?, ?, ?, ?, ?, 'online')
-        `, [newUserId, username, avatar, clientHost, clientIp]);
+        `, [newUserId, username, avatar, 'unknown', clientIp]);
         saveDatabase();
         user = getUserById(newUserId);
         console.log(`Создан новый пользователь: ${username} (${newUserId})`);
@@ -2902,19 +3170,32 @@ io.on('connection', (socket) => {
         db.run(`
           INSERT INTO users (id, username, avatar, host, ip_address, status)
           VALUES (?, ?, ?, ?, ?, 'online')
-        `, [newUserId, uniqueUsername, avatar, clientHost, clientIp]);
+        `, [newUserId, uniqueUsername, avatar, 'unknown', clientIp]);
         saveDatabase();
         user = getUserById(newUserId);
         console.log(`Создан новый пользователь с уникальным именем: ${uniqueUsername}`);
       }
     }
-    
+
     // Добавляем пользователя в онлайн
-    onlineUsers.set(socket.id, { 
-      id: user.id, 
-      username: user.username, 
-      socketId: socket.id 
+    onlineUsers.set(socket.id, {
+      id: user.id,
+      username: user.username,
+      avatar: user.avatar,
+      socketId: socket.id
     });
+
+    // После добавления в onlineUsers, обновляем имя компьютера если оно уже получено
+    const dns = require('dns');
+    if (clientIp !== 'unknown' && clientIp !== '127.0.0.1' && !clientIp.startsWith('::')) {
+      dns.reverse(clientIp, (err, hostnames) => {
+        if (!err && hostnames && hostnames.length > 0) {
+          const computerName = hostnames[0].split('.')[0];
+          console.log(`Reverse DNS для ${clientIp}: ${computerName}`);
+          updateComputerName(user.id, computerName);
+        }
+      });
+    }
     
     // Добавляем пользователя в общий чат если еще не там
     const inGeneralChatStmt = db.prepare(`
@@ -2944,7 +3225,7 @@ io.on('connection', (socket) => {
       // Создаём чат с помощником
       db.run(`
         INSERT INTO chats (id, type, name, created_by, created_at)
-        VALUES (?, 'direct', '🤖 Помощник', ?, CURRENT_TIMESTAMP)
+        VALUES (?, 'direct', 'Помощник', ?, CURRENT_TIMESTAMP)
       `, [botChatId, user.id]);
 
       // Добавляем пользователя в чат с помощником
@@ -3171,7 +3452,7 @@ io.on('connection', (socket) => {
     // Отправляем историю сообщений
     const chatMessages = getChatMessages(chatId);
     const chat = getChatWithDetails(chatId);
-    
+
     socket.emit('chat_history', {
       chatId,
       messages: chatMessages,
@@ -3278,6 +3559,20 @@ io.on('connection', (socket) => {
 
       console.log('Участники чата:', participants);
 
+      // Автоматически присоединяем всех онлайн-участников к комнате чата
+      participants.forEach(pUserId => {
+        const participantSocket = Array.from(onlineUsers.values()).find(u => u.id === pUserId);
+        if (participantSocket) {
+          // Присоединяем к комнате, если ещё не присоединён
+          // participantSocket.socketId - это ID сокета, используем io.sockets
+          const sock = io.sockets.sockets.get(participantSocket.socketId);
+          if (sock && !sock.rooms.has(chatId)) {
+            sock.join(chatId);
+            console.log(`✓ Участник ${participantSocket.username} присоединён к комнате ${chatId}`);
+          }
+        }
+      });
+
       // Добавляем непрочитанные для всех кроме отправителя
       participants.forEach(pUserId => {
         if (pUserId !== onlineUser.id) {
@@ -3307,6 +3602,12 @@ io.on('connection', (socket) => {
       };
 
       console.log('Отправляем сообщение всем в чате...', JSON.stringify(formattedMessage, null, 2));
+
+    // Присоединяем отправителя к комнате чата если ещё не присоединён
+    if (!socket.rooms.has(chatId)) {
+      socket.join(chatId);
+      console.log('✓ Отправитель присоединён к комнате', chatId);
+    }
 
     // Отправляем сообщение всем в чате (включая отправителя)
     io.to(chatId).emit('new_message', {
@@ -3410,13 +3711,18 @@ io.on('connection', (socket) => {
       }
 
       if (command === '/контакты') {
-        // Команда /контакты
+        // Команда /контакты - показываем только пользователей с номерами телефонов
         setTimeout(() => {
           try {
             const users = db.exec(`
               SELECT username, mobile_phone, work_phone, email, status
               FROM users
               WHERE username != 'Помощник'
+                AND (
+                  (mobile_phone IS NOT NULL AND TRIM(mobile_phone) != '')
+                  OR
+                  (work_phone IS NOT NULL AND TRIM(work_phone) != '')
+                )
               ORDER BY username
             `);
 
@@ -3482,9 +3788,9 @@ io.on('connection', (socket) => {
 
     // Получаем исходное сообщение
     const msgStmt = db.prepare(`
-      SELECT id, chat_id, sender_id, 
-             COALESCE(text, '') as text, 
-             COALESCE(file_data, '') as file_data, 
+      SELECT id, chat_id, sender_id,
+             COALESCE(text, '') as text,
+             COALESCE(file_data, '') as file_data,
              timestamp, forwarded_from
       FROM messages
       WHERE id = ?
@@ -3498,7 +3804,8 @@ io.on('connection', (socket) => {
         chat_id: String(row['chat_id'] || ''),
         sender_id: String(row['sender_id'] || ''),
         text: String(row['text'] || ''),
-        file_data: String(row['file_data'] || '')
+        file_data: String(row['file_data'] || ''),
+        timestamp: String(row['timestamp'] || '')
       };
       console.log('row:', row);
       console.log('originalMessage:', originalMessage);
@@ -3586,10 +3893,11 @@ io.on('connection', (socket) => {
     const textVal = String(originalMessage.text || '').replace(/'/g, "''");
     const fileVal = String(originalMessage.file_data || '').replace(/'/g, "''");
     const fromVal = String(JSON.stringify(forwardedFrom)).replace(/'/g, "''");
+    const timestamp = new Date().toISOString(); // Используем текущее время клиента
 
     // Используем прямой SQL для надёжности
     const sql = `INSERT INTO messages (id, chat_id, sender_id, text, file_data, timestamp, forwarded_from)
-      VALUES ('${newMessageId}', '${chat.id}', '${onlineUser.id}', '${textVal}', '${fileVal}', CURRENT_TIMESTAMP, '${fromVal}');`;
+      VALUES ('${newMessageId}', '${chat.id}', '${onlineUser.id}', '${textVal}', '${fileVal}', '${timestamp}', '${fromVal}');`;
     
     console.log('SQL:', sql.substring(0, 200));
 
@@ -3633,13 +3941,13 @@ io.on('connection', (socket) => {
       // Уведомляем получателя о новом сообщении
       const targetSocket = Array.from(onlineUsers.values()).find(u => u.id === targetUserId);
       if (targetSocket) {
-        // Отправляем сообщение в чат
-        targetSocket.to(chat.id).emit('new_message', {
+        // Отправляем сообщение получателю напрямую
+        targetSocket.emit('new_message', {
           message: formattedMessage,
           chat: { id: chat.id, type: chat.type, unreadCount: 1 }
         });
 
-        // Отправляем обновление чата
+        // Отправляем обновление чата получателю
         const chatWithUnread = getChatWithDetails(chat.id, targetUserId);
         console.log('Отправляем chat_updated получателю:', {
           chatId: chat.id,
@@ -3647,10 +3955,12 @@ io.on('connection', (socket) => {
           participants: chatWithUnread?.participants,
           lastMessage: chatWithUnread?.lastMessage
         });
-        targetSocket.emit('chat_updated', {
-          chatId: chat.id,
-          chat: chatWithUnread
-        });
+        if (chatWithUnread) {
+          targetSocket.emit('chat_updated', {
+            chatId: chat.id,
+            chat: chatWithUnread
+          });
+        }
       }
 
       // Отправляем подтверждение отправителю
@@ -3659,6 +3969,15 @@ io.on('connection', (socket) => {
         chat: { id: chat.id, type: chat.type, unreadCount: 0 },
         isOwnMessage: true
       });
+
+      // Отправляем обновление чата отправителю
+      const senderChatWithUnread = getChatWithDetails(chat.id, onlineUser.id);
+      if (senderChatWithUnread) {
+        socket.emit('chat_updated', {
+          chatId: chat.id,
+          chat: senderChatWithUnread
+        });
+      }
 
       console.log(`Сообщение переслано от ${onlineUser.username} пользователю ${targetUserId}`);
   });
@@ -3748,6 +4067,118 @@ io.on('connection', (socket) => {
 
       onlineUsers.delete(socket.id);
       console.log(`${onlineUser.username} отключился`);
+    }
+  });
+
+  // === ОБРАБОТКА РЕАКЦИЙ ===
+  
+  // Добавление реакции
+  socket.on('add_reaction', (data) => {
+    const { messageId, emoji } = data;
+    const onlineUser = onlineUsers.get(socket.id);
+
+    if (!onlineUser || !messageId || !emoji) {
+      console.log('Реакция отменена: нет данных', { onlineUser: !!onlineUser, messageId, emoji });
+      return;
+    }
+
+    console.log('Добавление реакции:', { messageId, emoji, userId: onlineUser.id, username: onlineUser.username });
+
+    try {
+      // Проверяем, существует ли сообщение и получаем chat_id
+      const msgStmt = db.prepare(`SELECT id, chat_id FROM messages WHERE id = ?`);
+      msgStmt.bind([messageId]);
+      if (!msgStmt.step()) {
+        msgStmt.free();
+        console.log('Сообщение не найдено:', messageId);
+        return;
+      }
+      const messageRow = msgStmt.getAsObject();
+      msgStmt.free();
+
+      const chatId = messageRow.chat_id;
+      console.log('Найден chat_id для сообщения:', chatId);
+
+      if (!chatId) {
+        console.log('chatId не найден для сообщения:', messageId);
+        return;
+      }
+
+      // Сначала удаляем все существующие реакции этого пользователя на данное сообщение
+      db.run(`
+        DELETE FROM message_reactions
+        WHERE message_id = ? AND user_id = ?
+      `, [messageId, onlineUser.id]);
+
+      // Добавляем новую реакцию в базу
+      db.run(`
+        INSERT INTO message_reactions (message_id, user_id, emoji, created_at)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+      `, [messageId, onlineUser.id, emoji]);
+
+      saveDatabase();
+
+      console.log('Отправка события reaction_added в чат:', chatId);
+
+      // Уведомляем всех в чате о добавлении реакции с аватаркой
+      io.to(chatId).emit('reaction_added', {
+        messageId,
+        emoji,
+        userId: onlineUser.id,
+        username: onlineUser.username,
+        avatar: onlineUser.avatar
+      });
+
+      console.log(`Реакция ${emoji} добавлена пользователем ${onlineUser.username}`);
+    } catch (err) {
+      console.error('Ошибка при добавлении реакции:', err);
+    }
+  });
+
+  // Удаление реакции
+  socket.on('remove_reaction', (data) => {
+    const { messageId, emoji } = data;
+    const onlineUser = onlineUsers.get(socket.id);
+
+    if (!onlineUser || !messageId || !emoji) {
+      console.log('Удаление реакции отменено: нет данных', { onlineUser: !!onlineUser, messageId, emoji });
+      return;
+    }
+
+    console.log('Удаление реакции:', { messageId, emoji, userId: onlineUser.id });
+
+    try {
+      // Получаем chat_id сообщения
+      const msgStmt = db.prepare(`SELECT chat_id FROM messages WHERE id = ?`);
+      msgStmt.bind([messageId]);
+      const messageData = msgStmt.step() ? msgStmt.getAsObject() : null;
+      msgStmt.free();
+
+      if (!messageData) {
+        console.log('Сообщение не найдено:', messageId);
+        return;
+      }
+
+      const chatId = messageData.chat_id;
+
+      // Удаляем реакцию из базы
+      db.run(`
+        DELETE FROM message_reactions
+        WHERE message_id = ? AND user_id = ? AND emoji = ?
+      `, [messageId, onlineUser.id, emoji]);
+
+      saveDatabase();
+
+      // Уведомляем всех в чате об удалении реакции
+      io.to(chatId).emit('reaction_removed', {
+        messageId,
+        emoji,
+        userId: onlineUser.id
+      });
+
+      console.log(`Реакция ${emoji} удалена пользователем ${onlineUser.username}`);
+    } catch (err) {
+      console.error('Ошибка при удалении реакции:', err);
     }
   });
 });
@@ -3877,13 +4308,18 @@ process.on('SIGINT', () => {
 });
 
 // Инициализация и запуск
+console.log('Начало инициализации БД...');
 initDatabase().then(() => {
-  server.listen(PORT, () => {
-    console.log(`Сервер запущен на http://localhost:${PORT}`);
+  console.log('initDatabase завершено успешно, запуск сервера...');
+  server.listen(PORT, HOST, () => {
+    const displayHost = HOST === '0.0.0.0' ? getLocalIP() : HOST;
+    console.log(`Сервер запущен на http://${displayHost}:${PORT}`);
+    console.log(`URL для клиентов: ${SERVER_URL}`);
     console.log(`База данных: ${DB_PATH}`);
     console.log(`Путь загрузок: ${UPLOADS_PATH}`);
   });
 }).catch(err => {
   console.error('Ошибка инициализации БД:', err);
+  console.error('Stack:', err.stack);
   process.exit(1);
 });

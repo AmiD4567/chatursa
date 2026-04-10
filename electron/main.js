@@ -9,6 +9,39 @@ let isDev;
 let logDir;
 let logFile;
 
+function ensureUpdateConfig() {
+  if (isDev) return;
+  
+  // Путь к app-update.yml в resources директории
+  const resourcesPath = process.resourcesPath || path.join(app.getAppPath(), 'resources');
+  const updateConfigPath = path.join(resourcesPath, 'app-update.yml');
+  
+  if (!fs.existsSync(updateConfigPath)) {
+    logToFile(`app-update.yml не найден по пути: ${updateConfigPath}`);
+    logToFile('Создание app-update.yml...');
+    const configContent = `provider: github
+owner: AmiD4567
+repo: chat-app
+private: false
+releaseType: release
+`;
+    try {
+      // Убедимся, что директория существует
+      const configDir = path.dirname(updateConfigPath);
+      if (!fs.existsSync(configDir)) {
+        fs.mkdirSync(configDir, { recursive: true });
+        logToFile(`Создана директория: ${configDir}`);
+      }
+      fs.writeFileSync(updateConfigPath, configContent);
+      logToFile('app-update.yml создан успешно');
+    } catch (err) {
+      logError(`Ошибка создания app-update.yml: ${err.message}`);
+    }
+  } else {
+    logToFile(`app-update.yml найден по пути: ${updateConfigPath}`);
+  }
+}
+
 function initPaths() {
   isDev = !app.isPackaged;
   logDir = isDev
@@ -25,6 +58,9 @@ function initPaths() {
   logToFile('='.repeat(50));
   logToFile(`Is Dev: ${isDev}`);
   logToFile(`Is Packaged: ${app.isPackaged}`);
+  
+  // Убедимся, что конфигурация обновления существует
+  ensureUpdateConfig();
 }
 
 function logToFile(message) {
@@ -48,6 +84,9 @@ autoUpdater.allowDowngrade = false;
 
 autoUpdater.on('checking-for-update', () => {
   logToFile('Проверка обновлений...');
+  if (mainWindow) {
+    mainWindow.webContents.send('checking-for-update');
+  }
 });
 
 autoUpdater.on('update-available', (info) => {
@@ -59,6 +98,9 @@ autoUpdater.on('update-available', (info) => {
 
 autoUpdater.on('update-not-available', (info) => {
   logToFile(`Обновлений не найдено. Текущая версия: ${info.version}`);
+  if (mainWindow) {
+    mainWindow.webContents.send('update-not-available', info);
+  }
 });
 
 autoUpdater.on('download-progress', (progressObj) => {
@@ -90,6 +132,9 @@ autoUpdater.on('update-downloaded', (info) => {
 
 autoUpdater.on('error', (err) => {
   logError(`Ошибка автообновления: ${err.message}`);
+  if (mainWindow) {
+    mainWindow.webContents.send('update-error', err.message);
+  }
 });
 
 const gotTheLock = app.requestSingleInstanceLock();
@@ -430,6 +475,20 @@ ipcMain.on('show-notification', (event, { title, body, icon }) => {
 });
 
 // Обработка запросов на обновление
+ipcMain.on('check-for-updates', () => {
+  logToFile('Ручная проверка обновлений...');
+  try {
+    // Убедимся, что конфигурация существует перед проверкой
+    ensureUpdateConfig();
+    autoUpdater.checkForUpdates();
+  } catch (err) {
+    logError(`Ошибка при проверке обновлений: ${err.message}`);
+    if (mainWindow) {
+      mainWindow.webContents.send('update-error', `Не удалось проверить обновления: ${err.message}`);
+    }
+  }
+});
+
 ipcMain.on('start-update', () => {
   logToFile('Пользователь запустил обновление');
   autoUpdater.downloadUpdate();

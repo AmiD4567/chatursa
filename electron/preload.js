@@ -13,9 +13,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getUploadsPath: () => ipcRenderer.invoke('get-uploads-path'),
 
   // Автообновления
+  checkForUpdates: () => ipcRenderer.send('check-for-updates'),
+  onCheckingForUpdate: (callback) => ipcRenderer.on('checking-for-update', callback),
   onUpdateAvailable: (callback) => ipcRenderer.on('update-available', callback),
+  onUpdateNotAvailable: (callback) => ipcRenderer.on('update-not-available', callback),
   onUpdateDownloaded: (callback) => ipcRenderer.on('update-downloaded', callback),
   onDownloadProgress: (callback) => ipcRenderer.on('download-progress', callback),
+  onUpdateError: (callback) => ipcRenderer.on('update-error', callback),
   startUpdate: () => ipcRenderer.send('start-update'),
   quitAndInstall: () => ipcRenderer.send('quit-and-install'),
 

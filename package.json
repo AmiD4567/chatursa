@@ -1,6 +1,6 @@
 {
   "name": "chat-app",
-  "version": "1.0.8",
+  "version": "1.0.20",
   "description": "Корпоративный мессенджер",
   "main": "electron/main.js",
   "author": "Pantyuhov DI",
@@ -10,10 +10,10 @@
     "client": "cd frontend && npm start",
     "build": "cd frontend && npm run build",
     "electron:dev": "concurrently \"npm run build\" \"wait-on http://localhost:3000 && electron .\"",
-    "electron:build": "npm run build && electron-builder --win msi",
+    "electron:build": "npm run build && electron-builder --win nsis",
     "electron:build:all": "npm run build && electron-builder --win",
     "postinstall": "electron-builder install-app-deps",
-    "release": "electron-builder --win msi --publish always"
+    "release": "electron-builder --win nsis --publish always"
   },
   "build": {
     "appId": "com.pantyuhov.chat",
@@ -23,6 +23,12 @@
       "output": "dist",
       "buildResources": "electron"
     },
+    "extraFiles": [
+      {
+        "from": "app-update.yml",
+        "to": "resources/app-update.yml"
+      }
+    ],
     "files": [
       "electron/**/*",
       "backend/**/*",
@@ -76,14 +82,14 @@
     },
     "publish": {
       "provider": "github",
-      "owner": "pantyuhov",
+      "owner": "AmiD4567",
       "repo": "chat-app",
       "private": false,
       "releaseType": "release"
     },
     "win": {
       "target": [
-        "msi"
+        "nsis"
       ],
       "icon": "electron/icon.ico"
     }

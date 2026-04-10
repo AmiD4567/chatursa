@@ -1,14 +1,18 @@
 import React, { useState, useEffect, useRef } from 'react';
 import io from 'socket.io-client';
 import EmojiPicker from 'emoji-picker-react';
+import { SAFE_EMOJIS } from './safe-emojis';
 
-const SOCKET_URL = 'http://localhost:3001';
+const SOCKET_URL = 'http://192.168.210.48:3001';
 const STORAGE_KEY = 'chat_user_data';
 
 function App() {
   const [socket, setSocket] = useState(null);
   const [currentUser, setCurrentUser] = useState(null);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState('connecting'); // 'connecting', 'connected', 'disconnected', 'reconnecting'
+  const [lastUser, setLastUser] = useState(null); // Данные последнего пользователя для быстрого входа
+  const [showLoginForm, setShowLoginForm] = useState(false); // Показывать форму входа
   const [appVersion, setAppVersion] = useState('1.0.8');
   const [updateStatus, setUpdateStatus] = useState(null); // null, 'checking', 'available', 'downloading', 'ready'
   const [updateProgress, setUpdateProgress] = useState(0);
@@ -18,6 +22,9 @@ function App() {
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [birthDate, setBirthDate] = useState('');
   const [rememberMe, setRememberMe] = useState(false); // Запомнить меня
   const [authError, setAuthError] = useState('');
@@ -39,7 +46,7 @@ function App() {
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [showAvatarModal, setShowAvatarModal] = useState(false);
   const [avatarUrl, setAvatarUrl] = useState('');
-  
+
   // Контекстное меню сообщений
   const [contextMenu, setContextMenu] = useState({
     visible: false,
@@ -49,7 +56,13 @@ function App() {
     messageText: '',
     messageChatId: null
   });
-  
+
+  // Реакции на сообщения
+  const [messageReactions, setMessageReactions] = useState({});
+
+  // Быстрые реакции (в контекстном меню)
+  const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '😡', '🙈'];
+
   // Модальное окно пересылки
   const [showForwardModal, setShowForwardModal] = useState(false);
   const [forwardSearchQuery, setForwardSearchQuery] = useState('');
@@ -99,6 +112,7 @@ function App() {
     description: '',
     taskDate: '',
     taskTime: '',
+    taskEndTime: '',
     color: '#667eea'
   });
   const [selectedDayTasks, setSelectedDayTasks] = useState([]);
@@ -113,6 +127,7 @@ function App() {
   const [readMessages, setReadMessages] = useState({}); // { messageId: [userIds] }
   const [statusEmoji, setStatusEmoji] = useState('');
   const [statusDescription, setStatusDescription] = useState('');
+  const [showStatusEmojiPicker, setShowStatusEmojiPicker] = useState(false);
   const [messageDrafts, setMessageDrafts] = useState({}); // { chatId: text }
   const [prevChatId, setPrevChatId] = useState(null);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
@@ -144,8 +159,17 @@ function App() {
   const [notificationSettings, setNotificationSettings] = useState({
     newMessages: true,
     birthdays: true,
-    sound: true
+    sound: true,
+    botAssistant: true,        // Уведомления от помощника
+    tasks: true,               // Уведомления о задачах
+    meetingRoom: true          // Уведомления о бронировании переговорной
   });
+  const notificationSettingsRef = useRef(notificationSettings);
+
+  // Обновляем ref при изменении настроек
+  useEffect(() => {
+    notificationSettingsRef.current = notificationSettings;
+  }, [notificationSettings]);
   
   // Переключение секций уведомлений
   const toggleSection = (section) => {
@@ -162,9 +186,10 @@ function App() {
   const [userUiSettings, setUserUiSettings] = useState({
     themeColor: '#667eea',
     themeGradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-    themeMode: 'dark', // 'dark' или 'light'
     fontSize: 'medium', // 'small', 'medium', 'large'
-    compactMode: false
+    compactMode: false,
+    messageFontSize: '15', // размер текста в сообщениях (px)
+    messageEmojiSize: '20' // размер эмодзи в сообщениях (px)
   });
   const [isAdmin, setIsAdmin] = useState(false);
   const [adminStats, setAdminStats] = useState(null);
@@ -217,6 +242,9 @@ function App() {
   const activeChatIdRef = useRef(null);
   const currentUserRef = useRef(null);
   const lastBirthdayCheckRef = useRef(null);
+  const socketRef = useRef(null);
+  const loginFormRef = useRef(null);
+  const loginTimeoutRef = useRef(null);
 
   // Вычисляем активный чат по ID
   const activeChat = chats.find(c => c.id === activeChatId) || null;
@@ -226,7 +254,7 @@ function App() {
     if (!chat) return '';
     // Для чата с помощником возвращаем название из чата
     if (chat.id?.startsWith('bot-chat-')) {
-      return chat.name || '🤖 Помощник';
+      return chat.name || 'Помощник';
     }
     if (chat.type !== 'direct' || !chat.participantsDetails) {
       return chat.name;
@@ -414,13 +442,13 @@ function App() {
       // Проверяем текущее состояние разрешения
       const currentPermission = Notification.permission;
       setBrowserNotificationPermission(currentPermission);
-      
+
       // Показываем баннер, если разрешение не предоставлено и не было отклонено ранее
       const bannerDismissed = localStorage.getItem('notificationBannerDismissed');
       if (currentPermission === 'default' && !bannerDismissed && isLoggedIn) {
         setShowNotificationBanner(true);
       }
-      
+
       if (currentPermission === 'default') {
         Notification.requestPermission().then(permission => {
           setBrowserNotificationPermission(permission);
@@ -435,6 +463,29 @@ function App() {
       }
     }
   }, [isLoggedIn]);
+
+  // Применение настроек оформления при изменении userUiSettings
+  useEffect(() => {
+    document.documentElement.style.setProperty('--primary-color', userUiSettings.themeColor);
+    document.documentElement.setAttribute('data-font-size', userUiSettings.fontSize);
+    // Применяем размер текста в сообщениях
+    document.documentElement.style.setProperty('--message-font-size', `${userUiSettings.messageFontSize}px`);
+    // Применяем размер эмодзи в сообщениях (в px, независимо от текста)
+    document.documentElement.style.setProperty('--message-emoji-size', `${userUiSettings.messageEmojiSize}px`);
+  }, [userUiSettings]);
+
+  // Загрузка настроек при монтировании компонента
+  useEffect(() => {
+    const savedSettings = localStorage.getItem(`userUiSettings_${currentUser?.id}`);
+    if (savedSettings && currentUser) {
+      try {
+        const parsed = JSON.parse(savedSettings);
+        setUserUiSettings(parsed);
+      } catch (e) {
+        console.error('Ошибка загрузки настроек:', e);
+      }
+    }
+  }, [currentUser]);
 
   // Автофокус на поле ввода при переключении чата + сохранение черновиков
   useEffect(() => {
@@ -496,29 +547,44 @@ function App() {
         try {
           const version = await window.electronAPI.getAppVersion();
           setAppVersion(version);
-          
+
           // Подписываемся на обновления
+          window.electronAPI.onCheckingForUpdate(() => {
+            setUpdateStatus('checking');
+            console.log('Проверка обновлений...');
+          });
+
           window.electronAPI.onUpdateAvailable((event, info) => {
             setUpdateStatus('available');
             console.log('Доступно обновление:', info);
           });
-          
+
+          window.electronAPI.onUpdateNotAvailable((event, info) => {
+            setUpdateStatus('no-update');
+            console.log('Обновлений не найдено');
+          });
+
           window.electronAPI.onDownloadProgress((event, progress) => {
             setUpdateStatus('downloading');
             setUpdateProgress(progress.percent);
             console.log('Загрузка обновления:', progress.percent);
           });
-          
+
           window.electronAPI.onUpdateDownloaded((event, info) => {
             setUpdateStatus('ready');
             console.log('Обновление готово к установке');
+          });
+
+          window.electronAPI.onUpdateError((event, error) => {
+            setUpdateStatus(null);
+            console.error('Ошибка обновления:', error);
           });
         } catch (err) {
           console.error('Ошибка получения версии:', err);
         }
       }
     };
-    
+
     initApp();
   }, []);
 
@@ -526,17 +592,84 @@ function App() {
   useEffect(() => {
     const newSocket = io(SOCKET_URL, {
       reconnection: true,
-      reconnectionAttempts: 5,
-      reconnectionDelay: 1000
+      reconnectionAttempts: 10,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000
     });
     setSocket(newSocket);
+    socketRef.current = newSocket;
 
     console.log('Сокет создан:', newSocket);
     console.log('Сокет подключён:', newSocket.connected);
     console.log('SOCKET_URL:', SOCKET_URL);
 
+    // Таймаут для принудительного показа формы входа
+    loginTimeoutRef.current = setTimeout(() => {
+      if (!currentUserRef.current) {
+        console.log('Таймаут входа: показываем форму');
+        setIsLoggedIn(false);
+        setCurrentUser(null);
+        setConnectionStatus('connecting');
+      }
+    }, 5000); // 5 секунд на подключение
+
     newSocket.on('connect', () => {
       console.log('✓ Сокет подключён!');
+      if (loginTimeoutRef.current) clearTimeout(loginTimeoutRef.current);
+      setConnectionStatus('connected');
+
+      // При переподключении заново отправляем user_joined
+      const savedData = localStorage.getItem(STORAGE_KEY);
+      if (savedData) {
+        try {
+          const parsed = JSON.parse(savedData);
+          console.log('Переподключение: отправляем user_joined:', parsed);
+          newSocket.emit('user_joined', {
+            userId: parsed.userId,
+            username: parsed.username,
+            email: parsed.email
+          });
+        } catch (e) {
+          console.error('Ошибка парсинга savedData при переподключении:', e);
+        }
+      }
+    });
+
+    newSocket.on('disconnect', () => {
+      console.warn('⚠ Сокет отключён!');
+      // Показываем экран потери связи только если пользователь был залогинен
+      if (localStorage.getItem(STORAGE_KEY)) {
+        setConnectionStatus('disconnected');
+        setIsLoggedIn(false);
+        setCurrentUser(null);
+      }
+    });
+
+    newSocket.on('reconnect', (attemptNumber) => {
+      console.log('✓ Сокет переподключён после', attemptNumber, 'попыток');
+      setConnectionStatus('connected');
+
+      // После переподключения присоединяемся к активному чату
+      if (activeChatIdRef.current) {
+        console.log('Переподключение: присоединяемся к чату', activeChatIdRef.current);
+        newSocket.emit('join_chat', activeChatIdRef.current);
+      }
+    });
+
+    newSocket.on('reconnect_attempt', (attemptNumber) => {
+      console.log('Попытка переподключения', attemptNumber);
+      setConnectionStatus('reconnecting');
+    });
+
+    newSocket.on('reconnect_error', (err) => {
+      console.error('Ошибка переподключения:', err.message);
+    });
+
+    newSocket.on('reconnect_failed', () => {
+      console.error('Не удалось переподключить сокет');
+      setConnectionStatus('disconnected');
+      setIsLoggedIn(false);
+      setCurrentUser(null);
     });
 
     newSocket.on('connect_error', (err) => {
@@ -546,9 +679,20 @@ function App() {
     // Проверяем сохраненные данные пользователя (для авто-входа)
     const savedData = localStorage.getItem(STORAGE_KEY);
     const savedCredentials = localStorage.getItem('chat_credentials');
+    const savedLastUser = localStorage.getItem('chat_last_user');
 
     console.log('Сохранённые данные:', savedData);
     console.log('Сохранённые учётные данные:', savedCredentials);
+
+    // Загружаем данные последнего пользователя для отображения на экране входа
+    if (savedLastUser) {
+      try {
+        const lastUserData = JSON.parse(savedLastUser);
+        setLastUser(lastUserData);
+      } catch (e) {
+        console.error('Ошибка парсинга lastUser:', e);
+      }
+    }
 
     // Если есть учётные данные, заполняем форму
     if (savedCredentials) {
@@ -580,6 +724,9 @@ function App() {
     }
     
     newSocket.on('user_joined_success', async ({ user, chats: userChats }) => {
+      // Очищаем таймаут
+      if (loginTimeoutRef.current) clearTimeout(loginTimeoutRef.current);
+      
       // Загружаем полный профиль пользователя со статусом
       try {
         const response = await fetch(`${SOCKET_URL}/api/profile/${user.userId}`);
@@ -592,12 +739,19 @@ function App() {
             is_admin: data.user.is_admin || 0
           };
           setCurrentUser(fullUser);
+          // Обновляем право на бронирование после загрузки профиля
+          const hasRight = fullUser.username === 'Root' || fullUser.is_admin === 1;
+          setCanBookMeetingRoom(hasRight);
         } else {
           setCurrentUser(user);
+          const hasRight = user.username === 'Root' || user.is_admin === 1;
+          setCanBookMeetingRoom(hasRight);
         }
       } catch (err) {
         console.error('Ошибка загрузки профиля:', err);
         setCurrentUser(user);
+        const hasRight = user.username === 'Root' || user.is_admin === 1;
+        setCanBookMeetingRoom(hasRight);
       }
       
       setIsLoggedIn(true);
@@ -613,7 +767,15 @@ function App() {
       localStorage.setItem(STORAGE_KEY, JSON.stringify({
         userId: user.userId,
         username: user.username,
-        email: user.email
+        email: user.email,
+        is_admin: user.is_admin
+      }));
+
+      // Сохраняем данные последнего пользователя для быстрого входа (с аватаром)
+      localStorage.setItem('chat_last_user', JSON.stringify({
+        userId: user.userId,
+        username: user.username,
+        avatar: user.avatar || ''
       }));
 
       // Проверяем статус админа
@@ -621,13 +783,8 @@ function App() {
 
       // Проверяем право на бронирование переговорной
       // По умолчанию у Root есть это право
-      const savedUserData = localStorage.getItem(STORAGE_KEY);
-      if (savedUserData) {
-        const userData = JSON.parse(savedUserData);
-        // Root имеет право по умолчанию, в дальнейшем будет проверяться через API
-        const hasRight = userData.username === 'Root' || userData.is_admin === 1;
-        setCanBookMeetingRoom(hasRight);
-      }
+      const hasRight = user.username === 'Root' || user.is_admin === 1;
+      setCanBookMeetingRoom(hasRight);
 
       if (userChats.length > 0) {
         const firstChat = userChats[0];
@@ -638,50 +795,56 @@ function App() {
     });
 
     newSocket.on('chat_history', ({ chatId, messages: chatMessages }) => {
-      // Всегда устанавливаем сообщения для чата, к которому они относятся
-      // Но только если это активный чат
+      // Очищаем таймаут загрузки если он есть
+      if (window.chatLoadTimeout) {
+        clearTimeout(window.chatLoadTimeout);
+        window.chatLoadTimeout = null;
+      }
+
+      // Устанавливаем сообщения только для активного чата
       if (activeChatIdRef.current === chatId) {
         setMessages(chatMessages);
+
+        // Принудительно прокручиваем вниз после загрузки
+        setTimeout(() => {
+          if (messagesEndRef.current) {
+            messagesEndRef.current.scrollIntoView({ behavior: 'auto', block: 'end' });
+          }
+        }, 100);
+
+        // Инициализируем реакции из сообщений
+        const reactionsData = {};
+        chatMessages.forEach(msg => {
+          if (msg.reactions) {
+            reactionsData[msg.id] = { reactions: msg.reactions };
+          }
+        });
+        setMessageReactions(reactionsData);
       }
     });
 
     newSocket.on('new_message', ({ message, chat, isOwnMessage }) => {
-      // Используем currentUserRef.current для актуального значения
+      // Используем currentUserRef.current и activeChatIdRef.current для актуальных значений
       const myId = currentUserRef.current?.id;
       const isMyMessage = isOwnMessage || message.senderId === myId;
 
-      console.log('Получено new_message:', {
-        messageId: message.id,
-        senderId: message.senderId,
-        senderName: message.senderName,
-        senderAvatar: message.senderAvatar,
-        myId,
-        isOwnMessage,
-        isMyMessage,
-        text: message.text,
-        chatId: message.chatId,
-        activeChatId: activeChatId,
-        activeChatIdRef: activeChatIdRef.current
-      });
-
-      // Определяем, активен ли чат
-      const isChatActive = message.chatId === activeChatId;
-
-      console.log('Проверка активности чата:', {
-        messageChatId: message.chatId,
-        activeChatId: activeChatId,
-        activeChatIdRef: activeChatIdRef.current,
-        match: message.chatId === activeChatId,
-        matchRef: message.chatId === activeChatIdRef.current
-      });
+      // Определяем, активен ли чат - используем ref для актуального значения
+      const isChatActive = message.chatId === activeChatIdRef.current;
 
       // Показываем уведомление только если сообщение не от нас и чат не активен
       if (!isMyMessage && !isChatActive && notificationPermissionRef.current === 'granted') {
-        console.log('Показываем уведомление');
-        // Проверяем настройки уведомлений
-        if (notificationSettings.newMessages) {
+
+        // Проверяем, является ли отправитель ботом-помощником
+        const isBotMessage = message.senderName === 'Помощник' || message.senderId?.includes('bot-');
+
+        // Если это сообщение от бота и уведомления от бота отключены - не показываем
+        if (isBotMessage && !notificationSettingsRef.current.botAssistant) {
+          console.log('Уведомление от бота отключено в настройках');
+        }
+        // Проверяем настройки уведомлений для обычных сообщений
+        else if (notificationSettingsRef.current.newMessages) {
           // Звук уведомления
-          if (notificationSettings.sound) {
+          if (notificationSettingsRef.current.sound) {
             try {
               const audio = new Audio('data:audio/wav;base64,UklGRl9vT19XQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YU');
               audio.play().catch(() => {});
@@ -702,58 +865,79 @@ function App() {
       }
 
       setChats(prev => {
-        const updated = prev.map(c => {
-          if (c.id === chat.id) {
-            // Используем isMyMessage вместо isOwnMessage для надёжности
-            const isMessageFromMe = isOwnMessage || message.senderId === currentUserRef.current?.id;
+        // Проверяем, существует ли чат
+        const chatExists = prev.some(c => c.id === chat.id);
+        
+        if (chatExists) {
+          // Обновляем существующий чат
+          const updated = prev.map(c => {
+            if (c.id === chat.id) {
+              // Используем isMyMessage вместо isOwnMessage для надёжности
+              const isMessageFromMe = isOwnMessage || message.senderId === currentUserRef.current?.id;
 
-            // Полностью игнорируем chat.unreadCount с сервера
-            // Считаем непрочитанные только локально
-            let newUnreadCount;
+              // Полностью игнорируем chat.unreadCount с сервера
+              // Считаем непрочитанные только локально
+              let newUnreadCount;
 
-            // Если чат активен - всегда сбрасываем в 0
-            if (isChatActive) {
-              newUnreadCount = 0;
-            }
-            // Если сообщение от нас (исходящее) - НЕ увеличиваем счетчик
-            // Исходящие сообщения никогда не считаются непрочитанными
-            else if (isMessageFromMe) {
-              newUnreadCount = 0;
-            }
-            // Если сообщение от другого пользователя и чат не активен
-            // Только входящие сообщения увеличивают счетчик непрочитанных
-            else {
-              newUnreadCount = (c.unreadCount || 0) + 1;
-            }
-
-            // Сохраняем локальные данные чата (participantsDetails и т.д.)
-            return {
-              ...c,  // Используем локальный объект чата, а не серверный
-              unreadCount: newUnreadCount,
-              lastMessage: {
-                text: message.text || (message.file ? '📎 Файл' : ''),
-                timestamp: message.timestamp,
-                senderName: message.senderName,
-                senderId: message.senderId
+              // Если чат активен - всегда сбрасываем в 0
+              if (isChatActive) {
+                newUnreadCount = 0;
               }
-            };
-          }
-          return c;
-        });
-        return updated.sort((a, b) => {
-          const aTime = a.lastMessage?.timestamp || a.createdAt;
-          const bTime = b.lastMessage?.timestamp || b.createdAt;
-          return new Date(bTime) - new Date(aTime);
-        });
+              // Если сообщение от нас (исходящее) - НЕ увеличиваем счетчик
+              // Исходящие сообщения никогда не считаются непрочитанными
+              else if (isMessageFromMe) {
+                newUnreadCount = 0;
+              }
+              // Если сообщение от другого пользователя и чат не активен
+              // Только входящие сообщения увеличивают счетчик непрочитанных
+              else {
+                newUnreadCount = (c.unreadCount || 0) + 1;
+              }
+
+              // Сохраняем локальные данные чата (participantsDetails и т.д.)
+              return {
+                ...c,  // Используем локальный объект чата, а не серверный
+                unreadCount: newUnreadCount,
+                lastMessage: {
+                  text: message.text || (message.file ? '📎 Файл' : ''),
+                  timestamp: message.timestamp,
+                  senderName: message.senderName,
+                  senderId: message.senderId
+                }
+              };
+            }
+            return c;
+          });
+          return updated.sort((a, b) => {
+            const aTime = a.lastMessage?.timestamp || a.createdAt;
+            const bTime = b.lastMessage?.timestamp || b.createdAt;
+            return new Date(bTime) - new Date(aTime);
+          });
+        } else {
+          // Чат не существует - добавляем его (например, при пересылке в новый чат)
+          console.log('Новый чат не найден в списке, добавляем:', chat);
+          const newChat = {
+            ...chat,
+            unreadCount: isMyMessage ? 0 : 1,
+            lastMessage: {
+              text: message.text || (message.file ? '📎 Файл' : ''),
+              timestamp: message.timestamp,
+              senderName: message.senderName,
+              senderId: message.senderId
+            }
+          };
+          return [...prev, newChat].sort((a, b) => {
+            const aTime = a.lastMessage?.timestamp || a.createdAt;
+            const bTime = b.lastMessage?.timestamp || b.createdAt;
+            return new Date(bTime) - new Date(aTime);
+          });
+        }
       });
 
       // Добавляем сообщение в список, если чат активен
-      // Используем оба значения для надёжности
-      if (message.chatId === activeChatId || message.chatId === activeChatIdRef.current) {
-        console.log('Добавляем сообщение в список messages');
+      // Используем activeChatIdRef.current для актуального значения
+      if (message.chatId === activeChatIdRef.current) {
         setMessages(prev => [...prev, message]);
-      } else {
-        console.log('НЕ добавляем сообщение: чат не активен');
       }
     });
 
@@ -769,16 +953,30 @@ function App() {
     });
 
     newSocket.on('chat_updated', ({ chatId, chat }) => {
-      setChats(prev => prev.map(c => {
-        if (c.id === chatId) {
-          // Сохраняем локальный unreadCount, игнорируем серверный
-          return {
+      setChats(prev => {
+        const chatExists = prev.some(c => c.id === chatId);
+        
+        if (chatExists) {
+          // Обновляем только lastMessage и timestamp, сохраняя локальные данные
+          return prev.map(c => {
+            if (c.id === chatId) {
+              return {
+                ...c,  // Сохраняем все локальные данные (participantsDetails и т.д.)
+                lastMessage: chat.lastMessage || c.lastMessage,
+                unreadCount: c.unreadCount  // Сохраняем локальный unreadCount
+              };
+            }
+            return c;
+          });
+        } else {
+          // Чат не существует - добавляем его
+          console.log('chat_updated: новый чат не найден, добавляем:', chat);
+          return [...prev, {
             ...chat,
-            unreadCount: c.unreadCount
-          };
+            unreadCount: 0
+          }];
         }
-        return c;
-      }));
+      });
     });
 
     newSocket.on('users_list', (usersList) => {
@@ -896,7 +1094,68 @@ function App() {
       }
     });
 
-    return () => newSocket.close();
+    // Обработка удаления сообщения администратором
+    newSocket.on('message_deleted', ({ id: deletedMessageId }) => {
+      setMessages(prev => prev.filter(msg => msg.id !== deletedMessageId));
+    });
+
+    // === ОБРАБОТКА РЕАКЦИЙ ===
+
+    // Обработка добавления реакции
+    newSocket.on('reaction_added', ({ messageId, emoji, userId, username, avatar }) => {
+      setMessageReactions(prev => {
+        const messageReactions = prev[messageId] || { reactions: {} };
+        const newReactions = { ...messageReactions.reactions };
+
+        // Сначала удаляем все существующие реакции этого пользователя
+        Object.keys(newReactions).forEach(existingEmoji => {
+          newReactions[existingEmoji] = newReactions[existingEmoji].filter(
+            u => u.userId !== userId
+          );
+          // Удаляем пустые эмодзи
+          if (newReactions[existingEmoji].length === 0) {
+            delete newReactions[existingEmoji];
+          }
+        });
+
+        // Добавляем новую реакцию с аватаркой
+        if (!newReactions[emoji]) {
+          newReactions[emoji] = [];
+        }
+        newReactions[emoji].push({ userId, username, avatar });
+
+        return {
+          ...prev,
+          [messageId]: { reactions: newReactions }
+        };
+      });
+    });
+
+    // Обработка удаления реакции
+    newSocket.on('reaction_removed', ({ messageId, emoji, userId }) => {
+      setMessageReactions(prev => {
+        const messageReactions = prev[messageId] || { reactions: {} };
+        const newReactions = { ...messageReactions.reactions };
+
+        if (newReactions[emoji]) {
+          newReactions[emoji] = newReactions[emoji].filter(u => u.userId !== userId);
+          // Удаляем эмодзи, если не осталось пользователей
+          if (newReactions[emoji].length === 0) {
+            delete newReactions[emoji];
+          }
+        }
+
+        return {
+          ...prev,
+          [messageId]: { reactions: newReactions }
+        };
+      });
+    });
+
+    return () => {
+      if (loginTimeoutRef.current) clearTimeout(loginTimeoutRef.current);
+      newSocket.close();
+    };
   }, []);
 
   // Скролл к последнему сообщению
@@ -1078,6 +1337,12 @@ function App() {
       return;
     }
 
+    if (password !== confirmPassword) {
+      setAuthError('Пароли не совпадают');
+      setIsLoading(false);
+      return;
+    }
+
     if (!birthDate) {
       setAuthError('Дата рождения обязательна');
       setIsLoading(false);
@@ -1088,7 +1353,7 @@ function App() {
       const response = await fetch(`${SOCKET_URL}/api/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, email, password, birthDate })
+        body: JSON.stringify({ username, email, password, confirmPassword, birthDate })
       });
 
       const data = await response.json();
@@ -1110,6 +1375,7 @@ function App() {
           setUsername('');
           setEmail('');
           setPassword('');
+          setConfirmPassword('');
           setBirthDate('');
           // Проверяем статус админа после регистрации
           checkAdminStatus(loginData.user.id);
@@ -1587,26 +1853,6 @@ function App() {
   const handleOpenSettings = () => {
     setActiveView('settings');
     setActiveSettingsTab('about');
-    // Загружаем настройки пользователя из localStorage
-    const savedSettings = localStorage.getItem(`userUiSettings_${currentUser?.id}`);
-    const savedNotificationSettings = localStorage.getItem('notificationSettings');
-    if (savedSettings) {
-      try {
-        const parsed = JSON.parse(savedSettings);
-        setUserUiSettings(parsed);
-        // Применяем тему
-        document.documentElement.setAttribute('data-theme', parsed.themeMode || 'dark');
-      } catch (e) {
-        console.error('Ошибка загрузки настроек:', e);
-      }
-    }
-    if (savedNotificationSettings) {
-      try {
-        setNotificationSettings(JSON.parse(savedNotificationSettings));
-      } catch (e) {
-        console.error('Ошибка загрузки настроек уведомлений:', e);
-      }
-    }
   };
 
   const handleSaveUserUiSettings = () => {
@@ -1614,9 +1860,7 @@ function App() {
     if (currentUser?.id) {
       localStorage.setItem(`userUiSettings_${currentUser.id}`, JSON.stringify(userUiSettings));
     }
-    // Применяем тему
-    document.documentElement.setAttribute('data-theme', userUiSettings.themeMode);
-    alert('Настройки оформления сохранены!');
+    // Настройки применяются автоматически через useEffect
   };
 
   const handleSaveNotificationSettings = () => {
@@ -1729,14 +1973,53 @@ function App() {
     }
   };
 
-  const handleSelectChat = (chat) => {
+  const handleSelectChat = async (chat) => {
     setActiveChatId(chat.id);
     activeChatIdRef.current = chat.id;
-    socket.emit('join_chat', chat.id);
-    socket.emit('mark_read', { chatId: chat.id });
-    setMessages([]);
+
+    // Проверяем подключение сокета
+    if (!socket || !socket.connected) {
+      console.warn('Сокет не подключён, пытаемся загрузить сообщения через API...');
+
+      // Загружаем сообщения через HTTP API
+      try {
+        const response = await fetch(`${SOCKET_URL}/api/messages/${chat.id}?userId=${currentUser?.id}`);
+        if (response.ok) {
+          const data = await response.json();
+          setMessages(data.messages || []);
+        } else {
+          console.error('Ошибка загрузки сообщений через API');
+          setMessages([]);
+        }
+      } catch (err) {
+        console.error('Ошибка загрузки сообщений:', err);
+        setMessages([]);
+      }
+    } else {
+      // Сокет подключён, используем WebSocket
+      socket.emit('join_chat', chat.id);
+      socket.emit('mark_read', { chatId: chat.id });
+
+      // Устанавливаем таймаут на случай если chat_history не придёт
+      const loadTimeout = setTimeout(() => {
+        if (activeChatIdRef.current === chat.id) {
+          fetch(`${SOCKET_URL}/api/messages/${chat.id}?userId=${currentUser?.id}`)
+            .then(res => res.ok ? res.json() : null)
+            .then(data => {
+              if (data && activeChatIdRef.current === chat.id) {
+                setMessages(data.messages || []);
+              }
+            })
+            .catch(err => console.error('Ошибка загрузки через API fallback:', err));
+        }
+      }, 3000);
+
+      // Сохраняем ID таймаута для очистки при необходимости
+      window.chatLoadTimeout = loadTimeout;
+    }
+    
     // Сбрасываем счетчик непрочитанных для этого чата
-    setChats(prev => prev.map(c => 
+    setChats(prev => prev.map(c =>
       c.id === chat.id ? { ...c, unreadCount: 0 } : c
     ));
     // Сбрасываем поиск при переключении чата
@@ -1961,9 +2244,40 @@ function App() {
     setCurrentSearchIndex(0);
   };
 
+  // Проверка, есть ли контент в поле ввода (текст или эмодзи-изображения)
+  const hasInputContent = () => {
+    if (inputText.trim()) return true;
+    // Проверяем наличие изображений (эмодзи) в contentEditable div
+    if (messageInputRef.current && messageInputRef.current.querySelectorAll('img.emoji').length > 0) return true;
+    return false;
+  };
+
+  // Получение текста сообщения (включая эмодзи из изображений)
+  const getMessageText = () => {
+    if (!messageInputRef.current) return inputText;
+    
+    let text = '';
+    const nodes = messageInputRef.current.childNodes;
+    
+    nodes.forEach(node => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        text += node.textContent;
+      } else if (node.nodeType === Node.ELEMENT_NODE && node.tagName === 'IMG' && node.classList.contains('emoji')) {
+        // Извлекаем эмодзи из alt атрибута
+        text += node.alt || '';
+      } else {
+        text += node.textContent || '';
+      }
+    });
+    
+    return text;
+  };
+
   const handleSendMessage = async (e) => {
     e.preventDefault();
-    if (!socket || (!inputText.trim() && !selectedFile) || !activeChatId) return;
+    if (!socket || (!hasInputContent() && !selectedFile) || !activeChatId) return;
+
+    const messageText = getMessageText();
 
     if (selectedFile) {
       setIsUploading(true);
@@ -1979,7 +2293,7 @@ function App() {
 
         socket.emit('send_message', {
           chatId: activeChatId,
-          text: inputText,
+          text: messageText,
           file: {
             filename: fileData.filename,
             url: fileData.url,
@@ -1993,6 +2307,10 @@ function App() {
         setIsUploading(false);
         setSelectedFile(null);
         setInputText('');
+        // Очищаем contentEditable div
+        if (messageInputRef.current) {
+          messageInputRef.current.innerHTML = '';
+        }
         // Очищаем черновик после отправки
         setMessageDrafts(prev => {
           const newDrafts = { ...prev };
@@ -2004,9 +2322,13 @@ function App() {
     } else {
       socket.emit('send_message', {
         chatId: activeChatId,
-        text: inputText
+        text: messageText
       });
       setInputText('');
+      // Очищаем contentEditable div
+      if (messageInputRef.current) {
+        messageInputRef.current.innerHTML = '';
+      }
       // Очищаем черновик после отправки
       setMessageDrafts(prev => {
         const newDrafts = { ...prev };
@@ -2041,10 +2363,142 @@ function App() {
     }, 1000);
   };
 
+  // Функция для конвертации emoji в unified code
+  const emojiToUnified = (emoji) => {
+    if (!emoji) return '';
+    try {
+      // Разбиваем emoji на code points и конвертируем в hex
+      const codePoints = [...emoji].map(char => {
+        const code = char.codePointAt(0);
+        // Исключаем variation selectors (FE00-FE0F)
+        if (code >= 0xFE00 && code <= 0xFE0F) return null;
+        // Исключаем Combining Enclosing Keycap
+        if (code === 0x20E3) return null;
+        // Исключаем skin tone modifiers
+        if (code >= 0x1F3FB && code <= 0x1F3FF) return null;
+        return code.toString(16); // lowercase для emoji-datasource
+      }).filter(Boolean); // Убираем null значения
+
+      const result = codePoints.join('-');
+      return result;
+    } catch (e) {
+      console.warn('Failed to convert emoji to unified:', e);
+      return '';
+    }
+  };
+
+  // Функция для рендеринга emoji как изображения (стиль Apple)
+  const renderEmoji = (emoji, className = '', size = 20) => {
+    if (!emoji) return null;
+
+    // Конвертируем emoji в unified format
+    const unified = emojiToUnified(emoji);
+    const emojiUrl = `https://cdn.jsdelivr.net/npm/emoji-datasource-apple@15.0.1/img/apple/64/${unified}.png`;
+
+    return (
+      <span
+        className={className}
+        style={{
+          fontSize: `${size}px`,
+          lineHeight: '1',
+          display: 'inline-block',
+          verticalAlign: 'middle',
+          fontFamily: '"Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji", sans-serif'
+        }}
+      >
+        {emoji}
+      </span>
+    );
+  };
+
+  // Функция для оборачивания эмодзи в тексте в изображения Apple
+  const wrapEmojisInText = (text) => {
+    if (!text) return text;
+    
+    // Regex для поиска эмодзи в тексте
+    const emojiRegex = /\p{Extended_Pictographic}/gu;
+    
+    // Заменяем каждый эмодзи на изображение
+    const parts = [];
+    let lastIndex = 0;
+    let match;
+    
+    // Сбрасываем regex
+    emojiRegex.lastIndex = 0;
+    
+    while ((match = emojiRegex.exec(text)) !== null) {
+      // Добавляем текст до эмодзи
+      if (match.index > lastIndex) {
+        parts.push(text.slice(lastIndex, match.index));
+      }
+      
+      // Конвертируем эмодзи в URL изображения Apple
+      const emoji = match[0];
+      const unified = emojiToUnified(emoji);
+      const emojiUrl = `https://cdn.jsdelivr.net/npm/emoji-datasource-apple@15.0.1/img/apple/64/${unified}.png`;
+      
+      // Добавляем эмодзи как изображение
+      parts.push(
+        <img
+          key={match.index}
+          src={emojiUrl}
+          alt={emoji}
+          className="emoji"
+          style={{
+            width: 'var(--message-emoji-size, 20px)',
+            height: 'var(--message-emoji-size, 20px)',
+            verticalAlign: 'middle',
+            display: 'inline-block'
+          }}
+          onError={(e) => {
+            // Если изображение не загрузилось, показываем текстовый эмодзи
+            console.error('Failed to load emoji image:', emojiUrl);
+            e.target.style.display = 'none';
+            e.target.parentNode.insertBefore(document.createTextNode(emoji), e.target.nextSibling);
+          }}
+        />
+      );
+      
+      lastIndex = match.index + match[0].length;
+    }
+    
+    // Добавляем оставшийся текст
+    if (lastIndex < text.length) {
+      parts.push(text.slice(lastIndex));
+    }
+    
+    return parts.length > 0 ? parts : text;
+  };
+
   const handleAddEmoji = (emojiObject) => {
     // EmojiPicker передаёт объект { emoji: '😀', ... }
     const emoji = typeof emojiObject === 'string' ? emojiObject : emojiObject.emoji;
-    setInputText(prev => prev + emoji);
+    
+    // Вставляем эмодзи как изображение в contentEditable div
+    if (messageInputRef.current) {
+      const unified = emojiToUnified(emoji);
+      const emojiUrl = `https://cdn.jsdelivr.net/npm/emoji-datasource-apple@15.0.1/img/apple/64/${unified}.png`;
+      
+      const img = document.createElement('img');
+      img.src = emojiUrl;
+      img.alt = emoji;
+      img.className = 'emoji';
+      img.style.width = '20px';
+      img.style.height = '20px';
+      img.style.verticalAlign = 'middle';
+      img.style.display = 'inline-block';
+      img.style.margin = '0 2px';
+      
+      messageInputRef.current.appendChild(img);
+      messageInputRef.current.focus();
+      
+      // Обновляем inputText
+      setInputText(messageInputRef.current.textContent);
+    } else {
+      // Fallback для обычного input
+      setInputText(prev => prev + emoji);
+    }
+    
     // Оставляем фокус на поле ввода
     setTimeout(() => messageInputRef.current?.focus(), 0);
   };
@@ -2133,6 +2587,35 @@ function App() {
     setContextMenu({ ...contextMenu, visible: false });
   };
 
+  // === ОБРАБОТКА РЕАКЦИЙ ===
+
+  // Добавить или удалить реакцию
+  const handleAddReaction = (emoji, messageId) => {
+    if (!socket) {
+      console.error('Сокет не подключён!');
+      return;
+    }
+
+    // Отправляем реакцию на сервер
+    socket.emit('add_reaction', {
+      messageId,
+      emoji
+    });
+
+    // Закрываем контекстное меню
+    closeContextMenu();
+  };
+
+  // Удалить реакцию текущего пользователя
+  const handleRemoveReaction = (emoji, messageId) => {
+    if (!socket) return;
+
+    socket.emit('remove_reaction', {
+      messageId,
+      emoji
+    });
+  };
+
   // Копирование сообщения
   const handleCopyMessage = async () => {
     if (contextMenu.messageText) {
@@ -2153,45 +2636,20 @@ function App() {
     }
   };
 
-  // Пересылка сообщения из контекстного меню
-  const handleForwardMessageFromContext = () => {
-    if (!contextMenu.messageId) {
-      alert('Ошибка: нет сообщения для пересылки');
-      return;
-    }
-    
-    if (!socket || !socket.connected) {
-      alert('Ошибка: нет соединения с сервером. Обновите страницу.');
-      return;
-    }
-    
-    if (!currentUser) {
-      alert('Ошибка: вы не авторизованы. Обновите страницу.');
-      return;
-    }
-
-    setShowForwardModal(true);
-    setForwardSearchQuery('');
-    setSelectedForwardUser(null);
-  };
-  
   // Отправка пересланного сообщения
   const handleSendForwardedMessage = () => {
     if (!selectedForwardUser || !contextMenu.messageId) {
       console.error('Нет получателя или messageId:', { selectedForwardUser, contextMessageId: contextMenu.messageId });
-      alert('Ошибка: нет данных для пересылки');
       return;
     }
 
     if (!socket) {
       console.error('Сокет не подключён!');
-      alert('Ошибка: сокет не подключён');
       return;
     }
 
     if (!socket.connected) {
       console.error('Сокет не подключён (connected=false)!');
-      alert('Ошибка: нет соединения с сервером');
       return;
     }
 
@@ -2211,9 +2669,20 @@ function App() {
     setShowForwardModal(false);
     setForwardSearchQuery('');
     setSelectedForwardUser(null);
-    closeContextMenu();
-    
-    alert('Сообщение переслано!');
+  };
+
+  // Пересылка сообщения из меню правой кнопки мыши
+  const handleForwardMessage = (message) => {
+    if (!message || !message.id) {
+      alert('Ошибка: нет сообщения для пересылки');
+      return;
+    }
+
+    // Устанавливаем messageId в contextMenu для использования в handleSendForwardedMessage
+    setContextMenu({ ...contextMenu, messageId: message.id, messageText: message.text, visible: false });
+    setShowForwardModal(true);
+    setForwardSearchQuery('');
+    setSelectedForwardUser(null);
   };
 
   const handleViewProfileBySender = async (senderName, senderAvatar) => {
@@ -2439,12 +2908,13 @@ function App() {
     const month = String(date.getMonth() + 1).padStart(2, '0');
     const day = String(date.getDate()).padStart(2, '0');
     const dateStr = `${year}-${month}-${day}`;
-    
+
     setTaskForm({
       title: '',
       description: '',
       taskDate: dateStr,
       taskTime: '',
+      taskEndTime: '',
       color: '#667eea'
     });
     setEditingTask(null);
@@ -2505,6 +2975,7 @@ function App() {
       description: task.description || '',
       taskDate: task.task_date,
       taskTime: task.task_time || '',
+      taskEndTime: task.task_end_time || '',
       color: task.color
     });
     setShowTaskModal(true);
@@ -2810,15 +3281,19 @@ function App() {
     if (!messageToDelete) return;
 
     try {
-      const response = await fetch(`${SOCKET_URL}/api/messages/${messageToDelete.id}`, {
+      const response = await fetch(`${SOCKET_URL}/api/admin/messages/${messageToDelete.id}?adminId=${currentUser.id}`, {
         method: 'DELETE'
       });
 
-      if (response.ok) {
-        setMessages(prev => prev.filter(m => m.id !== messageToDelete.id));
+      if (!response.ok) {
+        const errorData = await response.json();
+        console.error('Ошибка удаления сообщения:', errorData.error);
+        alert('Ошибка: ' + (errorData.error || 'Не удалось удалить сообщение'));
       }
+      // Сообщение будет удалено из списка через socket событие message_deleted
     } catch (err) {
       console.error('Ошибка удаления сообщения:', err);
+      alert('Ошибка при удалении сообщения');
     } finally {
       setShowDeleteConfirm(false);
       setMessageToDelete(null);
@@ -2864,16 +3339,24 @@ function App() {
   // Закрытие меню при клике вне
   useEffect(() => {
     const handleClickOutside = (e) => {
+      // Закрываем меню чата при клике вне меню
       if (showChatMenu) {
-        setShowChatMenu(false);
+        const chatMenu = document.querySelector('.chat-menu-dropdown');
+        if (chatMenu && !chatMenu.contains(e.target)) {
+          setShowChatMenu(false);
+        }
       }
-      if (showMessageMenu) {
-        setShowMessageMenu(false);
+      // Закрываем меню сообщения только по клику левой кнопкой мыши вне меню
+      if (showMessageMenu && e.button === 0) {
+        const messageMenu = document.querySelector('.message-menu-dropdown');
+        if (messageMenu && !messageMenu.contains(e.target)) {
+          setShowMessageMenu(false);
+        }
       }
     };
 
-    document.addEventListener('click', handleClickOutside);
-    return () => document.removeEventListener('click', handleClickOutside);
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [showChatMenu, showMessageMenu]);
 
   // Получение всех медиафайлов из чата
@@ -2904,7 +3387,7 @@ function App() {
     setPreviewImage(null);
   };
 
-  // Закрытие по ESC
+  // Закрытие по ESC и клику вне контекстного меню
   useEffect(() => {
     const handleEscKey = (e) => {
       if (e.key === 'Escape') {
@@ -2915,8 +3398,18 @@ function App() {
       }
     };
 
+    const handleClickOutside = (e) => {
+      if (contextMenu.visible && !e.target.closest('.message-context-menu')) {
+        closeContextMenu();
+      }
+    };
+
     document.addEventListener('keydown', handleEscKey);
-    return () => document.removeEventListener('keydown', handleEscKey);
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('keydown', handleEscKey);
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
   }, [showImagePreview, showChatMenu, showMediaViewer, contextMenu.visible]);
 
   const handleCreateChat = () => {
@@ -3002,13 +3495,13 @@ function App() {
       
       // Обработка списков
       if (formattedLine.trim().startsWith('• ')) {
-        return <li key={lineIndex} style={{ marginLeft: '20px' }}>{formattedParts}</li>;
+        return <div key={lineIndex} style={{ marginLeft: '20px' }}>{formattedParts}</div>;
       }
       
       // Обработка нумерованных списков
       const numberedMatch = formattedLine.match(/^(\d+)\.\s+(.*)/);
       if (numberedMatch) {
-        return <li key={lineIndex} style={{ marginLeft: '20px', listStyleType: 'decimal' }}><strong>{numberedMatch[1]}.</strong> {numberedMatch[2]}</li>;
+        return <div key={lineIndex} style={{ marginLeft: '20px' }}><strong>{numberedMatch[1]}.</strong> {numberedMatch[2]}</div>;
       }
       
       // Пустые строки
@@ -3089,30 +3582,201 @@ function App() {
     return chat.participantsDetails.filter(p => p.status === 'online').length;
   };
 
-  // Экран авторизации
-  if (!isLoggedIn) {
+  // Экран потери связи с сервером (только если пользователь был залогинен)
+  if (!isLoggedIn && connectionStatus === 'disconnected' && localStorage.getItem(STORAGE_KEY)) {
+    const videoSrc = window.location.protocol === 'file:'
+      ? 'videos/background.mp4'
+      : '/videos/background.mp4';
+
     return (
       <div className="login-container">
+        <video
+          className="login-video-bg"
+          autoPlay
+          loop
+          muted
+          playsInline
+        >
+          <source src={videoSrc} type="video/mp4" />
+        </video>
+        <div className="login-video-overlay"></div>
+
         <div className="login-box auth-box">
-          <h1>💬 Чат</h1>
-          
-          <div className="auth-tabs">
+          <h1>⚠️ Связь с сервером потеряна</h1>
+          <p className="disconnected-message">
+            Подключение к серверу разорвано. Проверьте соединение с сетью или обратитесь к администратору.
+          </p>
+          <div className="disconnected-actions">
             <button 
-              className={authMode === 'login' ? 'active' : ''}
-              onClick={() => { setAuthMode('login'); setAuthError(''); }}
+              className="auth-btn" 
+              onClick={() => {
+                setConnectionStatus('reconnecting');
+                window.location.reload();
+              }}
             >
-              Вход
-            </button>
-            <button 
-              className={authMode === 'register' ? 'active' : ''}
-              onClick={() => { setAuthMode('register'); setAuthError(''); }}
-            >
-              Регистрация
+              🔄 Попробовать снова
             </button>
           </div>
+        </div>
+        <div className="login-footer">
+          <span>© 2026 Created By Pantyuhov DI</span>
+        </div>
+      </div>
+    );
+  }
 
-          {authMode === 'login' ? (
-            <form onSubmit={handleLogin} className="auth-form">
+  // Экран авторизации
+  if (!isLoggedIn || (isLoggedIn && !currentUser)) {
+    // Определяем путь к видео в зависимости от окружения
+    const videoSrc = window.location.protocol === 'file:'
+      ? 'videos/background.mp4'
+      : '/videos/background.mp4';
+
+    return (
+      <div className="login-container">
+        {/* Видео-фон */}
+        <video
+          className="login-video-bg"
+          autoPlay
+          loop
+          muted
+          playsInline
+        >
+          <source src={videoSrc} type="video/mp4" />
+        </video>
+        {/* Затемнение поверх видео */}
+        <div className="login-video-overlay"></div>
+
+        <div className="login-box auth-box">
+          <h1>🍦 Чат УРСА</h1>
+
+          {/* Сообщение о загрузке если isLoggedIn но нет currentUser */}
+          {isLoggedIn && !currentUser && (
+            <div className="loading-user-info">
+              <p>Загрузка данных пользователя...</p>
+              <button 
+                className="auth-btn" 
+                onClick={() => {
+                  localStorage.removeItem(STORAGE_KEY);
+                  localStorage.removeItem('chat_last_user');
+                  setIsLoggedIn(false);
+                  setCurrentUser(null);
+                  setConnectionStatus('connecting');
+                }}
+                style={{ marginTop: '16px' }}
+              >
+                Войти вручную
+              </button>
+            </div>
+          )}
+
+          {/* Карточка последнего пользователя */}
+          {lastUser && (
+            <div className="last-user-card">
+              <div className="last-user-avatar">
+                {lastUser.avatar ? (
+                  <img src={lastUser.avatar} alt={lastUser.username} />
+                ) : (
+                  <div className="last-user-avatar-placeholder">
+                    {lastUser.username.charAt(0).toUpperCase()}
+                  </div>
+                )}
+              </div>
+              <div className="last-user-info">
+                <div className="last-user-name">{lastUser.username}</div>
+                <div className="last-user-label">Последний вход</div>
+              </div>
+              <div className="last-user-actions">
+                <button 
+                  className="last-user-login-btn"
+                  onClick={async () => {
+                    // Автоматически выполняем вход без показа формы
+                    const savedCredentials = localStorage.getItem('chat_credentials');
+                    if (savedCredentials) {
+                      try {
+                        const creds = JSON.parse(savedCredentials);
+                        // Устанавливаем значения для handleLogin
+                        setEmail(creds.email || '');
+                        setPassword(creds.password || '');
+                        setRememberMe(true);
+                        setAuthMode('login');
+                        setAuthError('');
+                        setIsLoading(true);
+                        
+                        // Выполняем вход напрямую
+                        try {
+                          const response = await fetch(`${SOCKET_URL}/api/login`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ email: creds.email, password: creds.password })
+                          });
+
+                          const data = await response.json();
+
+                          if (response.ok) {
+                            // Подключаемся к сокету с данными пользователя
+                            socket.emit('join', {
+                              username: data.user.username,
+                              userId: data.user.id
+                            });
+                            // Проверяем статус админа
+                            checkAdminStatus(data.user.id);
+                          } else {
+                            setAuthError(data.error || 'Ошибка входа');
+                          }
+                        } catch (err) {
+                          setAuthError('Ошибка соединения с сервером');
+                        } finally {
+                          setIsLoading(false);
+                        }
+                      } catch (e) {
+                        console.error('Ошибка парсинга credentials:', e);
+                      }
+                    }
+                  }}
+                >
+                  Войти
+                </button>
+                <button 
+                  className="last-user-switch-btn"
+                  onClick={() => {
+                    // Показываем форму входа
+                    setShowLoginForm(true);
+                    setAuthMode('login');
+                  }}
+                >
+                  Другой пользователь
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Разделитель и форма входа */}
+          {true && (
+            <>
+              {lastUser && !showLoginForm && (
+                <div className="auth-divider">
+                  <span>или</span>
+                </div>
+              )}
+
+              <div className="auth-tabs">
+                <button
+                  className={authMode === 'login' ? 'active' : ''}
+                  onClick={() => { setAuthMode('login'); setAuthError(''); }}
+                >
+                  Вход
+                </button>
+                <button
+                  className={authMode === 'register' ? 'active' : ''}
+                  onClick={() => { setAuthMode('register'); setAuthError(''); }}
+                >
+                  Регистрация
+                </button>
+              </div>
+
+              {authMode === 'login' ? (
+            <form onSubmit={handleLogin} className="auth-form" ref={loginFormRef}>
               <p className="auth-subtitle">Введите данные для входа</p>
 
               <div className="form-group">
@@ -3128,13 +3792,33 @@ function App() {
 
               <div className="form-group">
                 <label>Пароль</label>
-                <input
-                  type="password"
-                  placeholder="••••••••"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                />
+                <div className="password-input-wrapper">
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    placeholder="••••••••"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required
+                  />
+                  <button
+                    type="button"
+                    className="password-toggle-btn"
+                    onClick={() => setShowPassword(!showPassword)}
+                    tabIndex={-1}
+                  >
+                    {showPassword ? (
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
+                        <line x1="1" y1="1" x2="23" y2="23"></line>
+                      </svg>
+                    ) : (
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                        <circle cx="12" cy="12" r="3"></circle>
+                      </svg>
+                    )}
+                  </button>
+                </div>
               </div>
 
               <div className="form-group remember-me-group">
@@ -3159,14 +3843,14 @@ function App() {
               <p className="auth-subtitle">Создайте аккаунт</p>
 
               <div className="form-group">
-                <label>Имя пользователя</label>
+                <label>ФИО</label>
                 <input
                   type="text"
-                  placeholder="Ваше имя"
+                  placeholder="Иванов Иван Иванович"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   required
-                  maxLength={20}
+                  maxLength={100}
                 />
               </div>
 
@@ -3183,14 +3867,66 @@ function App() {
 
               <div className="form-group">
                 <label>Пароль</label>
-                <input
-                  type="password"
-                  placeholder="Минимум 6 символов"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  minLength={6}
-                />
+                <div className="password-input-wrapper">
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    placeholder="Минимум 6 символов"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required
+                    minLength={6}
+                  />
+                  <button
+                    type="button"
+                    className="password-toggle-btn"
+                    onClick={() => setShowPassword(!showPassword)}
+                    tabIndex={-1}
+                  >
+                    {showPassword ? (
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
+                        <line x1="1" y1="1" x2="23" y2="23"></line>
+                      </svg>
+                    ) : (
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                        <circle cx="12" cy="12" r="3"></circle>
+                      </svg>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label>Подтверждение пароля</label>
+                <div className="password-input-wrapper">
+                  <input
+                    type={showConfirmPassword ? 'text' : 'password'}
+                    placeholder="Повторите пароль"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    required
+                    minLength={6}
+                  />
+                  <button
+                    type="button"
+                    className="password-toggle-btn"
+                    onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                    tabIndex={-1}
+                  >
+                    {showConfirmPassword ? (
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
+                        <line x1="1" y1="1" x2="23" y2="23"></line>
+                      </svg>
+                    ) : (
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                        <circle cx="12" cy="12" r="3"></circle>
+                      </svg>
+                    )}
+                  </button>
+                </div>
               </div>
 
               <div className="form-group">
@@ -3210,6 +3946,8 @@ function App() {
                 {isLoading ? 'Регистрация...' : 'Зарегистрироваться'}
               </button>
             </form>
+          )}
+            </>
           )}
         </div>
         <div className="login-footer">
@@ -3253,7 +3991,28 @@ function App() {
         <div className="buttons-column">
           <button
             className="icon-btn with-text"
-            onClick={() => setShowStatusPicker(true)}
+            onClick={() => {
+              // Инициализируем статус из текущего статуса пользователя
+              const currentStatus = currentUser?.status_text || '';
+              if (currentStatus) {
+                // Используем Array.from() для корректной работы с эмодзи
+                const chars = Array.from(currentStatus);
+                const firstChar = chars[0] || '';
+                const isEmoji = /[\p{Emoji}]/u.test(firstChar);
+                
+                if (isEmoji) {
+                  setStatusEmoji(firstChar);
+                  setStatusDescription(chars.slice(1).join('').trim());
+                } else {
+                  setStatusEmoji('');
+                  setStatusDescription(currentStatus);
+                }
+              } else {
+                setStatusEmoji('');
+                setStatusDescription('');
+              }
+              setShowStatusPicker(true);
+            }}
             title="Изменить статус"
           >
             <span className="emoji-animated">
@@ -3333,9 +4092,6 @@ function App() {
             <span className="emoji-animated">🚪</span>
             <span className="button-label">Выйти</span>
           </button>
-        </div>
-        <div className="footer">
-          <span>© 2026 Created By Pantyuhov DI</span>
         </div>
       </aside>
 
@@ -3643,7 +4399,7 @@ function App() {
                       </button>
                     </div>
                     <div className="host-warning">
-                      <strong>⚠️ Подозрительные хосты:</strong>{' '}
+                      <strong>⚠️ Подозрительные компьютеры:</strong>{' '}
                       {Object.entries(hostCounts)
                         .filter(([_, count]) => count > 3)
                         .map(([host, count]) => (
@@ -3652,7 +4408,7 @@ function App() {
                           </span>
                         ))}
                       {Object.entries(hostCounts).filter(([_, count]) => count > 3).length === 0 && (
-                        <span className="no-warning">подозрительных хостов не обнаружено</span>
+                        <span className="no-warning">подозрительных компьютеров не обнаружено</span>
                       )}
                     </div>
                     <table className="admin-table">
@@ -3662,7 +4418,7 @@ function App() {
                           <th>Email</th>
                           <th>Статус</th>
                           <th>Роль</th>
-                          <th>Host</th>
+                          <th>Компьютер</th>
                           <th>IP</th>
                           <th>Бронирование</th>
                           <th>Действия</th>
@@ -3678,7 +4434,7 @@ function App() {
                                   <img src={user.avatar || `https://ui-avatars.com/api/?name=${user.username}`} alt={user.username} className="user-avatar-small" />
                                   <span>{user.username}</span>
                                   {userHostCount > 3 && (
-                                    <span className="suspicious-badge" title={`Этот host создал ${userHostCount} учётных записей`}>
+                                    <span className="suspicious-badge" title={`Этот компьютер создал ${userHostCount} учётных записей`}>
                                       ⚠️ {userHostCount}
                                     </span>
                                   )}
@@ -3940,12 +4696,12 @@ function App() {
             </div>
             <div className="modal-body">
               <div className="form-group">
-                <label>Имя пользователя *</label>
+                <label>ФИО *</label>
                 <input
                   type="text"
                   value={newUserData.username}
                   onChange={(e) => setNewUserData({...newUserData, username: e.target.value})}
-                  placeholder="Введите имя пользователя"
+                  placeholder="Иванов Иван Иванович"
                 />
               </div>
               <div className="form-group">
@@ -4160,13 +4916,19 @@ function App() {
                       if (otherUser && otherUser.status_text) {
                         const statusText = otherUser.status_text;
                         const maxLength = 20;
-                        const displayStatus = statusText.length > maxLength 
-                          ? statusText.substring(0, maxLength) + ' ...' 
+                        const displayStatus = statusText.length > maxLength
+                          ? statusText.substring(0, maxLength) + ' ...'
                           : statusText;
                         return (
                           <div className="chat-status-row">
                             <span className="chat-status-text">
-                              {displayStatus}
+                              {displayStatus.split('').map((char, idx) => {
+                                // Проверяем, является ли символ emoji
+                                if (/[\p{Emoji}]/u.test(char)) {
+                                  return <span key={idx}>{renderEmoji(char)}</span>;
+                                }
+                                return char;
+                              })}
                             </span>
                           </div>
                         );
@@ -4212,7 +4974,7 @@ function App() {
                           const isEmoji = /[\p{Emoji}]/u.test(firstChar);
                           // Если начинается со смайла, показываем только смайл
                           if (isEmoji) {
-                            return firstChar;
+                            return renderEmoji(firstChar);
                           }
                           // Иначе показываем весь текст
                           return statusText;
@@ -4325,40 +5087,82 @@ function App() {
               </button>
             </header>
 
-            <div className="messages-container-main">
-              {messages.map((message) => (
+            <div className="messages-container-main" key={activeChatId || 'no-chat'}>
+              {messages.map((message, index) => {
+                // Определяем, является ли сообщение частью группы (предыдущее от того же пользователя)
+                const prevMessage = index > 0 ? messages[index - 1] : null;
+                const isGrouped = prevMessage && prevMessage.senderId === message.senderId;
+
+                return (
                 <div
                   id={`message-${message.id}`}
                   key={message.id}
-                  className={`message-main ${message.senderId === currentUser?.id ? 'own' : ''} ${isBotMessage(message) ? 'message-bot' : ''}`}
+                  className={`message-main ${message.senderId === currentUser?.id ? 'own' : ''} ${isBotMessage(message) ? 'message-bot' : ''} ${isGrouped ? 'message-grouped' : ''}`}
                   onContextMenu={(e) => handleContextMenu(e, message.id, message.text, message.chatId)}
                 >
-                  <img
-                    src={message.senderAvatar}
-                    alt={message.senderName}
-                    className="message-avatar"
-                  />
+                  {!isGrouped && (
+                    <img
+                      src={message.senderAvatar}
+                      alt={message.senderName}
+                      className="message-avatar"
+                    />
+                  )}
+                  {isGrouped && <div className="message-avatar-spacer" />}
                   <div className="message-content">
-                    <div className="message-header-main">
-                      <span className="message-sender">{message.senderName}</span>
-                      <div className="message-header-actions">
-                        <div className="message-time-status">
-                          <span className="message-time-main">{formatTime(message.timestamp)}</span>
-                          {renderMessageStatus(message)}
+                    <div className="message-bubble-wrapper">
+                      {!isBotMessage(message) && message.forwarded_from && (
+                        <span className="forwarded-badge">
+                          ↗️ Переслано от {message.forwarded_from.sender_name}
+                        </span>
+                      )}
+                      {message.text && (
+                        <div className="message-text-wrapper">
+                          <div className="message-text-content">
+                            <p className="message-text-main" onContextMenu={(e) => handleContextMenu(e, message.id, message.text, message.chatId)}>
+                              {isBotMessage(message) ? formatBotText(message.text) : wrapEmojisInText(message.text)}
+                            </p>
+                            <div className="message-time-inline">
+                              <span className="message-time-main">{formatTime(message.timestamp)}</span>
+                              {renderMessageStatus(message)}
+                            </div>
+                          </div>
+                          {/* Реакции под текстом внутри пузыря сообщения */}
+                          {!isBotMessage(message) && messageReactions[message.id]?.reactions && Object.keys(messageReactions[message.id].reactions).length > 0 && (
+                            <div className="message-reactions-inline">
+                              {Object.entries(messageReactions[message.id].reactions).map(([emoji, users]) => {
+                                const hasCurrentUserReaction = users.some(u => u.userId === currentUser?.id);
+                                const visibleUsers = users.slice(0, 3);
+                                const remainingCount = users.length - 3;
+
+                                return (
+                                  <button
+                                    key={emoji}
+                                    className={`reaction-badge-inline ${hasCurrentUserReaction ? 'current-user' : ''}`}
+                                    onClick={() => hasCurrentUserReaction ? handleRemoveReaction(emoji, message.id) : null}
+                                    title={users.map(u => u.username).join(', ')}
+                                  >
+                                    <span className="reaction-emoji-inline">{renderEmoji(emoji, '', 13)}</span>
+                                    <div className="reaction-avatars-inline">
+                                      {visibleUsers.map((user, idx) => (
+                                        <img
+                                          key={idx}
+                                          src={user.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(user.username)}&background=random`}
+                                          alt={user.username}
+                                          className="reaction-avatar-inline"
+                                        />
+                                      ))}
+                                      {remainingCount > 0 && (
+                                        <span className="reaction-remaining-inline">+{remainingCount}</span>
+                                      )}
+                                    </div>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
                         </div>
-                        <button
-                          className="message-menu-btn"
-                          onClick={(e) => handleMessageMenuClick(e, message)}
-                        >
-                          ⋮
-                        </button>
-                      </div>
+                      )}
                     </div>
-                    {message.text && (
-                      <p className="message-text-main" onContextMenu={(e) => handleContextMenu(e, message.id, message.text, message.chatId)}>
-                        {isBotMessage(message) ? formatBotText(message.text) : message.text}
-                      </p>
-                    )}
                     {/* Кнопки бота */}
                     {isBotMessage(message) && message.buttons && message.buttons.length > 0 && (
                       <div className="bot-buttons">
@@ -4373,15 +5177,7 @@ function App() {
                         ))}
                       </div>
                     )}
-                    {/* Файлы и пересылка только для обычных сообщений (не бота) */}
-                    {!isBotMessage(message) && message.forwarded_from && (
-                      <div className="forwarded-indicator">
-                        <span className="forwarded-icon">↗️</span>
-                        <span className="forwarded-text">
-                          Переслано от {message.forwarded_from.sender_name}
-                        </span>
-                      </div>
-                    )}
+                    {/* Файлы только для обычных сообщений (не бота) */}
                     {!isBotMessage(message) && message.file && (
                       <div className="message-file-main">
                         {message.file.mimetype?.startsWith('image/') ? (
@@ -4404,7 +5200,8 @@ function App() {
                     )}
                   </div>
                 </div>
-              ))}
+              );
+            })}
               <div ref={messagesEndRef} />
             </div>
 
@@ -4428,12 +5225,36 @@ function App() {
                   }}>✕</button>
                 </span>
               )}
-              <input
+              <div
                 ref={messageInputRef}
-                type="text"
-                placeholder="Введите сообщение..."
-                value={inputText}
-                onChange={handleTyping}
+                className="message-input-contenteditable"
+                contentEditable
+                suppressContentEditableWarning
+                data-placeholder="Введите сообщение..."
+                onInput={(e) => {
+                  const text = e.currentTarget.textContent;
+                  setInputText(text);
+                  
+                  if (!isTyping) {
+                    setIsTyping(true);
+                    socket.emit('typing', { chatId: activeChatId, isTyping: true });
+                  }
+
+                  if (typingTimeoutRef.current) {
+                    clearTimeout(typingTimeoutRef.current);
+                  }
+
+                  typingTimeoutRef.current = setTimeout(() => {
+                    setIsTyping(false);
+                    socket.emit('typing', { chatId: activeChatId, isTyping: false });
+                  }, 1000);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSendMessage(e);
+                  }
+                }}
                 disabled={isUploading}
               />
               <div className="message-actions">
@@ -4449,7 +5270,7 @@ function App() {
                 >
                   😀
                 </button>
-                <button type="submit" disabled={isUploading || (!inputText.trim() && !selectedFile)}>
+                <button type="submit" disabled={isUploading || (!hasInputContent() && !selectedFile)}>
                   {isUploading ? '⏳' : '➤'}
                 </button>
               </div>
@@ -4470,7 +5291,7 @@ function App() {
                 <EmojiPicker
                   onEmojiClick={handleAddEmoji}
                   theme="dark"
-                  emojiStyle="native"
+                  emojiStyle="apple"
                   searchDisabled={false}
                   skinTonesDisabled={false}
                   reactionsDefaultOpen={false}
@@ -4531,13 +5352,76 @@ function App() {
             {showMessageMenu && selectedMessage && (
               <div
                 className="message-menu-dropdown"
-                style={{ top: messageMenuPosition.top, left: messageMenuPosition.left }}
-                onClick={(e) => e.stopPropagation()}
+                style={{ 
+                  top: messageMenuPosition.top + 'px', 
+                  left: messageMenuPosition.left + 'px', 
+                  position: 'fixed', 
+                  zIndex: 9999,
+                  background: 'white',
+                  borderRadius: '8px',
+                  boxShadow: '0 4px 16px rgba(0,0,0,0.15)',
+                  padding: '8px 0'
+                }}
               >
-                <div className="message-menu-item" onClick={() => handleForwardMessage(selectedMessage)}>
-                  <span className="menu-icon">↗️</span>
+                <div
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    handleForwardMessage(selectedMessage);
+                    setShowMessageMenu(false);
+                  }}
+                  style={{
+                    padding: '10px 16px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px'
+                  }}
+                >
+                  <span>↗️</span>
                   <span>Переслать</span>
                 </div>
+                <div
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    handleCopyMessage();
+                    setShowMessageMenu(false);
+                  }}
+                  style={{
+                    padding: '10px 16px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px'
+                  }}
+                >
+                  <span>📋</span>
+                  <span>Копировать</span>
+                </div>
+                {currentUser?.is_admin === 1 && (
+                  <div
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      if (confirm('Удалить это сообщение?')) {
+                        handleDeleteMessage(selectedMessage);
+                      }
+                      setShowMessageMenu(false);
+                    }}
+                    style={{
+                      padding: '10px 16px',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '10px',
+                      color: '#dc3545'
+                    }}
+                  >
+                    <span>🗑️</span>
+                    <span>Удалить</span>
+                  </div>
+                )}
               </div>
             )}
           </>
@@ -4701,39 +5585,42 @@ function App() {
             </div>
           </div>
           <div className="full-page-content calendar-full-page">
-            <div className="calendar-header">
-              <button className="calendar-nav-btn" onClick={handlePrevMonth}>◀</button>
-              <h4 className="calendar-month-title">
-                {currentMonth.toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' })}
-              </h4>
-              <button className="calendar-nav-btn" onClick={handleNextMonth}>▶</button>
-            </div>
+            <div className="calendar-layout-wrapper">
+              {/* Левая колонка - Календарь */}
+              <div className="calendar-left-panel">
+                <div className="calendar-header">
+                  <button className="calendar-nav-btn" onClick={handlePrevMonth}>◀</button>
+                  <h4 className="calendar-month-title">
+                    {currentMonth.toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' })}
+                  </h4>
+                  <button className="calendar-nav-btn" onClick={handleNextMonth}>▶</button>
+                </div>
 
-            <div className="calendar-grid">
-              {/* Дни недели */}
-              {['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map(day => (
-                <div key={`weekday-${day}`} className="calendar-day-header">{day}</div>
-              ))}
+                <div className="calendar-grid">
+                  {/* Дни недели */}
+                  {['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map(day => (
+                    <div key={`weekday-${day}`} className="calendar-day-header">{day}</div>
+                  ))}
 
-              {/* Дни месяца */}
-              {(() => {
-                  const year = currentMonth.getFullYear();
-                  const month = currentMonth.getMonth();
-                  const firstDay = new Date(year, month, 1);
-                  const lastDay = new Date(year, month + 1, 0);
-                  const startDay = (firstDay.getDay() + 6) % 7;
-                  const days = [];
+                  {/* Дни месяца */}
+                  {(() => {
+                      const year = currentMonth.getFullYear();
+                      const month = currentMonth.getMonth();
+                      const firstDay = new Date(year, month, 1);
+                      const lastDay = new Date(year, month + 1, 0);
+                      const startDay = (firstDay.getDay() + 6) % 7;
+                      const days = [];
 
-                  for (let i = 0; i < startDay; i++) {
-                    days.push(<div key={`empty-${i}`} className="calendar-day empty"></div>);
-                  }
+                      for (let i = 0; i < startDay; i++) {
+                        days.push(<div key={`empty-${i}`} className="calendar-day empty"></div>);
+                      }
 
-                  for (let day = 1; day <= lastDay.getDate(); day++) {
-                    const date = new Date(year, month, day);
-                    const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-                    const dayTasks = calendarTasks.filter(t => t.task_date === dateStr);
-                    const isToday = new Date().toDateString() === date.toDateString();
-                    const isSelected = selectedDate && selectedDate.toDateString() === date.toDateString();
+                      for (let day = 1; day <= lastDay.getDate(); day++) {
+                        const date = new Date(year, month, day);
+                        const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                        const dayTasks = calendarTasks.filter(t => t.task_date === dateStr);
+                        const isToday = new Date().toDateString() === date.toDateString();
+                        const isSelected = selectedDate && selectedDate.toDateString() === date.toDateString();
 
                     const dayBirthdays = users.filter(user => {
                       if (!user.birth_date) return false;
@@ -4780,84 +5667,88 @@ function App() {
                   return days;
                 })()}
             </div>
-
-            {/* Отображение для режима задач */}
-            {calendarView === 'tasks' && (
-            <div className="calendar-selected-day-tasks full-page-tasks">
-              <div className="selected-day-header">
-                <h5>
-                  {selectedDate
-                    ? `Задачи на ${selectedDate.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })}`
-                    : 'Выберите день для просмотра задач'}
-                </h5>
-                {selectedDate && (
-                  <button className="add-task-btn" onClick={handleOpenNewTaskModal}>
-                    + Добавить
-                  </button>
-                )}
               </div>
-              {selectedDate && (() => {
-                const dayBirthdays = users.filter(user => {
-                  if (!user.birth_date) return false;
-                  const birthDate = new Date(user.birth_date);
-                  return birthDate.getDate() === selectedDate.getDate() &&
-                         (birthDate.getMonth() + 1) === (selectedDate.getMonth() + 1);
-                });
 
-                return (
-                  <>
-                    {dayBirthdays.length > 0 && (
-                      <div className="calendar-birthdays-section">
-                        <h6 className="birthdays-title">🎂 Дни рождения:</h6>
-                        {dayBirthdays.map(birthday => (
-                          <div key={birthday.id} className="calendar-birthday-item">
-                            <img src={birthday.avatar} alt={birthday.username} className="birthday-avatar" />
-                            <div className="birthday-info">
-                              <span className="birthday-name">{birthday.username}</span>
-                              <span className="birthday-age">
-                                ({selectedDate.getFullYear() - new Date(birthday.birth_date).getFullYear()} лет)
-                              </span>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
+              {/* Правая колонка - Список задач */}
+              <div className="calendar-right-panel">
+                {calendarView === 'tasks' && (
+                <div className="calendar-selected-day-tasks full-page-tasks">
+                  <div className="selected-day-header">
+                    <h5>
+                      {selectedDate
+                        ? `Задачи на ${selectedDate.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })}`
+                        : 'Выберите день для просмотра задач'}
+                    </h5>
+                    {selectedDate && (
+                      <button className="add-task-btn" onClick={handleOpenNewTaskModal}>
+                        + Добавить
+                      </button>
                     )}
-                    {selectedDayTasks.length === 0 ? (
-                      <p className="no-tasks-message">Нет задач на этот день</p>
-                    ) : (
+                  </div>
+                  {selectedDate && (() => {
+                    const dayBirthdays = users.filter(user => {
+                      if (!user.birth_date) return false;
+                      const birthDate = new Date(user.birth_date);
+                      return birthDate.getDate() === selectedDate.getDate() &&
+                             (birthDate.getMonth() + 1) === (selectedDate.getMonth() + 1);
+                    });
+
+                    return (
                       <>
-                        <h6 className="birthdays-title" style={{ marginTop: '16px' }}>📋 Задачи:</h6>
-                        {selectedDayTasks.map(task => (
+                        {dayBirthdays.length > 0 && (
+                          <div className="calendar-birthdays-section">
+                            <h6 className="birthdays-title">🎂 Дни рождения:</h6>
+                            {dayBirthdays.map(birthday => (
+                              <div key={birthday.id} className="calendar-birthday-item">
+                                <img src={birthday.avatar} alt={birthday.username} className="birthday-avatar" />
+                                <div className="birthday-info">
+                                  <span className="birthday-name">{birthday.username}</span>
+                                  <span className="birthday-age">
+                                    ({selectedDate.getFullYear() - new Date(birthday.birth_date).getFullYear()} лет)
+                                  </span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {selectedDayTasks.length === 0 ? (
+                          <p className="no-tasks-message">Нет задач на этот день</p>
+                        ) : (
+                          <>
+                            {selectedDayTasks.map(task => (
                           <div
                             key={task.id}
                             className="calendar-task-item"
-                            style={{ borderLeftColor: task.color }}
                             onClick={() => handleEditTask(task)}
                           >
-                            <div className="calendar-task-datetime">
-                              {task.task_time && (
-                                <div className="calendar-task-time">🕐 {task.task_time}</div>
-                              )}
-                            </div>
+                            {(task.task_time || task.task_end_time) && (
+                              <div className="calendar-task-time-block">
+                                <div className="calendar-task-time-start">{task.task_time || '--:--'}</div>
+                                {(task.task_time && task.task_end_time) && (
+                                  <div className="calendar-task-time-separator">-</div>
+                                )}
+                                <div className="calendar-task-time-end">{task.task_end_time || '--:--'}</div>
+                              </div>
+                            )}
                             <div className="calendar-task-content">
                               <div className="calendar-task-title-row">
                                 <div className="calendar-task-title">{task.title}</div>
-                                <button
-                                  className="task-share-btn"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleShareTask(task);
-                                  }}
-                                  title="Поделиться"
-                                >
-                                  📤
-                                </button>
                               </div>
                               {task.description && (
                                 <div className="calendar-task-description">{task.description}</div>
                               )}
                             </div>
                             <div className="calendar-task-actions">
+                              <button
+                                className="task-share-btn"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleShareTask(task);
+                                }}
+                                title="Поделиться"
+                              >
+                                📤
+                              </button>
                               <button
                                 className="task-edit-btn"
                                 onClick={(e) => {
@@ -4898,7 +5789,7 @@ function App() {
                     ? `Бронь на ${selectedDate.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })}`
                     : 'Выберите день для просмотра бронирований'}
                 </h5>
-                {selectedDate && canBookMeetingRoom && (
+                {selectedDate && (canBookMeetingRoom || currentUser?.username === 'Root' || currentUser?.is_admin === 1) && (
                   <button className="add-task-btn" onClick={() => setShowMeetingModal(true)}>
                     + Забронировать
                   </button>
@@ -4938,7 +5829,7 @@ function App() {
                           <span className="booking-organizer">👤 {booking.organizer_name}</span>
                         </div>
                         {/* Кнопки действий показываем только если пользователь имеет право на бронирование И является организатором ИЛИ админ */}
-                        {(canBookMeetingRoom || currentUser?.username === 'Root') && (
+                        {(canBookMeetingRoom || currentUser?.username === 'Root' || currentUser?.is_admin === 1) && (
                           booking.organizer_id === currentUser?.id || isAdmin) && (
                           <div className="booking-actions">
                             <button
@@ -4965,8 +5856,9 @@ function App() {
                 );
               })()}
             </div>
-            )}
-
+                )}
+              </div>
+            </div>
           </div>
         </main>
       )}
@@ -5009,130 +5901,9 @@ function App() {
               {activeSettingsTab === 'appearance' && (
                 <div className="settings-tab-content">
                   <div className="settings-section">
-                    <h3>Режим оформления</h3>
-                    <p className="settings-description">Выберите тёмную или светлую тему</p>
-
-                    <div className="theme-mode-toggle">
-                      <button
-                        className={`theme-mode-btn ${userUiSettings.themeMode === 'dark' ? 'active' : ''}`}
-                        onClick={() => {
-                          setUserUiSettings({...userUiSettings, themeMode: 'dark'});
-                          document.documentElement.setAttribute('data-theme', 'dark');
-                        }}
-                      >
-                        🌙 Тёмная
-                      </button>
-                      <button
-                        className={`theme-mode-btn ${userUiSettings.themeMode === 'light' ? 'active' : ''}`}
-                        onClick={() => {
-                          setUserUiSettings({...userUiSettings, themeMode: 'light'});
-                          document.documentElement.setAttribute('data-theme', 'light');
-                        }}
-                      >
-                        ☀️ Светлая
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="settings-section">
-                    <h3>Цветовая схема</h3>
-                    <p className="settings-description">Выберите основной цвет оформления интерфейса</p>
-
-                    <div className="color-presets">
-                      <button
-                        className={`color-preset ${userUiSettings.themeColor === '#667eea' ? 'active' : ''}`}
-                        style={{ background: '#667eea' }}
-                        onClick={() => setUserUiSettings({...userUiSettings, themeColor: '#667eea', themeGradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'})}
-                        title="Фиолетовый"
-                      />
-                      <button
-                        className={`color-preset ${userUiSettings.themeColor === '#3498db' ? 'active' : ''}`}
-                        style={{ background: '#3498db' }}
-                        onClick={() => setUserUiSettings({...userUiSettings, themeColor: '#3498db', themeGradient: 'linear-gradient(135deg, #3498db 0%, #2980b9 100%)'})}
-                        title="Синий"
-                      />
-                      <button
-                        className={`color-preset ${userUiSettings.themeColor === '#27ae60' ? 'active' : ''}`}
-                        style={{ background: '#27ae60' }}
-                        onClick={() => setUserUiSettings({...userUiSettings, themeColor: '#27ae60', themeGradient: 'linear-gradient(135deg, #27ae60 0%, #229954 100%)'})}
-                        title="Зелёный"
-                      />
-                      <button
-                        className={`color-preset ${userUiSettings.themeColor === '#e74c3c' ? 'active' : ''}`}
-                        style={{ background: '#e74c3c' }}
-                        onClick={() => setUserUiSettings({...userUiSettings, themeColor: '#e74c3c', themeGradient: 'linear-gradient(135deg, #e74c3c 0%, #c0392b 100%)'})}
-                        title="Красный"
-                      />
-                      <button
-                        className={`color-preset ${userUiSettings.themeColor === '#f39c12' ? 'active' : ''}`}
-                        style={{ background: '#f39c12' }}
-                        onClick={() => setUserUiSettings({...userUiSettings, themeColor: '#f39c12', themeGradient: 'linear-gradient(135deg, #f39c12 0%, #d68910 100%)'})}
-                        title="Оранжевый"
-                      />
-                      <button
-                        className={`color-preset ${userUiSettings.themeColor === '#9b59b6' ? 'active' : ''}`}
-                        style={{ background: '#9b59b6' }}
-                        onClick={() => setUserUiSettings({...userUiSettings, themeColor: '#9b59b6', themeGradient: 'linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%)'})}
-                        title="Розовый"
-                      />
-                      <button
-                        className={`color-preset ${userUiSettings.themeColor === '#1abc9c' ? 'active' : ''}`}
-                        style={{ background: '#1abc9c' }}
-                        onClick={() => setUserUiSettings({...userUiSettings, themeColor: '#1abc9c', themeGradient: 'linear-gradient(135deg, #1abc9c 0%, #16a085 100%)'})}
-                        title="Бирюзовый"
-                      />
-                      <button
-                        className={`color-preset ${userUiSettings.themeColor === '#34495e' ? 'active' : ''}`}
-                        style={{ background: '#34495e' }}
-                        onClick={() => setUserUiSettings({...userUiSettings, themeColor: '#34495e', themeGradient: 'linear-gradient(135deg, #34495e 0%, #2c3e50 100%)'})}
-                        title="Тёмный"
-                      />
-                    </div>
-
-                    <div className="custom-color-picker">
-                      <label>Или выберите свой цвет:</label>
-                      <div className="color-picker-row">
-                        <input
-                          type="color"
-                          value={userUiSettings.themeColor}
-                          onChange={(e) => setUserUiSettings({...userUiSettings, themeColor: e.target.value, themeGradient: `linear-gradient(135deg, ${e.target.value} 0%, ${e.target.value}dd 100%)`})}
-                          className="color-input"
-                        />
-                        <span className="color-value">{userUiSettings.themeColor}</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="settings-section">
-                    <h3>Размер шрифта</h3>
-                    <p className="settings-description">Настройте размер текста интерфейса</p>
-                    
-                    <div className="font-size-options">
-                      <button
-                        className={`font-size-btn ${userUiSettings.fontSize === 'small' ? 'active' : ''}`}
-                        onClick={() => setUserUiSettings({...userUiSettings, fontSize: 'small'})}
-                      >
-                        A<small>小</small>
-                      </button>
-                      <button
-                        className={`font-size-btn ${userUiSettings.fontSize === 'medium' ? 'active' : ''}`}
-                        onClick={() => setUserUiSettings({...userUiSettings, fontSize: 'medium'})}
-                      >
-                        A<medium>中</medium>
-                      </button>
-                      <button
-                        className={`font-size-btn ${userUiSettings.fontSize === 'large' ? 'active' : ''}`}
-                        onClick={() => setUserUiSettings({...userUiSettings, fontSize: 'large'})}
-                      >
-                        A<large>大</large>
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="settings-section">
                     <h3>Режим отображения</h3>
                     <p className="settings-description">Компактный режим для экономии места</p>
-                    
+
                     <label className="toggle-switch settings-toggle">
                       <input
                         type="checkbox"
@@ -5144,15 +5915,48 @@ function App() {
                     </label>
                   </div>
 
-                  <div className="settings-section preview-section">
-                    <h3>Предпросмотр</h3>
-                    <p className="settings-description">Так будет выглядеть интерфейс с выбранными настройками</p>
-                    
-                    <div className="settings-preview" style={{ background: userUiSettings.themeGradient }}>
-                      <div className="preview-card">
-                        <h4>Пример заголовка</h4>
-                        <p>Пример текста с выбранным размером шрифта: {userUiSettings.fontSize}</p>
-                        <button className="preview-btn">Кнопка</button>
+                  <div className="settings-section">
+                    <h3>Размер текста в сообщениях</h3>
+                    <p className="settings-description">Настройте размер текста для удобства чтения</p>
+
+                    <div className="font-size-control">
+                      <input
+                        type="range"
+                        min="12"
+                        max="24"
+                        step="1"
+                        value={userUiSettings.messageFontSize}
+                        onChange={(e) => setUserUiSettings({...userUiSettings, messageFontSize: e.target.value})}
+                        className="font-size-slider"
+                      />
+                      <div className="font-size-display">
+                        <span className="font-size-value">{userUiSettings.messageFontSize}px</span>
+                        <span className="font-size-preview" style={{ fontSize: `${userUiSettings.messageFontSize}px` }}>
+                          Пример текста
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="settings-section">
+                    <h3>Размер эмодзи в сообщениях</h3>
+                    <p className="settings-description">Настройте размер эмодзи независимо от текста</p>
+
+                    <div className="emoji-size-control">
+                      <input
+                        type="range"
+                        min="16"
+                        max="48"
+                        step="1"
+                        value={userUiSettings.messageEmojiSize}
+                        onChange={(e) => setUserUiSettings({...userUiSettings, messageEmojiSize: e.target.value})}
+                        className="emoji-size-slider"
+                      />
+                      <div className="emoji-size-display">
+                        <span className="emoji-size-value">{userUiSettings.messageEmojiSize}px</span>
+                        <span className="emoji-size-preview" style={{ fontSize: `${userUiSettings.messageEmojiSize}px` }}>
+                          😀 😊 🎉
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -5162,7 +5966,7 @@ function App() {
                       Отмена
                     </button>
                     <button className="btn-primary" onClick={handleSaveUserUiSettings}>
-                      Сохранить оформление
+                      Сохранить
                     </button>
                   </div>
                 </div>
@@ -5262,6 +6066,69 @@ function App() {
                         <span className="slider"></span>
                       </label>
                     </div>
+
+                    <div className="setting-item">
+                      <div className="setting-info">
+                        <span className="setting-icon">🤖</span>
+                        <div>
+                          <div className="setting-title">Помощник</div>
+                          <div className="setting-description">Уведомления от бота-помощника</div>
+                        </div>
+                      </div>
+                      <label className="toggle-switch">
+                        <input
+                          type="checkbox"
+                          checked={notificationSettings.botAssistant}
+                          onChange={(e) => setNotificationSettings(prev => ({
+                            ...prev,
+                            botAssistant: e.target.checked
+                          }))}
+                        />
+                        <span className="slider"></span>
+                      </label>
+                    </div>
+
+                    <div className="setting-item">
+                      <div className="setting-info">
+                        <span className="setting-icon">📋</span>
+                        <div>
+                          <div className="setting-title">Задачи</div>
+                          <div className="setting-description">Уведомления о задачах из календаря</div>
+                        </div>
+                      </div>
+                      <label className="toggle-switch">
+                        <input
+                          type="checkbox"
+                          checked={notificationSettings.tasks}
+                          onChange={(e) => setNotificationSettings(prev => ({
+                            ...prev,
+                            tasks: e.target.checked
+                          }))}
+                        />
+                        <span className="slider"></span>
+                      </label>
+                    </div>
+
+                    <div className="setting-item">
+                      <div className="setting-info">
+                        <span className="setting-icon">🏢</span>
+                        <div>
+                          <div className="setting-title">Переговорная</div>
+                          <div className="setting-description">Уведомления о бронировании переговорной</div>
+                        </div>
+                      </div>
+                      <label className="toggle-switch">
+                        <input
+                          type="checkbox"
+                          checked={notificationSettings.meetingRoom}
+                          onChange={(e) => setNotificationSettings(prev => ({
+                            ...prev,
+                            meetingRoom: e.target.checked
+                          }))}
+                        />
+                        <span className="slider"></span>
+                      </label>
+                    </div>
                   </div>
 
                   <div className="settings-actions">
@@ -5279,8 +6146,8 @@ function App() {
                 <div className="settings-tab-content">
                   <div className="about-app-container">
                     <div className="about-app-header">
-                      <div className="about-app-logo">💬</div>
-                      <h2>Chat App</h2>
+                      <div className="about-app-logo">🍦</div>
+                      <h2>Чат УРСА</h2>
                       <p className="about-app-subtitle">Корпоративный мессенджер</p>
                     </div>
 
@@ -5293,15 +6160,86 @@ function App() {
                         <span className="about-app-label">Описание</span>
                         <span className="about-app-value">Корпоративный мессенджер для командной работы</span>
                       </div>
-                      {updateStatus && (
-                        <div className="about-app-item">
-                          <span className="about-app-label">Обновление</span>
-                          <span className="about-app-value">
-                            {updateStatus === 'checking' && '🔄 Проверка...'}
-                            {updateStatus === 'available' && '📥 Доступно обновление'}
-                            {updateStatus === 'downloading' && `⬇️ Загрузка: ${Math.round(updateProgress)}%`}
-                            {updateStatus === 'ready' && '✅ Готово к установке'}
-                          </span>
+                    </div>
+
+                    {/* Секция обновлений */}
+                    <div className="update-section">
+                      <h3>Обновление приложения</h3>
+                      
+                      {updateStatus === null && (
+                        <button 
+                          className="btn-check-update"
+                          onClick={() => {
+                            setUpdateStatus('checking');
+                            window.electronAPI?.checkForUpdates?.();
+                          }}
+                        >
+                          🔍 Проверить обновления
+                        </button>
+                      )}
+
+                      {updateStatus === 'checking' && (
+                        <div className="update-status">
+                          <div className="update-spinner"></div>
+                          <span>Проверка обновлений...</span>
+                        </div>
+                      )}
+
+                      {updateStatus === 'available' && (
+                        <div className="update-available">
+                          <p className="update-message">📥 Доступна новая версия приложения!</p>
+                          <button 
+                            className="btn-download-update"
+                            onClick={() => {
+                              setUpdateStatus('downloading');
+                              window.electronAPI?.startUpdate?.();
+                            }}
+                          >
+                            ⬇️ Скачать обновление
+                          </button>
+                        </div>
+                      )}
+
+                      {updateStatus === 'downloading' && (
+                        <div className="update-downloading">
+                          <p>⬇️ Загрузка обновления...</p>
+                          <div className="update-progress-bar">
+                            <div 
+                              className="update-progress-fill" 
+                              style={{ width: `${updateProgress}%` }}
+                            ></div>
+                          </div>
+                          <span className="update-progress-text">{Math.round(updateProgress)}%</span>
+                        </div>
+                      )}
+
+                      {updateStatus === 'ready' && (
+                        <div className="update-ready">
+                          <p className="update-ready-message">✅ Обновление загружено!</p>
+                          <p className="update-ready-desc">Перезапустите приложение для установки обновления</p>
+                          <button 
+                            className="btn-install-update"
+                            onClick={() => {
+                              window.electronAPI?.quitAndInstall?.();
+                            }}
+                          >
+                            🔄 Перезапустить и установить
+                          </button>
+                        </div>
+                      )}
+
+                      {updateStatus === 'no-update' && (
+                        <div className="update-no-update">
+                          <p>✅ У вас установлена последняя версия</p>
+                          <button 
+                            className="btn-check-update-secondary"
+                            onClick={() => {
+                              setUpdateStatus('checking');
+                              window.electronAPI?.checkForUpdates?.();
+                            }}
+                          >
+                            🔍 Проверить снова
+                          </button>
                         </div>
                       )}
                     </div>
@@ -5468,12 +6406,13 @@ function App() {
 
               <form onSubmit={handleSaveProfile} className="profile-form">
                 <div className="form-group">
-                  <label>Имя пользователя</label>
+                  <label>ФИО</label>
                   <input
                     type="text"
                     value={profileData.username}
                     onChange={(e) => setProfileData(prev => ({ ...prev, username: e.target.value }))}
-                    maxLength={20}
+                    maxLength={100}
+                    placeholder="Иванов Иван Иванович"
                   />
                 </div>
 
@@ -5681,11 +6620,20 @@ function App() {
                 </div>
 
                 <div className="form-group">
-                  <label>Время</label>
+                  <label>Время начала</label>
                   <input
                     type="time"
                     value={taskForm.taskTime}
                     onChange={(e) => setTaskForm(prev => ({ ...prev, taskTime: e.target.value }))}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Время окончания</label>
+                  <input
+                    type="time"
+                    value={taskForm.taskEndTime}
+                    onChange={(e) => setTaskForm(prev => ({ ...prev, taskEndTime: e.target.value }))}
                   />
                 </div>
 
@@ -6164,78 +7112,87 @@ function App() {
                   Без статуса
                 </button>
                 
-                <div className="status-emojis-full">
-                  {['😀', '😎', '🥰', '😇', '🤔', '😴', '🎉', '❤️', '🔥', '✨', '💼', '🌟'].map(emoji => (
-                    <button
-                      key={emoji}
-                      className={`status-emoji-full ${statusEmoji === emoji ? 'active' : ''}`}
-                      onClick={async () => {
-                        setStatusEmoji(emoji);
-                        const newStatus = emoji + (statusDescription ? ' ' + statusDescription : '');
-                        setProfileData(prev => ({
-                          ...prev,
-                          statusText: newStatus
-                        }));
-                        setCurrentUser(prev => {
-                          const updated = { ...prev, status_text: newStatus };
-                          return updated;
-                        });
-
-                        // Сохраняем на сервере
-                        try {
-                          await fetch(`${SOCKET_URL}/api/profile`, {
-                            method: 'PUT',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                              userId: currentUserRef.current?.id,
-                              statusText: newStatus
-                            })
-                          });
-                        } catch (err) {
-                          console.error('Ошибка сохранения статуса:', err);
-                        }
-                      }}
-                    >
-                      <span className="emoji-animated">{emoji}</span>
-                    </button>
-                  ))}
-                </div>
-                
                 <div className="status-divider-full">
                   <span>и описание статуса</span>
                 </div>
-                
-                <input
-                  type="text"
-                  className="status-input-full"
-                  placeholder="Введите описание статуса..."
-                  value={statusDescription}
-                  onChange={async (e) => {
-                    const value = e.target.value;
-                    setStatusDescription(value);
-                    const newStatus = (statusEmoji ? statusEmoji + ' ' : '') + value;
-                    setProfileData(prev => ({ ...prev, statusText: newStatus }));
-                    setCurrentUser(prev => {
-                      const updated = { ...prev, status_text: newStatus };
-                      return updated;
-                    });
 
-                    // Сохраняем на сервере
-                    try {
-                      await fetch(`${SOCKET_URL}/api/profile`, {
-                        method: 'PUT',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                          userId: currentUser.id,
-                          statusText: newStatus
-                        })
+                <div className="status-input-wrapper">
+                  <input
+                    type="text"
+                    className="status-input-full"
+                    placeholder="Введите описание статуса..."
+                    value={statusDescription}
+                    onChange={async (e) => {
+                      const value = e.target.value;
+                      setStatusDescription(value);
+                      const newStatus = (statusEmoji ? statusEmoji + ' ' : '') + value;
+                      setProfileData(prev => ({ ...prev, statusText: newStatus }));
+                      setCurrentUser(prev => {
+                        const updated = { ...prev, status_text: newStatus };
+                        return updated;
                       });
-                    } catch (err) {
-                      console.error('Ошибка сохранения статуса:', err);
-                    }
-                  }}
-                  maxLength={100}
-                />
+
+                      // Сохраняем на сервере
+                      try {
+                        await fetch(`${SOCKET_URL}/api/profile`, {
+                          method: 'PUT',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            userId: currentUser.id,
+                            statusText: newStatus
+                          })
+                        });
+                      } catch (err) {
+                        console.error('Ошибка сохранения статуса:', err);
+                      }
+                    }}
+                    maxLength={100}
+                  />
+                  <button
+                    className="status-emoji-btn-inline"
+                    onClick={() => setShowStatusEmojiPicker(!showStatusEmojiPicker)}
+                    title="Выбрать emoji"
+                  >
+                    {statusEmoji ? renderEmoji(statusEmoji, '', 20) : '😀'}
+                  </button>
+
+                  {showStatusEmojiPicker && (
+                    <div className="status-emoji-picker-popup-inline">
+                      <div className="status-emoji-grid">
+                        {SAFE_EMOJIS.filter(Boolean).map(emoji => (
+                          <button
+                            key={emoji}
+                            className="status-emoji-option"
+                            onClick={() => {
+                              setStatusEmoji(emoji);
+                              const newStatus = emoji + (statusDescription ? ' ' + statusDescription : '');
+                              setProfileData(prev => ({
+                                ...prev,
+                                statusText: newStatus
+                              }));
+                              setCurrentUser(prev => {
+                                const updated = { ...prev, status_text: newStatus };
+                                return updated;
+                              });
+                              setShowStatusEmojiPicker(false);
+                              
+                              fetch(`${SOCKET_URL}/api/profile`, {
+                                method: 'PUT',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                  userId: currentUserRef.current?.id,
+                                  statusText: newStatus
+                                })
+                              }).catch(err => console.error('Ошибка сохранения статуса:', err));
+                            }}
+                          >
+                            {renderEmoji(emoji, '', 24)}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 
@@ -6370,16 +7327,32 @@ function App() {
 
       {/* Контекстное меню сообщений */}
       {contextMenu.visible && (
-        <div 
+        <div
           className="message-context-menu"
           style={{ top: contextMenu.y, left: contextMenu.x }}
           onClick={closeContextMenu}
         >
+          {/* Быстрые реакции */}
+          <div className="context-menu-reactions">
+            {QUICK_REACTIONS.map((emoji) => (
+              <button
+                key={emoji}
+                className="context-menu-reaction-btn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleAddReaction(emoji, contextMenu.messageId);
+                }}
+              >
+                {renderEmoji(emoji)}
+              </button>
+            ))}
+          </div>
+          <div className="context-menu-divider"></div>
           <div className="context-menu-items">
             <button className="context-menu-item" onClick={(e) => { e.stopPropagation(); handleCopyMessage(); }}>
               📋 Копировать
             </button>
-            <button className="context-menu-item" onClick={(e) => { e.stopPropagation(); handleForwardMessageFromContext(); }}>
+            <button className="context-menu-item" onClick={(e) => { e.stopPropagation(); handleForwardMessage({ id: contextMenu.messageId, text: contextMenu.messageText }); }}>
               ➤ Переслать
             </button>
           </div>
@@ -6407,7 +7380,7 @@ function App() {
                 <label>Поиск пользователя:</label>
                 <input
                   type="text"
-                  placeholder="Введите имя пользователя..."
+                  placeholder="Введите ФИО..."
                   value={forwardSearchQuery}
                   onChange={(e) => setForwardSearchQuery(e.target.value)}
                   className="forward-search-input"
@@ -6432,7 +7405,7 @@ function App() {
                         <img
                           src={user.avatar || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(user.username)}
                           alt={user.username}
-                          className="user-avatar"
+                          className="user-avatar-small"
                         />
                         <div className="user-info">
                           <span className="username">{user.username}</span>
