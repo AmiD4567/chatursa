@@ -13,6 +13,7 @@ function App() {
   const [connectionStatus, setConnectionStatus] = useState('connecting'); // 'connecting', 'connected', 'disconnected', 'reconnecting'
   const [lastUser, setLastUser] = useState(null); // Данные последнего пользователя для быстрого входа
   const [showLoginForm, setShowLoginForm] = useState(false); // Показывать форму входа
+  const [showAuthForm, setShowAuthForm] = useState(false); // Свернуто/развернуто форма входа/регистрации
   const [appVersion, setAppVersion] = useState('1.0.8');
   const [updateStatus, setUpdateStatus] = useState(null); // null, 'checking', 'available', 'downloading', 'ready'
   const [updateProgress, setUpdateProgress] = useState(0);
@@ -1053,7 +1054,7 @@ function App() {
         }
       });
 
-      // Обновляем participantsDetails в чатах
+      // Обновляем participantsDetails в чатах (activeChat обновится автоматически)
       setChats(prev => prev.map(chat => {
         if (chat.participantsDetails) {
           const updatedParticipants = chat.participantsDetails.map(p =>
@@ -1071,10 +1072,38 @@ function App() {
       }
     });
 
-    newSocket.on('user_status_changed', ({ userId, username, status }) => {
-      setUsers(prev => prev.map(u =>
-        u.username === username ? { ...u, status } : u
-      ));
+    newSocket.on('user_status_changed', ({ userId, username, status, statusText }) => {
+      // Обновляем список пользователей
+      setUsers(prev => prev.map(u => {
+        if (u.id === userId) {
+          const updated = { ...u, status };
+          // Если есть текстовый статус, обновляем его
+          if (statusText !== undefined) {
+            updated.status_text = statusText;
+          }
+          return updated;
+        }
+        return u;
+      }));
+
+      // Обновляем participantsDetails в чатах (activeChat обновится автоматически)
+      setChats(prev => prev.map(chat => {
+        if (chat.participantsDetails) {
+          const updatedParticipants = chat.participantsDetails.map(p => {
+            if (p.id === userId) {
+              const updated = { ...p, status };
+              // Если есть текстовый статус, обновляем его
+              if (statusText !== undefined) {
+                updated.status_text = statusText;
+              }
+              return updated;
+            }
+            return p;
+          });
+          return { ...chat, participantsDetails: updatedParticipants };
+        }
+        return chat;
+      }));
     });
 
     newSocket.on('user_typing', () => {
@@ -2561,6 +2590,45 @@ function App() {
     }
   };
 
+  // Загрузка аватара общего чата (только для админов)
+  const handleUploadGeneralChatAvatar = async (e) => {
+    const file = e.target.files[0];
+    if (!file || !currentUser) return;
+
+    const formData = new FormData();
+    formData.append('avatar', file);
+    formData.append('userId', currentUser.id);
+
+    try {
+      const response = await fetch(`${SOCKET_URL}/api/upload-general-chat-avatar`, {
+        method: 'POST',
+        body: formData
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        // Обновляем аватар в списке чатов
+        setChats(prev => prev.map(chat => {
+          if (chat.id === 'general') {
+            return { ...chat, avatar: data.avatar };
+          }
+          return chat;
+        }));
+        // Обновляем активный чат если это общий чат
+        if (activeChat?.id === 'general') {
+          setActiveChat(prev => ({ ...prev, avatar: data.avatar }));
+        }
+        alert('Аватар общего чата успешно обновлён!');
+      } else {
+        const errorData = await response.json();
+        alert(`Ошибка: ${errorData.error || 'Не удалось загрузить аватар'}`);
+      }
+    } catch (err) {
+      console.error('Ошибка загрузки аватара общего чата:', err);
+      alert('Ошибка соединения с сервером');
+    }
+  };
+
   // Открытие аватара в полном размере
   const handleOpenAvatar = (avatarSrc, userName) => {
     if (avatarSrc && avatarSrc.startsWith('http')) {
@@ -3737,16 +3805,6 @@ function App() {
                 >
                   Войти
                 </button>
-                <button 
-                  className="last-user-switch-btn"
-                  onClick={() => {
-                    // Показываем форму входа
-                    setShowLoginForm(true);
-                    setAuthMode('login');
-                  }}
-                >
-                  Другой пользователь
-                </button>
               </div>
             </div>
           )}
@@ -3760,20 +3818,42 @@ function App() {
                 </div>
               )}
 
-              <div className="auth-tabs">
-                <button
-                  className={authMode === 'login' ? 'active' : ''}
-                  onClick={() => { setAuthMode('login'); setAuthError(''); }}
+              {/* Кнопка для разворачивания/сворачивания формы */}
+              <button
+                className="auth-form-toggle-btn"
+                onClick={() => setShowAuthForm(!showAuthForm)}
+              >
+                {showAuthForm ? 'Скрыть форму входа' : 'Вход / Регистрация'}
+                <svg
+                  className={`auth-form-toggle-icon ${showAuthForm ? 'rotated' : ''}`}
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
                 >
-                  Вход
-                </button>
-                <button
-                  className={authMode === 'register' ? 'active' : ''}
-                  onClick={() => { setAuthMode('register'); setAuthError(''); }}
-                >
-                  Регистрация
-                </button>
-              </div>
+                  <polyline points="6 9 12 15 18 9"></polyline>
+                </svg>
+              </button>
+
+              {/* Сворачиваемая форма входа/регистрации */}
+              {showAuthForm && (
+                <>
+                  <div className="auth-tabs">
+                    <button
+                      className={authMode === 'login' ? 'active' : ''}
+                      onClick={() => { setAuthMode('login'); setAuthError(''); }}
+                    >
+                      Вход
+                    </button>
+                    <button
+                      className={authMode === 'register' ? 'active' : ''}
+                      onClick={() => { setAuthMode('register'); setAuthError(''); }}
+                    >
+                      Регистрация
+                    </button>
+                  </div>
 
               {authMode === 'login' ? (
             <form onSubmit={handleLogin} className="auth-form" ref={loginFormRef}>
@@ -3947,6 +4027,8 @@ function App() {
               </button>
             </form>
           )}
+                </>
+              )}
             </>
           )}
         </div>
@@ -4894,6 +4976,25 @@ function App() {
                         <div className="chat-icon">{getChatIcon(chat)}</div>
                       );
                     })()
+                  ) : chat.type === 'general' && chat.avatar ? (
+                    <img
+                      src={chat.avatar}
+                      alt="Общий чат"
+                      className="chat-avatar"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (currentUser?.is_admin === 1) {
+                          handleViewUserProfile({
+                            id: 'general',
+                            username: 'Общий чат',
+                            avatar: chat.avatar,
+                            isGeneralChat: true
+                          });
+                        }
+                      }}
+                      style={{ cursor: currentUser?.is_admin === 1 ? 'pointer' : 'default' }}
+                      title={currentUser?.is_admin === 1 ? 'Настройки общего чата' : ''}
+                    />
                   ) : (
                     <div className="chat-icon">{getChatIcon(chat)}</div>
                   )}
@@ -5023,6 +5124,31 @@ function App() {
                       <span className="chat-icon-large">{getChatIcon(activeChat)}</span>
                     );
                   })()
+                ) : activeChat.type === 'general' ? (
+                  <div
+                    onClick={() => {
+                      if (currentUser?.is_admin === 1) {
+                        handleViewUserProfile({
+                          id: 'general',
+                          username: 'Общий чат',
+                          avatar: activeChat.avatar,
+                          isGeneralChat: true
+                        });
+                      }
+                    }}
+                    style={{ cursor: currentUser?.is_admin === 1 ? 'pointer' : 'default' }}
+                    title={currentUser?.is_admin === 1 ? 'Настройки общего чата' : ''}
+                  >
+                    {activeChat.avatar ? (
+                      <img
+                        src={activeChat.avatar}
+                        alt="Общий чат"
+                        className="chat-header-avatar"
+                      />
+                    ) : (
+                      <span className="chat-icon-large">{getChatIcon(activeChat)}</span>
+                    )}
+                  </div>
                 ) : (
                   <span className="chat-icon-large">{getChatIcon(activeChat)}</span>
                 )}
@@ -6516,12 +6642,44 @@ function App() {
                       📷
                     </label>
                   )}
+                  {/* Кнопка смены аватара для общего чата (только для админов) */}
+                  {viewUserProfileData.isGeneralChat && currentUser?.is_admin === 1 && (
+                    <label
+                      htmlFor="general-chat-avatar-upload"
+                      className="change-avatar-btn"
+                      title="Сменить аватар общего чата"
+                      style={{
+                        position: 'absolute',
+                        bottom: '0',
+                        right: '0',
+                        background: 'rgba(102, 126, 234, 0.9)',
+                        borderRadius: '50%',
+                        width: '32px',
+                        height: '32px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        cursor: 'pointer',
+                        fontSize: '18px',
+                        border: '2px solid white'
+                      }}
+                    >
+                      📷
+                    </label>
+                  )}
                   <input
                     id="helper-avatar-upload"
                     type="file"
                     accept="image/*"
                     style={{ display: 'none' }}
                     onChange={(e) => handleUploadHelperAvatar(e, viewUserProfileData)}
+                  />
+                  <input
+                    id="general-chat-avatar-upload"
+                    type="file"
+                    accept="image/*"
+                    style={{ display: 'none' }}
+                    onChange={handleUploadGeneralChatAvatar}
                   />
                 </div>
                 <div className="view-profile-names">

@@ -1224,6 +1224,14 @@ app.put('/api/profile', (req, res) => {
       status_text: decodedStatusText
     });
 
+    // Уведомляем всех об изменении текстового статуса (для отображения в реальном времени)
+    io.emit('user_status_changed', {
+      userId: updatedUser.id,
+      username: updatedUser.username,
+      status: 'online', // Статус подключения не изменился
+      statusText: decodedStatusText // Добавляем текстовый статус
+    });
+
     res.json({
       success: true,
       user: {
@@ -1328,6 +1336,54 @@ app.post('/api/upload-helper-avatar', upload.single('avatar'), (req, res) => {
     });
   } catch (err) {
     console.error('Ошибка загрузки аватара помощника:', err);
+    res.status(500).json({ error: 'Ошибка при загрузке аватара' });
+  }
+});
+
+// API для загрузки аватара общего чата (только для админов)
+app.post('/api/upload-general-chat-avatar', upload.single('avatar'), (req, res) => {
+  const { userId } = req.body;
+
+  if (!userId) {
+    return res.status(400).json({ error: 'userId обязателен' });
+  }
+
+  // Проверяем, является ли пользователь администратором
+  const userStmt = db.prepare('SELECT is_admin FROM users WHERE id = ?');
+  userStmt.bind([userId]);
+  let isAdmin = false;
+  if (userStmt.step()) {
+    const row = userStmt.getAsObject();
+    isAdmin = row['is_admin'] === 1;
+  }
+  userStmt.free();
+
+  if (!isAdmin) {
+    return res.status(403).json({ error: 'Только администраторы могут менять аватар общего чата' });
+  }
+
+  if (!req.file) {
+    return res.status(400).json({ error: 'Файл аватара обязателен' });
+  }
+
+  const avatarUrl = `${SERVER_URL}/uploads/${req.file.filename}`;
+
+  try {
+    db.run('ALTER TABLE chats ADD COLUMN avatar TEXT');
+  } catch (e) {
+    // Колонка уже существует
+  }
+
+  try {
+    db.run('UPDATE chats SET avatar = ? WHERE id = ?', [avatarUrl, 'general']);
+    saveDatabase();
+
+    res.json({
+      success: true,
+      avatar: avatarUrl
+    });
+  } catch (err) {
+    console.error('Ошибка загрузки аватара общего чата:', err);
     res.status(500).json({ error: 'Ошибка при загрузке аватара' });
   }
 });
