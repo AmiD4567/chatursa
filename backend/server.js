@@ -1163,7 +1163,6 @@ app.put('/api/profile', (req, res) => {
     return res.status(404).json({ error: 'Пользователь не найден' });
   }
   const existingUser = userStmt.getAsObject();
-  console.log('Существующий статус в БД:', existingUser.status_text);
   userStmt.free();
 
   try {
@@ -1208,8 +1207,14 @@ app.put('/api/profile', (req, res) => {
     `, [safeUsername, safeFullName, safeBirthDate, safeAbout, mobilePhoneValue, workPhoneValue, safeStatusText, userId]);
     saveDatabase();
 
-    const updatedUser = db.prepare('SELECT id, username, email, avatar, full_name, birth_date, about, mobile_phone, work_phone, status_text FROM users WHERE id = ?')
-      .get(userId);
+    const userStmt = db.prepare('SELECT id, username, email, avatar, full_name, birth_date, about, mobile_phone, work_phone, status_text FROM users WHERE id = ?');
+    userStmt.bind([userId]);
+    const updatedUser = userStmt.step() ? userStmt.getAsObject() : null;
+    userStmt.free();
+
+    if (!updatedUser) {
+      return res.status(500).json({ error: 'Ошибка при обновлении профиля' });
+    }
 
     // Статус уже в UTF-8, декодирование не нужно
     const decodedStatusText = updatedUser.status_text || '';
@@ -1228,8 +1233,8 @@ app.put('/api/profile', (req, res) => {
     io.emit('user_status_changed', {
       userId: updatedUser.id,
       username: updatedUser.username,
-      status: 'online', // Статус подключения не изменился
-      statusText: decodedStatusText // Добавляем текстовый статус
+      status: 'online',
+      statusText: decodedStatusText
     });
 
     res.json({

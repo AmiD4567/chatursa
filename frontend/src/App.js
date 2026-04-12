@@ -1077,7 +1077,6 @@ function App() {
       setUsers(prev => prev.map(u => {
         if (u.id === userId) {
           const updated = { ...u, status };
-          // Если есть текстовый статус, обновляем его
           if (statusText !== undefined) {
             updated.status_text = statusText;
           }
@@ -1086,13 +1085,12 @@ function App() {
         return u;
       }));
 
-      // Обновляем participantsDetails в чатах (activeChat обновится автоматически)
+      // Обновляем participantsDetails в чатах
       setChats(prev => prev.map(chat => {
         if (chat.participantsDetails) {
           const updatedParticipants = chat.participantsDetails.map(p => {
             if (p.id === userId) {
               const updated = { ...p, status };
-              // Если есть текстовый статус, обновляем его
               if (statusText !== undefined) {
                 updated.status_text = statusText;
               }
@@ -1104,6 +1102,17 @@ function App() {
         }
         return chat;
       }));
+
+      // Обновляем currentUser если это тот же пользователь
+      if (currentUserRef.current && currentUserRef.current.id === userId) {
+        setCurrentUser(prev => {
+          const updated = { ...prev, status };
+          if (statusText !== undefined) {
+            updated.status_text = statusText;
+          }
+          return updated;
+        });
+      }
     });
 
     newSocket.on('user_typing', () => {
