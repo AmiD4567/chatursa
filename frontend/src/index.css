@@ -4955,6 +4955,12 @@ body::before {
   font-size: 12px;
 }
 
+.phonebook-list-view .phonebook-card-position {
+  font-size: 11px;
+  color: #667eea;
+  font-weight: 500;
+}
+
 .phonebook-list-view .phonebook-card-phone {
   display: inline-flex;
   align-items: center;
@@ -5027,6 +5033,12 @@ body::before {
 .phonebook-card-fullname {
   color: #666;
   font-size: 12px;
+}
+
+.phonebook-card-position {
+  color: #667eea;
+  font-size: 11px;
+  font-weight: 500;
 }
 
 .phonebook-card-phone {

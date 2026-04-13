@@ -5754,6 +5754,7 @@ function App() {
                       <div className="phonebook-card-info">
                         <span className="phonebook-card-username">{user.username}</span>
                         {user.fullName && <span className="phonebook-card-fullname">{user.fullName}</span>}
+                        {user.position && <span className="phonebook-card-position">{user.position}</span>}
                       </div>
                     </div>
                     <div className="phonebook-card-phone">
