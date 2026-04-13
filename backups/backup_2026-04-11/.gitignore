@@ -1,0 +1,50 @@
+# Зависимости
+node_modules/
+package-lock.json
+
+# База данных
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Загруженные файлы
+uploads/*
+!uploads/.gitkeep
+
+# Логи
+*.log
+server-runtime.log
+server.log
+
+# Сборка
+dist/
+frontend/build/
+electron/build/
+
+# Конфиги с секретами
+config.json
+license.dat
+.env
+
+# Временные файлы
+*.tmp
+*.bak
+Thumbs.db
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Файлы бэкапов
+*.zip
+*.rar
+*.7z
+
+# Скрипты бэкапов (опционально)
+# backup.bat
+# backup.ps1

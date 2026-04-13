@@ -1,0 +1,106 @@
+{
+  "name": "chat-app",
+  "version": "1.0.20",
+  "description": "Корпоративный мессенджер",
+  "main": "electron/main.js",
+  "author": "Pantyuhov DI",
+  "scripts": {
+    "start": "concurrently \"npm run server\" \"npm run client\"",
+    "server": "cd backend && node server.js",
+    "client": "cd frontend && npm start",
+    "build": "cd frontend && npm run build",
+    "electron:dev": "concurrently \"npm run build\" \"wait-on http://localhost:3000 && electron .\"",
+    "electron:build": "npm run build && electron-builder --win nsis",
+    "electron:build:all": "npm run build && electron-builder --win",
+    "postinstall": "electron-builder install-app-deps",
+    "release": "electron-builder --win nsis --publish always"
+  },
+  "build": {
+    "appId": "com.pantyuhov.chat",
+    "productName": "Chat App",
+    "asar": false,
+    "directories": {
+      "output": "dist",
+      "buildResources": "electron"
+    },
+    "extraFiles": [
+      {
+        "from": "app-update.yml",
+        "to": "resources/app-update.yml"
+      }
+    ],
+    "files": [
+      "electron/**/*",
+      "backend/**/*",
+      "frontend/build/**/*",
+      "uploads/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "backend",
+        "to": "app/backend",
+        "filter": [
+          "**/*",
+          "!node_modules/sqlite3/**/*"
+        ]
+      },
+      {
+        "from": "frontend/build",
+        "to": "app/frontend/build"
+      },
+      {
+        "from": "uploads",
+        "to": "app/uploads",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Chat App",
+      "runAfterFinish": true,
+      "installerIcon": "electron/icon.ico",
+      "uninstallerIcon": "electron/icon.ico",
+      "installerHeaderIcon": "electron/icon.ico",
+      "license": "LICENSE",
+      "artifactName": "${productName}-Setup-${version}.${ext}"
+    },
+    "msi": {
+      "artifactName": "${productName}-${version}.${ext}",
+      "upgradeCode": "{8F3B5A7C-9D2E-4F1A-B6C3-5E8D7A9F2B4C}",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Chat App",
+      "runAfterFinish": true,
+      "oneClick": false,
+      "perMachine": false
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "AmiD4567",
+      "repo": "chat-app",
+      "private": false,
+      "releaseType": "release"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "electron/icon.ico"
+    }
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.1",
+    "wait-on": "^7.2.0"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.3"
+  }
+}

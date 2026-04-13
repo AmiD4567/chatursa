@@ -1,0 +1,5 @@
+provider: github
+owner: AmiD4567
+repo: chat-app
+private: false
+releaseType: release
