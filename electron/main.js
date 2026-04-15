@@ -512,42 +512,53 @@ async function updateUnreadBadge() {
 
   logToFile(`updateUnreadBadge: текущий счетчик непрочитанных = ${currentUnreadCount}`);
 
-  // Ждем завершения предыдущего обновления бейджа если оно есть
-  if (badgeUpdatePromise) {
-    logToFile('updateUnreadBadge: ожидаем завершения предыдущего обновления');
-    await badgeUpdatePromise;
-  }
-
   if (currentUnreadCount > 0) {
-    logToFile(`updateUnreadBadge: создаем бейдж с count=${currentUnreadCount}`);
-    // Создаем иконку с бейджем асинхронно
-    badgeUpdatePromise = createBadgeIcon(currentUnreadCount).then(icon => {
-      badgeUpdatePromise = null;
-
-      if (icon) {
-        logToFile('updateUnreadBadge: бейдж успешно создан');
-        // Устанавливаем overlay иконку на окно (для панели задач)
-        mainWindow.setOverlayIcon(icon, `${currentUnreadCount} непрочитанных сообщений`);
-        logToFile('updateUnreadBadge: overlay иконка установлена на окно');
-
-        // Обновляем иконку трея если есть
-        if (tray) {
-          tray.setImage(icon);
-          logToFile('updateUnreadBadge: иконка трея обновлена');
-        } else {
-          logToFile('updateUnreadBadge: tray не существует');
-        }
-      } else {
-        logError('updateUnreadBadge: не удалось создать бейдж');
+    logToFile(`updateUnreadBadge: устанавливаем бейдж с count=${currentUnreadCount}`);
+    
+    // ПРОСТОЙ ВАРИАНТ 1: Используем Windows native badge
+    // Windows 10/11 поддерживает нативные бейджи через appUserModelId
+    try {
+      app.setAppUserModelId('ChatApp.WithBadge');
+      mainWindow.setBadgeCount(currentUnreadCount);
+      logToFile('updateUnreadBadge: setBadgeCount вызван успешно');
+    } catch (err) {
+      logError(`updateUnreadBadge: ошибка setBadgeCount: ${err.message}`);
+    }
+    
+    // ВАРИАНТ 2: Overlay иконка (fallback)
+    // Попробуем установить простую overlay иконку без перерисовки
+    try {
+      const iconPath = path.join(__dirname, 'icon.ico');
+      if (fs.existsSync(iconPath)) {
+        const simpleIcon = nativeImage.createFromPath(iconPath);
+        mainWindow.setOverlayIcon(simpleIcon, `${currentUnreadCount} непрочитанных`);
+        logToFile('updateUnreadBadge: overlay icon установлен');
       }
-    }).catch(err => {
-      badgeUpdatePromise = null;
-      logError(`Ошибка обновления бейджа: ${err.message}`);
-    });
+    } catch (err) {
+      logError(`updateUnreadBadge: ошибка setOverlayIcon: ${err.message}`);
+    }
+
+    // Обновляем иконку трея если есть
+    if (tray) {
+      try {
+        const iconPath = path.join(__dirname, 'icon.ico');
+        if (fs.existsSync(iconPath)) {
+          tray.setImage(iconPath);
+          logToFile('updateUnreadBadge: tray icon обновлен');
+        }
+      } catch (err) {
+        logError(`updateUnreadBadge: ошибка обновления tray: ${err.message}`);
+      }
+    }
   } else {
     logToFile('updateUnreadBadge: убираем бейдж (count=0)');
     // Убираем бейдж
-    mainWindow.setOverlayIcon(null, '');
+    try {
+      mainWindow.setBadgeCount(0);
+      mainWindow.setOverlayIcon(null, '');
+    } catch (err) {
+      logError(`updateUnreadBadge: ошибка при очистке бейджа: ${err.message}`);
+    }
 
     // Возвращаем стандартную иконку трея
     if (tray) {

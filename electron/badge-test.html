@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Badge Test</title>
+  <style>
+    body { margin: 0; width: 48px; height: 48px; overflow: hidden; }
+    canvas { width: 100%; height: 100%; }
+  </style>
+</head>
+<body>
+  <canvas id="canvas" width="48" height="48"></canvas>
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const size = 48;
+    const count = 5;
+    
+    console.log('[Test] Drawing test badge...');
+    
+    // Белый фон
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, size, size);
+    
+    // Красная точка
+    const dotRadius = size * 0.25;
+    const dotX = size - dotRadius - 3;
+    const dotY = dotRadius + 3;
+    
+    ctx.beginPath();
+    ctx.arc(dotX, dotY, dotRadius, 0, Math.PI * 2);
+    ctx.fillStyle = '#ef4444';
+    ctx.fill();
+    
+    // Число
+    ctx.font = 'bold 12px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(count.toString(), dotX, dotY);
+    
+    const dataURL = canvas.toDataURL('image/png');
+    console.log('[Test] Result:', dataURL.substring(0, 50) + '...');
+    
+    // Покажем результат
+    document.body.innerHTML = `<img src="${dataURL}" style="width:100%;height:100%">`;
+  </script>
+</body>
+</html>
