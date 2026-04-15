@@ -1341,14 +1341,19 @@ function App() {
 
   // Отправляем общее количество непрочитанных сообщений в Electron для отображения бейджа
   useEffect(() => {
+    // Суммируем все непрочитанные сообщения из всех чатов
+    const totalUnread = chats.reduce((sum, chat) => {
+      return sum + (chat.unreadCount || 0);
+    }, 0);
+
+    console.log('[Badge] Общее количество непрочитанных:', totalUnread);
+    console.log('[Badge] electronAPI существует:', !!window.electronAPI);
+    
     if (window.electronAPI && window.electronAPI.setUnreadCount) {
-      // Суммируем все непрочитанные сообщения из всех чатов
-      const totalUnread = chats.reduce((sum, chat) => {
-        return sum + (chat.unreadCount || 0);
-      }, 0);
-      
-      console.log('Обновление счетчика непрочитанных:', totalUnread);
+      console.log('[Badge] Отправляем setUnreadCount:', totalUnread);
       window.electronAPI.setUnreadCount(totalUnread);
+    } else {
+      console.log('[Badge] electronAPI.setUnreadCount недоступен');
     }
   }, [chats]);
 

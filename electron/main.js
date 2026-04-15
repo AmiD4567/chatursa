@@ -498,38 +498,54 @@ let currentUnreadCount = 0;
 let badgeUpdatePromise = null;
 
 ipcMain.on('set-unread-count', (event, count) => {
+  logToFile(`Получен set-unread-count: count=${count}`);
   currentUnreadCount = count;
   updateUnreadBadge();
 });
 
 // Функция создания/обновления бейджа непрочитанных сообщений
 async function updateUnreadBadge() {
-  if (!mainWindow) return;
+  if (!mainWindow) {
+    logError('updateUnreadBadge: mainWindow не существует');
+    return;
+  }
+
+  logToFile(`updateUnreadBadge: текущий счетчик непрочитанных = ${currentUnreadCount}`);
 
   // Ждем завершения предыдущего обновления бейджа если оно есть
   if (badgeUpdatePromise) {
+    logToFile('updateUnreadBadge: ожидаем завершения предыдущего обновления');
     await badgeUpdatePromise;
   }
 
   if (currentUnreadCount > 0) {
+    logToFile(`updateUnreadBadge: создаем бейдж с count=${currentUnreadCount}`);
     // Создаем иконку с бейджем асинхронно
     badgeUpdatePromise = createBadgeIcon(currentUnreadCount).then(icon => {
       badgeUpdatePromise = null;
-      
+
       if (icon) {
+        logToFile('updateUnreadBadge: бейдж успешно создан');
         // Устанавливаем overlay иконку на окно (для панели задач)
         mainWindow.setOverlayIcon(icon, `${currentUnreadCount} непрочитанных сообщений`);
+        logToFile('updateUnreadBadge: overlay иконка установлена на окно');
 
         // Обновляем иконку трея если есть
         if (tray) {
           tray.setImage(icon);
+          logToFile('updateUnreadBadge: иконка трея обновлена');
+        } else {
+          logToFile('updateUnreadBadge: tray не существует');
         }
+      } else {
+        logError('updateUnreadBadge: не удалось создать бейдж');
       }
     }).catch(err => {
       badgeUpdatePromise = null;
       logError(`Ошибка обновления бейджа: ${err.message}`);
     });
   } else {
+    logToFile('updateUnreadBadge: убираем бейдж (count=0)');
     // Убираем бейдж
     mainWindow.setOverlayIcon(null, '');
 
@@ -552,7 +568,7 @@ function createBadgeIcon(count) {
 
     const baseIcon = nativeImage.createFromPath(iconPath);
     const baseSize = baseIcon.getSize();
-    const size = Math.max(baseSize.width, baseSize.height, 32);
+    const size = Math.max(baseSize.width, baseSize.height, 48);
     
     // Создаем offscreen окно для рисования
     const offscreen = new BrowserWindow({
@@ -565,12 +581,12 @@ function createBadgeIcon(count) {
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true,
-        preload: path.join(__dirname, 'preload.js')
+        preload: path.join(__dirname, 'badge-preload.js')
       }
     });
-    
+
     const dataUrl = baseIcon.toDataURL();
-    
+
     const html = `
       <!DOCTYPE html>
       <html>
@@ -591,7 +607,7 @@ function createBadgeIcon(count) {
           const canvas = document.getElementById('canvas');
           const ctx = canvas.getContext('2d');
           const canvasSize = ${size};
-          const count = ${count};
+          const badgeCount = ${count};
           
           // Загружаем базовое изображение
           const img = new Image();
@@ -635,17 +651,17 @@ function createBadgeIcon(count) {
             ctx.stroke();
             
             // Рисуем число если оно <= 99
-            if (count > 0 && count <= 99) {
-              const fontSize = Math.max(dotRadius * 1.1, 8);
+            if (badgeCount > 0 && badgeCount <= 99) {
+              const fontSize = Math.max(dotRadius * 1.1, 10);
               ctx.font = \`bold \${fontSize}px Arial, sans-serif\`;
               ctx.textAlign = 'center';
               ctx.textBaseline = 'middle';
               ctx.fillStyle = '#ffffff';
               ctx.shadowColor = 'rgba(0, 0, 0, 0.3)';
               ctx.shadowBlur = 2;
-              ctx.fillText(count.toString(), dotX, dotY + 1);
-            } else if (count > 99) {
-              const fontSize = Math.max(dotRadius * 1.0, 7);
+              ctx.fillText(badgeCount.toString(), dotX, dotY + 1);
+            } else if (badgeCount > 99) {
+              const fontSize = Math.max(dotRadius * 1.0, 9);
               ctx.font = \`bold \${fontSize}px Arial, sans-serif\`;
               ctx.textAlign = 'center';
               ctx.textBaseline = 'middle';
@@ -655,21 +671,23 @@ function createBadgeIcon(count) {
               ctx.fillText('99+', dotX, dotY + 1);
             }
             
-            // Отправляем результат в основной процесс
+            // Отправляем результат через preload API
             const dataURL = canvas.toDataURL('image/png');
-            const { ipcRenderer } = require('electron');
-            ipcRenderer.send('badge-result', dataURL);
+            if (window.badgeAPI) {
+              window.badgeAPI.sendResult(dataURL);
+            }
           };
           img.onerror = () => {
-            const { ipcRenderer } = require('electron');
-            ipcRenderer.send('badge-result', null);
+            if (window.badgeAPI) {
+              window.badgeAPI.sendResult(null);
+            }
           };
           img.src = '${dataUrl}';
         <\/script>
       </body>
       </html>
     `;
-    
+
     // Возвращаем Promise который разрешится когда получим результат
     return new Promise((resolve) => {
       const timeout = setTimeout(() => {
@@ -678,7 +696,7 @@ function createBadgeIcon(count) {
         }
         resolve(null);
       }, 3000);
-      
+
       // Слушаем результат от offscreen окна
       const handler = (event, resultDataURL) => {
         clearTimeout(timeout);
@@ -687,7 +705,7 @@ function createBadgeIcon(count) {
         if (!offscreen.isDestroyed()) {
           offscreen.close();
         }
-        
+
         try {
           if (resultDataURL) {
             const icon = nativeImage.createFromDataURL(resultDataURL);
@@ -700,9 +718,9 @@ function createBadgeIcon(count) {
           resolve(null);
         }
       };
-      
+
       ipcMain.on('badge-result', handler);
-      
+
       // Загружаем HTML
       offscreen.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html)).catch(err => {
         logError(`Ошибка загрузки offscreen окна: ${err.message}`);
