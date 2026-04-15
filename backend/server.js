@@ -356,7 +356,19 @@ async function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_sessions_user ON user_sessions(user_id);
     CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON security_logs(timestamp);
   `);
-  
+
+  // Миграция: добавление колонок edited и edited_at в messages
+  try {
+    db.run('ALTER TABLE messages ADD COLUMN edited INTEGER DEFAULT 0');
+  } catch (e) {
+    // Колонка уже существует
+  }
+  try {
+    db.run('ALTER TABLE messages ADD COLUMN edited_at TEXT');
+  } catch (e) {
+    // Колонка уже существует
+  }
+
   // Проверка и создание общего чата
   const generalChat = db.exec("SELECT * FROM chats WHERE id = 'general'");
   if (generalChat.length === 0 || generalChat[0].values.length === 0) {
@@ -2477,7 +2489,7 @@ function getUserChats(userId) {
   return chats.map(chat => {
     // Получаем участников с полными данными
     const participantsStmt = db.prepare(`
-      SELECT u.id, u.username, u.avatar, u.status, u.status_text, u.full_name, u.birth_date
+      SELECT u.id, u.username, u.avatar, u.status, u.status_text, u.full_name, u.birth_date, u.position
       FROM users u
       JOIN chat_participants cp ON u.id = cp.user_id
       WHERE cp.chat_id = ?
@@ -2599,6 +2611,8 @@ function getChatMessages(chatId, limit = 100) {
       readBy: [],
       buttons: buttons,
       isBotMessage: isBotMessage,
+      edited: row.edited === 1 || row.edited === true,
+      editedAt: row.edited_at || null,
       reactions: Object.keys(reactions).length > 0 ? reactions : undefined
     });
   }
@@ -2606,7 +2620,7 @@ function getChatMessages(chatId, limit = 100) {
 }
 
 function getAllUsers() {
-  const stmt = db.prepare('SELECT id, username, avatar, status, full_name, birth_date, work_phone, mobile_phone, status_text FROM users');
+  const stmt = db.prepare('SELECT id, username, avatar, status, full_name, birth_date, work_phone, mobile_phone, status_text, about FROM users');
   const users = [];
   while (stmt.step()) {
     users.push(stmt.getAsObject());
@@ -4035,10 +4049,10 @@ io.on('connection', (socket) => {
       };
 
       // Уведомляем получателя о новом сообщении
-      const targetSocket = Array.from(onlineUsers.values()).find(u => u.id === targetUserId);
-      if (targetSocket) {
+      const targetUser = Array.from(onlineUsers.values()).find(u => u.id === targetUserId);
+      if (targetUser) {
         // Отправляем сообщение получателю напрямую
-        targetSocket.emit('new_message', {
+        io.to(targetUser.socketId).emit('new_message', {
           message: formattedMessage,
           chat: { id: chat.id, type: chat.type, unreadCount: 1 }
         });
@@ -4052,7 +4066,7 @@ io.on('connection', (socket) => {
           lastMessage: chatWithUnread?.lastMessage
         });
         if (chatWithUnread) {
-          targetSocket.emit('chat_updated', {
+          io.to(targetUser.socketId).emit('chat_updated', {
             chatId: chat.id,
             chat: chatWithUnread
           });
@@ -4076,6 +4090,46 @@ io.on('connection', (socket) => {
       }
 
       console.log(`Сообщение переслано от ${onlineUser.username} пользователю ${targetUserId}`);
+  });
+
+  // Редактирование сообщения
+  socket.on('edit_message', (data) => {
+    const { messageId, newText } = data;
+    const onlineUser = onlineUsers.get(socket.id);
+
+    if (!onlineUser || !messageId || !newText) {
+      return;
+    }
+
+    // Проверяем, что сообщение принадлежит текущему пользователю
+    const msgStmt = db.prepare('SELECT sender_id, chat_id, text FROM messages WHERE id = ?');
+    msgStmt.bind([messageId]);
+    let message = null;
+    if (msgStmt.step()) {
+      message = msgStmt.getAsObject();
+    }
+    msgStmt.free();
+
+    if (!message || message.sender_id !== onlineUser.id) {
+      console.log(`Пользователь ${onlineUser.username} попытался редактировать чужое сообщение ${messageId}`);
+      return;
+    }
+
+    // Обновляем текст сообщения
+    const editedAt = new Date().toISOString();
+    db.run('UPDATE messages SET text = ?, edited = 1, edited_at = ? WHERE id = ?', [newText, editedAt, messageId]);
+    saveDatabase();
+
+    console.log(`Сообщение ${messageId} отредактировано пользователем ${onlineUser.username}`);
+
+    // Уведомляем всех участников чата об изменении сообщения
+    const chatId = message.chat_id;
+    io.to(chatId).emit('message_edited', {
+      messageId,
+      newText,
+      editedBy: onlineUser.id,
+      editedAt
+    });
   });
 
   // Получение списка пользователей

@@ -23,6 +23,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   startUpdate: () => ipcRenderer.send('start-update'),
   quitAndInstall: () => ipcRenderer.send('quit-and-install'),
 
+  // Открытие чата из уведомления
+  onOpenChatFromNotification: (callback) => {
+    ipcRenderer.on('open-chat-from-notification', (event, chatId) => callback(chatId));
+  },
+
+  // Обновление индикатора непрочитанных сообщений
+  setUnreadCount: (count) => ipcRenderer.send('set-unread-count', count),
+
   // Платформа
   platform: process.platform
 });

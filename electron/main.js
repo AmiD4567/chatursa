@@ -172,8 +172,8 @@ const getResourcesPath = () => {
   if (isDev) {
     return path.join(__dirname, '..');
   }
-  // В production ресурсы находятся в resources (electron-builder копирует туда)
-  return process.resourcesPath;
+  // В production ресурсы находятся в resources/app (electron-builder копирует туда)
+  return path.join(process.resourcesPath, 'app');
 };
 
 const appRoot = getResourcesPath();
@@ -466,13 +466,259 @@ ipcMain.handle('get-uploads-path', () => {
 });
 
 // Обработка уведомлений от веб-приложения
-ipcMain.on('show-notification', (event, { title, body, icon }) => {
-  new Notification({
+ipcMain.on('show-notification', (event, { title, body, icon, chatId }) => {
+  const notif = new Notification({
     title,
     body,
     icon: icon ? path.join(__dirname, icon) : undefined
-  }).show();
+  });
+  
+  // Обработчик клика по уведомлению
+  notif.on('click', () => {
+    // Показываем главное окно
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) {
+        mainWindow.restore();
+      }
+      mainWindow.show();
+      mainWindow.focus();
+      
+      // Отправляем событие в рендерер для открытия чата
+      if (chatId) {
+        mainWindow.webContents.send('open-chat-from-notification', chatId);
+      }
+    }
+  });
+  
+  notif.show();
 });
+
+// Обработка обновления счетчика непрочитанных сообщений
+let currentUnreadCount = 0;
+let badgeUpdatePromise = null;
+
+ipcMain.on('set-unread-count', (event, count) => {
+  currentUnreadCount = count;
+  updateUnreadBadge();
+});
+
+// Функция создания/обновления бейджа непрочитанных сообщений
+async function updateUnreadBadge() {
+  if (!mainWindow) return;
+
+  // Ждем завершения предыдущего обновления бейджа если оно есть
+  if (badgeUpdatePromise) {
+    await badgeUpdatePromise;
+  }
+
+  if (currentUnreadCount > 0) {
+    // Создаем иконку с бейджем асинхронно
+    badgeUpdatePromise = createBadgeIcon(currentUnreadCount).then(icon => {
+      badgeUpdatePromise = null;
+      
+      if (icon) {
+        // Устанавливаем overlay иконку на окно (для панели задач)
+        mainWindow.setOverlayIcon(icon, `${currentUnreadCount} непрочитанных сообщений`);
+
+        // Обновляем иконку трея если есть
+        if (tray) {
+          tray.setImage(icon);
+        }
+      }
+    }).catch(err => {
+      badgeUpdatePromise = null;
+      logError(`Ошибка обновления бейджа: ${err.message}`);
+    });
+  } else {
+    // Убираем бейдж
+    mainWindow.setOverlayIcon(null, '');
+
+    // Возвращаем стандартную иконку трея
+    if (tray) {
+      const iconPath = path.join(__dirname, 'icon.ico');
+      if (fs.existsSync(iconPath)) {
+        tray.setImage(iconPath);
+      }
+    }
+  }
+}
+
+// Функция создания иконки с красной точкой
+function createBadgeIcon(count) {
+  try {
+    // Загружаем базовую иконку
+    const iconPath = path.join(__dirname, 'icon.ico');
+    if (!fs.existsSync(iconPath)) return Promise.resolve(null);
+
+    const baseIcon = nativeImage.createFromPath(iconPath);
+    const baseSize = baseIcon.getSize();
+    const size = Math.max(baseSize.width, baseSize.height, 32);
+    
+    // Создаем offscreen окно для рисования
+    const offscreen = new BrowserWindow({
+      show: false,
+      width: size,
+      height: size,
+      frame: false,
+      transparent: true,
+      skipTaskbar: true,
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        preload: path.join(__dirname, 'preload.js')
+      }
+    });
+    
+    const dataUrl = baseIcon.toDataURL();
+    
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <style>
+          body { 
+            margin: 0; 
+            width: ${size}px; 
+            height: ${size}px; 
+            overflow: hidden;
+          }
+          canvas { width: 100%; height: 100%; }
+        </style>
+      </head>
+      <body>
+        <canvas id="canvas" width="${size}" height="${size}"></canvas>
+        <script>
+          const canvas = document.getElementById('canvas');
+          const ctx = canvas.getContext('2d');
+          const canvasSize = ${size};
+          const count = ${count};
+          
+          // Загружаем базовое изображение
+          const img = new Image();
+          img.onload = () => {
+            // Рисуем базовую иконку
+            ctx.drawImage(img, 0, 0, canvasSize, canvasSize);
+            
+            // Рисуем красную точку в правом верхнем углу
+            const dotRadius = canvasSize * 0.25;
+            const dotX = canvasSize - dotRadius - 3;
+            const dotY = dotRadius + 3;
+            
+            // Тень для точки
+            ctx.beginPath();
+            ctx.arc(dotX, dotY + 2, dotRadius, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.25)';
+            ctx.fill();
+            
+            // Красная точка с градиентом
+            ctx.beginPath();
+            ctx.arc(dotX, dotY, dotRadius, 0, Math.PI * 2);
+            const gradient = ctx.createRadialGradient(
+              dotX - dotRadius * 0.3, 
+              dotY - dotRadius * 0.3, 
+              0,
+              dotX, 
+              dotY, 
+              dotRadius
+            );
+            gradient.addColorStop(0, '#ff6b6b');
+            gradient.addColorStop(0.7, '#ef4444');
+            gradient.addColorStop(1, '#dc2626');
+            ctx.fillStyle = gradient;
+            ctx.fill();
+            
+            // Белая обводка точки
+            ctx.beginPath();
+            ctx.arc(dotX, dotY, dotRadius, 0, Math.PI * 2);
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+            
+            // Рисуем число если оно <= 99
+            if (count > 0 && count <= 99) {
+              const fontSize = Math.max(dotRadius * 1.1, 8);
+              ctx.font = \`bold \${fontSize}px Arial, sans-serif\`;
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              ctx.fillStyle = '#ffffff';
+              ctx.shadowColor = 'rgba(0, 0, 0, 0.3)';
+              ctx.shadowBlur = 2;
+              ctx.fillText(count.toString(), dotX, dotY + 1);
+            } else if (count > 99) {
+              const fontSize = Math.max(dotRadius * 1.0, 7);
+              ctx.font = \`bold \${fontSize}px Arial, sans-serif\`;
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              ctx.fillStyle = '#ffffff';
+              ctx.shadowColor = 'rgba(0, 0, 0, 0.3)';
+              ctx.shadowBlur = 2;
+              ctx.fillText('99+', dotX, dotY + 1);
+            }
+            
+            // Отправляем результат в основной процесс
+            const dataURL = canvas.toDataURL('image/png');
+            const { ipcRenderer } = require('electron');
+            ipcRenderer.send('badge-result', dataURL);
+          };
+          img.onerror = () => {
+            const { ipcRenderer } = require('electron');
+            ipcRenderer.send('badge-result', null);
+          };
+          img.src = '${dataUrl}';
+        <\/script>
+      </body>
+      </html>
+    `;
+    
+    // Возвращаем Promise который разрешится когда получим результат
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        if (!offscreen.isDestroyed()) {
+          offscreen.close();
+        }
+        resolve(null);
+      }, 3000);
+      
+      // Слушаем результат от offscreen окна
+      const handler = (event, resultDataURL) => {
+        clearTimeout(timeout);
+        ipcMain.removeListener('badge-result', handler);
+        
+        if (!offscreen.isDestroyed()) {
+          offscreen.close();
+        }
+        
+        try {
+          if (resultDataURL) {
+            const icon = nativeImage.createFromDataURL(resultDataURL);
+            resolve(icon);
+          } else {
+            resolve(null);
+          }
+        } catch (err) {
+          logError(`Ошибка создания иконки из dataURL: ${err.message}`);
+          resolve(null);
+        }
+      };
+      
+      ipcMain.on('badge-result', handler);
+      
+      // Загружаем HTML
+      offscreen.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html)).catch(err => {
+        logError(`Ошибка загрузки offscreen окна: ${err.message}`);
+        clearTimeout(timeout);
+        ipcMain.removeListener('badge-result', handler);
+        if (!offscreen.isDestroyed()) {
+          offscreen.close();
+        }
+        resolve(null);
+      });
+    });
+  } catch (err) {
+    logError(`Ошибка создания бейджа: ${err.message}`);
+    return Promise.resolve(null);
+  }
+}
 
 // Обработка запросов на обновление
 ipcMain.on('check-for-updates', () => {

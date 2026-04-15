@@ -56,7 +56,8 @@ function App() {
     y: 0,
     messageId: null,
     messageText: '',
-    messageChatId: null
+    messageChatId: null,
+    messageSenderId: null
   });
 
   // Реакции на сообщения
@@ -69,6 +70,12 @@ function App() {
   const [showForwardModal, setShowForwardModal] = useState(false);
   const [forwardSearchQuery, setForwardSearchQuery] = useState('');
   const [selectedForwardUser, setSelectedForwardUser] = useState(null);
+  
+  // Модальное окно редактирования сообщения
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editMessageText, setEditMessageText] = useState('');
+  const [editMessageId, setEditMessageId] = useState(null);
+  
   const [profileData, setProfileData] = useState({
     username: '',
     birthDate: '',
@@ -833,8 +840,23 @@ function App() {
       // Определяем, активен ли чат - используем ref для актуального значения
       const isChatActive = message.chatId === activeChatIdRef.current;
 
-      // Показываем уведомление только если сообщение не от нас и чат не активен
-      if (!isMyMessage && !isChatActive && notificationPermissionRef.current === 'granted') {
+      // Проверяем, находится ли приложение в фокусе (для Electron)
+      let isAppFocused = true;
+      if (window.electronAPI) {
+        // Для Electron приложения проверяем фокус окна
+        isAppFocused = document.hasFocus() && !document.hidden;
+      }
+
+      // Показываем уведомление если:
+      // 1. Сообщение не от нас
+      // 2. ИЛИ чат не активен, ИЛИ приложение не в фокусе (свернуто)
+      if (!isMyMessage && notificationPermissionRef.current === 'granted') {
+        const shouldShowNotification = !isChatActive || !isAppFocused;
+        
+        if (!shouldShowNotification) {
+          console.log('Уведомление НЕ показываем: чат активен и приложение в фокусе');
+          // Продолжаем обработку для обновления UI, но без уведомления
+        }
 
         // Проверяем, является ли отправитель ботом-помощником
         const isBotMessage = message.senderName === 'Помощник' || message.senderId?.includes('bot-');
@@ -845,6 +867,8 @@ function App() {
         }
         // Проверяем настройки уведомлений для обычных сообщений
         else if (notificationSettingsRef.current.newMessages) {
+          // Показываем уведомление только если чат не активен или приложение не в фокусе
+          if (shouldShowNotification) {
           // Звук уведомления
           if (notificationSettingsRef.current.sound) {
             try {
@@ -854,16 +878,52 @@ function App() {
           }
 
           // Push уведомление
-          new Notification('Новое сообщение', {
+          const notificationData = {
+            title: 'Новое сообщение',
             body: `${message.senderName}: ${message.text || '📎 Файл'}`,
             icon: message.senderAvatar || '/favicon.ico',
             badge: '/favicon.ico',
             tag: message.chatId,
-            requireInteraction: false
-          });
+            requireInteraction: false,
+            data: { chatId: message.chatId }
+          };
+
+          // Если это Electron приложение, отправляем уведомление через IPC
+          if (window.electronAPI && window.electronAPI.sendNotification) {
+            window.electronAPI.sendNotification({
+              title: notificationData.title,
+              body: notificationData.body,
+              icon: notificationData.icon,
+              chatId: message.chatId
+            });
+          } else {
+            // Обычное браузерное уведомление
+            const notif = new Notification(notificationData.title, {
+              body: notificationData.body,
+              icon: notificationData.icon,
+              badge: notificationData.badge,
+              tag: notificationData.tag,
+              requireInteraction: notificationData.requireInteraction,
+              data: notificationData.data
+            });
+
+            // Обработчик клика по уведомлению
+            notif.onclick = () => {
+              window.focus();
+              const chatId = notificationData.data.chatId;
+              const chatToOpen = chats.find(c => c.id === chatId);
+              
+              if (chatToOpen) {
+                handleSelectChat(chatToOpen);
+              }
+              
+              notif.close();
+            };
+          }
+          } // закрывающая скобка для if (shouldShowNotification)
         }
       } else {
-        console.log('Уведомление НЕ показываем:', { isMyMessage, isChatActive });
+        console.log('Уведомление НЕ показываем: чат активен и приложение в фокусе', { isMyMessage, isChatActive, isAppFocused });
       }
 
       setChats(prev => {
@@ -1038,7 +1098,7 @@ function App() {
         if (exists) {
           return prev.map(u =>
             u.id === userId
-              ? { ...u, full_name, work_phone, mobile_phone, status_text: status_text || '' }
+              ? { ...u, full_name, work_phone, mobile_phone, status_text: status_text || '', about: u.about }
               : u
           );
         } else {
@@ -1049,6 +1109,7 @@ function App() {
             work_phone,
             mobile_phone,
             status_text: status_text || '',
+            about: '',
             avatar: '',
             status: 'offline'
           }];
@@ -1170,6 +1231,15 @@ function App() {
       setMessages(prev => prev.filter(msg => msg.id !== deletedMessageId));
     });
 
+    // Обработка редактирования сообщения
+    newSocket.on('message_edited', ({ messageId, newText, editedBy, editedAt }) => {
+      setMessages(prev => prev.map(msg =>
+        msg.id === messageId
+          ? { ...msg, text: newText, edited: true, editedAt }
+          : msg
+      ));
+    });
+
     // === ОБРАБОТКА РЕАКЦИЙ ===
 
     // Обработка добавления реакции
@@ -1238,6 +1308,49 @@ function App() {
   useEffect(() => {
     currentUserRef.current = currentUser;
   }, [currentUser]);
+
+  // Обработчик открытия чата из уведомления (для Electron)
+  useEffect(() => {
+    if (window.electronAPI && window.electronAPI.onOpenChatFromNotification) {
+      window.electronAPI.onOpenChatFromNotification((chatId) => {
+        console.log('Открываем чат из уведомления:', chatId);
+        
+        // Находим чат в списке
+        const chatToOpen = chats.find(c => c.id === chatId);
+        
+        if (chatToOpen) {
+          // Открываем чат
+          handleSelectChat(chatToOpen);
+        } else {
+          // Если чат не найден, пробуем загрузить список чатов заново
+          console.log('Чат не найден в списке, загружаем чаты...');
+          if (socket) {
+            socket.emit('get_chats');
+          }
+          // Пробуем открыть чат через небольшую задержку
+          setTimeout(() => {
+            const chat = chats.find(c => c.id === chatId);
+            if (chat) {
+              handleSelectChat(chat);
+            }
+          }, 500);
+        }
+      });
+    }
+  }, [chats, socket]);
+
+  // Отправляем общее количество непрочитанных сообщений в Electron для отображения бейджа
+  useEffect(() => {
+    if (window.electronAPI && window.electronAPI.setUnreadCount) {
+      // Суммируем все непрочитанные сообщения из всех чатов
+      const totalUnread = chats.reduce((sum, chat) => {
+        return sum + (chat.unreadCount || 0);
+      }, 0);
+      
+      console.log('Обновление счетчика непрочитанных:', totalUnread);
+      window.electronAPI.setUnreadCount(totalUnread);
+    }
+  }, [chats]);
 
   // Проверка дней рождения после обновления списка пользователей
   useEffect(() => {
@@ -1956,7 +2069,7 @@ function App() {
         setProfileData({
           username: data.user.username || '',
           birthDate: data.user.birth_date || '',
-          about: data.user.about || '', // Должность
+          about: data.user.about || '',
           avatar: data.user.avatar || '',
           mobilePhone: data.user.mobile_phone || '',
           workPhone: data.user.work_phone || '',
@@ -2683,7 +2796,7 @@ function App() {
   };
 
   // Открытие контекстного меню сообщения
-  const handleContextMenu = (e, messageId, messageText, chatId) => {
+  const handleContextMenu = (e, messageId, messageText, chatId, senderId) => {
     e.preventDefault();
     setContextMenu({
       visible: true,
@@ -2691,7 +2804,8 @@ function App() {
       y: e.clientY,
       messageId,
       messageText,
-      messageChatId: chatId
+      messageChatId: chatId,
+      messageSenderId: senderId
     });
   };
 
@@ -2747,6 +2861,43 @@ function App() {
       }
       closeContextMenu();
     }
+  };
+
+  // Редактирование сообщения
+  const handleEditMessage = () => {
+    if (!contextMenu.messageText || !contextMenu.messageId) return;
+    
+    // Проверяем, что это сообщение текущего пользователя
+    if (contextMenu.messageSenderId !== currentUser?.id) {
+      alert('Вы можете редактировать только свои сообщения');
+      return;
+    }
+    
+    setEditMessageText(contextMenu.messageText);
+    setEditMessageId(contextMenu.messageId);
+    setShowEditModal(true);
+    closeContextMenu();
+  };
+
+  // Сохранение отредактированного сообщения
+  const handleSaveEditMessage = () => {
+    if (!socket || !editMessageId || !editMessageText.trim()) return;
+    
+    socket.emit('edit_message', {
+      messageId: editMessageId,
+      newText: editMessageText.trim()
+    });
+    
+    setShowEditModal(false);
+    setEditMessageText('');
+    setEditMessageId(null);
+  };
+
+  // Отмена редактирования
+  const handleCancelEdit = () => {
+    setShowEditModal(false);
+    setEditMessageText('');
+    setEditMessageId(null);
   };
 
   // Отправка пересланного сообщения
@@ -4109,7 +4260,7 @@ function App() {
 
       {/* Боковая панель с кнопками */}
       <aside className="sidebar-buttons">
-        <div className="user-info" onClick={handleOpenProfile} style={{ cursor: 'pointer' }}>
+        <div className="user-info" onClick={handleOpenProfile} style={{ cursor: 'pointer' }} title={currentUser?.username}>
           <div className="user-avatar-wrapper">
             <img src={currentUser?.avatar} alt={currentUser?.username} className="user-avatar" />
           </div>
@@ -5334,7 +5485,7 @@ function App() {
                   id={`message-${message.id}`}
                   key={message.id}
                   className={`message-main ${message.senderId === currentUser?.id ? 'own' : ''} ${isBotMessage(message) ? 'message-bot' : ''} ${isGrouped ? 'message-grouped' : ''}`}
-                  onContextMenu={(e) => handleContextMenu(e, message.id, message.text, message.chatId)}
+                  onContextMenu={(e) => handleContextMenu(e, message.id, message.text, message.chatId, message.senderId)}
                 >
                   {!isGrouped && (
                     <img
@@ -5354,11 +5505,12 @@ function App() {
                       {message.text && (
                         <div className="message-text-wrapper">
                           <div className="message-text-content">
-                            <p className="message-text-main" onContextMenu={(e) => handleContextMenu(e, message.id, message.text, message.chatId)}>
+                            <p className="message-text-main" onContextMenu={(e) => handleContextMenu(e, message.id, message.text, message.chatId, message.senderId)}>
                               {isBotMessage(message) ? formatBotText(message.text) : wrapEmojisInText(message.text)}
                             </p>
                             <div className="message-time-inline">
                               <span className="message-time-main">{formatTime(message.timestamp)}</span>
+                              {message.edited && <span className="message-edited-indicator" title="Отредактировано">ред.</span>}
                               {renderMessageStatus(message)}
                             </div>
                           </div>
@@ -5754,7 +5906,7 @@ function App() {
                       <div className="phonebook-card-info">
                         <span className="phonebook-card-username">{user.username}</span>
                         {user.fullName && <span className="phonebook-card-fullname">{user.fullName}</span>}
-                        {user.position && <span className="phonebook-card-position">{user.position}</span>}
+                        {user.about && <span className="phonebook-card-position">{user.about}</span>}
                       </div>
                     </div>
                     <div className="phonebook-card-phone">
@@ -6663,7 +6815,7 @@ function App() {
                 </div>
 
                 <div className="form-group">
-                  <label>📋 Должность</label>
+                  <label>💼 Должность</label>
                   <input
                     type="text"
                     placeholder="Менеджер"
@@ -6818,7 +6970,7 @@ function App() {
                 )}
                 {viewUserProfileData.about && (
                   <div className="profile-detail-row">
-                    <span className="detail-label">📋 Должность:</span>
+                    <span className="detail-label">💼 Должность:</span>
                     <span className="detail-value">{viewUserProfileData.about}</span>
                   </div>
                 )}
@@ -7621,6 +7773,12 @@ function App() {
             <button className="context-menu-item" onClick={(e) => { e.stopPropagation(); handleCopyMessage(); }}>
               📋 Копировать
             </button>
+            {/* Редактировать: только свои сообщения */}
+            {contextMenu.messageSenderId === currentUser?.id && (
+              <button className="context-menu-item" onClick={(e) => { e.stopPropagation(); handleEditMessage(); }}>
+                ✏️ Редактировать
+              </button>
+            )}
             <button className="context-menu-item" onClick={(e) => { e.stopPropagation(); handleForwardMessage({ id: contextMenu.messageId, text: contextMenu.messageText }); }}>
               ➤ Переслать
             </button>
@@ -7722,6 +7880,43 @@ function App() {
                 disabled={!selectedForwardUser}
               >
                 Переслать
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Модальное окно редактирования сообщения */}
+      {showEditModal && (
+        <div className="modal-overlay" onClick={handleCancelEdit}>
+          <div className="modal-content edit-message-modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>✏️ Редактировать сообщение</h3>
+              <button onClick={handleCancelEdit}>✕</button>
+            </div>
+
+            <div className="modal-body">
+              <textarea
+                className="edit-message-textarea"
+                value={editMessageText}
+                onChange={(e) => setEditMessageText(e.target.value)}
+                placeholder="Введите текст сообщения..."
+                rows={4}
+                autoFocus
+              />
+            </div>
+
+            <div className="modal-footer">
+              <button type="button" className="cancel-btn" onClick={handleCancelEdit}>
+                Отмена
+              </button>
+              <button
+                type="button"
+                className="create-btn"
+                onClick={handleSaveEditMessage}
+                disabled={!editMessageText.trim()}
+              >
+                Сохранить
               </button>
             </div>
           </div>
