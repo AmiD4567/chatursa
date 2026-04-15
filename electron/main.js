@@ -559,22 +559,29 @@ async function updateUnreadBadge() {
   }
 }
 
-// Функция создания иконки с красной точкой
+// Функция создания иконки с красной точкой - упрощенная версия
 function createBadgeIcon(count) {
   try {
-    // Загружаем базовую иконку
     const iconPath = path.join(__dirname, 'icon.ico');
-    if (!fs.existsSync(iconPath)) return Promise.resolve(null);
+    if (!fs.existsSync(iconPath)) {
+      logError('createBadgeIcon: icon.ico не найден');
+      return Promise.resolve(null);
+    }
 
+    logToFile(`createBadgeIcon: создаем бейдж с count=${count}`);
+    
     const baseIcon = nativeImage.createFromPath(iconPath);
     const baseSize = baseIcon.getSize();
-    const size = Math.max(baseSize.width, baseSize.height, 48);
+    logToFile(`createBadgeIcon: размер базовой иконки ${baseSize.width}x${baseSize.height}`);
     
     // Создаем offscreen окно для рисования
+    const canvasSize = Math.max(baseSize.width, baseSize.height, 48);
+    logToFile(`createBadgeIcon: размер canvas ${canvasSize}x${canvasSize}`);
+    
     const offscreen = new BrowserWindow({
       show: false,
-      width: size,
-      height: size,
+      width: canvasSize,
+      height: canvasSize,
       frame: false,
       transparent: true,
       skipTaskbar: true,
@@ -586,119 +593,123 @@ function createBadgeIcon(count) {
     });
 
     const dataUrl = baseIcon.toDataURL();
+    logToFile(`createBadgeIcon: baseIcon converted to dataURL (length: ${dataUrl.length})`);
 
-    const html = `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <style>
-          body { 
-            margin: 0; 
-            width: ${size}px; 
-            height: ${size}px; 
-            overflow: hidden;
-          }
-          canvas { width: 100%; height: 100%; }
-        </style>
-      </head>
-      <body>
-        <canvas id="canvas" width="${size}" height="${size}"></canvas>
-        <script>
-          const canvas = document.getElementById('canvas');
-          const ctx = canvas.getContext('2d');
-          const canvasSize = ${size};
-          const badgeCount = ${count};
-          
-          // Загружаем базовое изображение
-          const img = new Image();
-          img.onload = () => {
-            // Рисуем базовую иконку
-            ctx.drawImage(img, 0, 0, canvasSize, canvasSize);
-            
-            // Рисуем красную точку в правом верхнем углу
-            const dotRadius = canvasSize * 0.25;
-            const dotX = canvasSize - dotRadius - 3;
-            const dotY = dotRadius + 3;
-            
-            // Тень для точки
-            ctx.beginPath();
-            ctx.arc(dotX, dotY + 2, dotRadius, 0, Math.PI * 2);
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.25)';
-            ctx.fill();
-            
-            // Красная точка с градиентом
-            ctx.beginPath();
-            ctx.arc(dotX, dotY, dotRadius, 0, Math.PI * 2);
-            const gradient = ctx.createRadialGradient(
-              dotX - dotRadius * 0.3, 
-              dotY - dotRadius * 0.3, 
-              0,
-              dotX, 
-              dotY, 
-              dotRadius
-            );
-            gradient.addColorStop(0, '#ff6b6b');
-            gradient.addColorStop(0.7, '#ef4444');
-            gradient.addColorStop(1, '#dc2626');
-            ctx.fillStyle = gradient;
-            ctx.fill();
-            
-            // Белая обводка точки
-            ctx.beginPath();
-            ctx.arc(dotX, dotY, dotRadius, 0, Math.PI * 2);
-            ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
-            ctx.lineWidth = 1.5;
-            ctx.stroke();
-            
-            // Рисуем число если оно <= 99
-            if (badgeCount > 0 && badgeCount <= 99) {
-              const fontSize = Math.max(dotRadius * 1.1, 10);
-              ctx.font = \`bold \${fontSize}px Arial, sans-serif\`;
-              ctx.textAlign = 'center';
-              ctx.textBaseline = 'middle';
-              ctx.fillStyle = '#ffffff';
-              ctx.shadowColor = 'rgba(0, 0, 0, 0.3)';
-              ctx.shadowBlur = 2;
-              ctx.fillText(badgeCount.toString(), dotX, dotY + 1);
-            } else if (badgeCount > 99) {
-              const fontSize = Math.max(dotRadius * 1.0, 9);
-              ctx.font = \`bold \${fontSize}px Arial, sans-serif\`;
-              ctx.textAlign = 'center';
-              ctx.textBaseline = 'middle';
-              ctx.fillStyle = '#ffffff';
-              ctx.shadowColor = 'rgba(0, 0, 0, 0.3)';
-              ctx.shadowBlur = 2;
-              ctx.fillText('99+', dotX, dotY + 1);
-            }
-            
-            // Отправляем результат через preload API
-            const dataURL = canvas.toDataURL('image/png');
-            if (window.badgeAPI) {
-              window.badgeAPI.sendResult(dataURL);
-            }
-          };
-          img.onerror = () => {
-            if (window.badgeAPI) {
-              window.badgeAPI.sendResult(null);
-            }
-          };
-          img.src = '${dataUrl}';
-        <\/script>
-      </body>
-      </html>
-    `;
+    const html = `<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body { margin: 0; width: ${canvasSize}px; height: ${canvasSize}px; overflow: hidden; }
+    canvas { width: 100%; height: 100%; }
+  </style>
+</head>
+<body>
+  <canvas id="canvas" width="${canvasSize}" height="${canvasSize}"></canvas>
+  <script>
+    console.log('[Badge Canvas] Script started');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const canvasSize = ${canvasSize};
+    const badgeCount = ${count};
+    
+    console.log('[Badge Canvas] Canvas size:', canvasSize, 'Count:', badgeCount);
+    
+    const img = new Image();
+    img.onload = () => {
+      console.log('[Badge Canvas] Image loaded');
+      ctx.drawImage(img, 0, 0, canvasSize, canvasSize);
+      
+      const dotRadius = canvasSize * 0.25;
+      const dotX = canvasSize - dotRadius - 3;
+      const dotY = dotRadius + 3;
+      
+      console.log('[Badge Canvas] Drawing dot at', dotX, dotY, 'radius:', dotRadius);
+      
+      // Тень
+      ctx.beginPath();
+      ctx.arc(dotX, dotY + 2, dotRadius, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.25)';
+      ctx.fill();
+      
+      // Красная точка с градиентом
+      ctx.beginPath();
+      ctx.arc(dotX, dotY, dotRadius, 0, Math.PI * 2);
+      const gradient = ctx.createRadialGradient(
+        dotX - dotRadius * 0.3, dotY - dotRadius * 0.3, 0,
+        dotX, dotY, dotRadius
+      );
+      gradient.addColorStop(0, '#ff6b6b');
+      gradient.addColorStop(0.7, '#ef4444');
+      gradient.addColorStop(1, '#dc2626');
+      ctx.fillStyle = gradient;
+      ctx.fill();
+      
+      // Обводка
+      ctx.beginPath();
+      ctx.arc(dotX, dotY, dotRadius, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      
+      // Число
+      if (badgeCount > 0 && badgeCount <= 99) {
+        const fontSize = Math.max(dotRadius * 1.1, 10);
+        ctx.font = 'bold ' + fontSize + 'px Arial, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#ffffff';
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.3)';
+        ctx.shadowBlur = 2;
+        ctx.fillText(badgeCount.toString(), dotX, dotY + 1);
+      } else if (badgeCount > 99) {
+        const fontSize = Math.max(dotRadius * 1.0, 9);
+        ctx.font = 'bold ' + fontSize + 'px Arial, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#ffffff';
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.3)';
+        ctx.shadowBlur = 2;
+        ctx.fillText('99+', dotX, dotY + 1);
+      }
+      
+      const dataURL = canvas.toDataURL('image/png');
+      console.log('[Badge Canvas] Canvas rendered, dataURL length:', dataURL.length);
+      
+      if (window.badgeAPI) {
+        console.log('[Badge Canvas] Sending result via badgeAPI');
+        window.badgeAPI.sendResult(dataURL);
+      } else {
+        console.error('[Badge Canvas] badgeAPI not found on window');
+      }
+    };
+    
+    img.onerror = (e) => {
+      console.error('[Badge Canvas] Image failed to load:', e);
+      if (window.badgeAPI) {
+        window.badgeAPI.sendResult(null);
+      }
+    };
+    
+    img.src = '${dataUrl}';
+    console.log('[Badge Canvas] Image src set');
+  <\/script>
+</body>
+</html>`;
 
-    // Возвращаем Promise который разрешится когда получим результат
+    // Возвращаем Promise
     return new Promise((resolve) => {
+      logToFile('createBadgeIcon: waiting for badge-result...');
+      
       const timeout = setTimeout(() => {
+        logError('createBadgeIcon: timeout waiting for badge result');
         if (!offscreen.isDestroyed()) {
           offscreen.close();
         }
         resolve(null);
-      }, 3000);
+      }, 5000);
 
-      // Слушаем результат от offscreen окна
       const handler = (event, resultDataURL) => {
+        logToFile(`createBadgeIcon: received badge-result (length: ${resultDataURL ? resultDataURL.length : 0})`);
         clearTimeout(timeout);
         ipcMain.removeListener('badge-result', handler);
         
@@ -709,31 +720,37 @@ function createBadgeIcon(count) {
         try {
           if (resultDataURL) {
             const icon = nativeImage.createFromDataURL(resultDataURL);
+            logToFile(`createBadgeIcon: icon created successfully, size: ${icon.getSize().width}x${icon.getSize().height}`);
             resolve(icon);
           } else {
+            logError('createBadgeIcon: resultDataURL is null');
             resolve(null);
           }
         } catch (err) {
-          logError(`Ошибка создания иконки из dataURL: ${err.message}`);
+          logError(`createBadgeIcon: error creating icon from dataURL: ${err.message}`);
           resolve(null);
         }
       };
 
       ipcMain.on('badge-result', handler);
 
-      // Загружаем HTML
-      offscreen.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html)).catch(err => {
-        logError(`Ошибка загрузки offscreen окна: ${err.message}`);
-        clearTimeout(timeout);
-        ipcMain.removeListener('badge-result', handler);
-        if (!offscreen.isDestroyed()) {
-          offscreen.close();
-        }
-        resolve(null);
-      });
+      offscreen.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html))
+        .then(() => {
+          logToFile('createBadgeIcon: HTML loaded successfully in offscreen window');
+        })
+        .catch(err => {
+          logError(`createBadgeIcon: error loading HTML: ${err.message}`);
+          clearTimeout(timeout);
+          ipcMain.removeListener('badge-result', handler);
+          if (!offscreen.isDestroyed()) {
+            offscreen.close();
+          }
+          resolve(null);
+        });
     });
   } catch (err) {
-    logError(`Ошибка создания бейджа: ${err.message}`);
+    logError(`createBadgeIcon: fatal error: ${err.message}`);
+    logError(err.stack);
     return Promise.resolve(null);
   }
 }
