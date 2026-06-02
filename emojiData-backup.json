@@ -1,0 +1,557 @@
+﻿{
+  "Смайлы": {
+    "icon": "рџЂ",
+    "emojis": [
+      {
+        "emoji": "рџЂ",
+        "unified": "1f600",
+        "name": "face grin grinning face"
+      },
+      {
+        "emoji": "рџѓ",
+        "unified": "1f603",
+        "name": "face open mouth smile grinning face with big eyes"
+      },
+      {
+        "emoji": "рџ„",
+        "unified": "1f604",
+        "name": "eye face open mouth smile grinning face with smiling eyes"
+      },
+      {
+        "emoji": "рџЃ",
+        "unified": "1f601",
+        "name": "eye face grin smile beaming face with smiling eyes"
+      },
+      {
+        "emoji": "рџ†",
+        "unified": "1f606",
+        "name": "face laugh mouth smile satisfied grinning squinting face"
+      },
+      {
+        "emoji": "рџ…",
+        "unified": "1f605",
+        "name": "cold face open smile sweat grinning face with sweat"
+      },
+      {
+        "emoji": "рџ¤Ј",
+        "unified": "1f923",
+        "name": "face rofl floor laugh rotfl rolling rolling on the floor laughing"
+      },
+      {
+        "emoji": "рџ‚",
+        "unified": "1f602",
+        "name": "joy face tear laugh face with tears of joy"
+      },
+      {
+        "emoji": "рџ™‚",
+        "unified": "1f642",
+        "name": "face smile slightly smiling face"
+      },
+      {
+        "emoji": "рџЉ",
+        "unified": "1f60a",
+        "name": "eye face blush smile smiling face with smiling eyes"
+      },
+      {
+        "emoji": "рџ‡",
+        "unified": "1f607",
+        "name": "face halo angel fantasy innocent smiling face with halo"
+      },
+      {
+        "emoji": "рџҐ°",
+        "unified": "1f970",
+        "name": "adore crush hearts in love smiling face with hearts"
+      },
+      {
+        "emoji": "рџЌ",
+        "unified": "1f60d",
+        "name": "eye face love smile smiling face with heart eyes"
+      },
+      {
+        "emoji": "рџ¤©",
+        "unified": "1f929",
+        "name": "eyes face star grinning star struck"
+      },
+      {
+        "emoji": "рџ",
+        "unified": "1f618",
+        "name": "face kiss face blowing a kiss"
+      },
+      {
+        "emoji": "рџ—",
+        "unified": "1f617",
+        "name": "face kiss kissing face"
+      },
+      {
+        "emoji": "рџљ",
+        "unified": "1f61a",
+        "name": "eye face kiss closed kissing face with closed eyes"
+      },
+      {
+        "emoji": "рџ™",
+        "unified": "1f619",
+        "name": "eye face kiss smile kissing face with smiling eyes"
+      },
+      {
+        "emoji": "рџ‹",
+        "unified": "1f60b",
+        "name": "yum face smile delicious savouring face savoring food"
+      },
+      {
+        "emoji": "рџ›",
+        "unified": "1f61b",
+        "name": "face tongue face with tongue"
+      },
+      {
+        "emoji": "рџњ",
+        "unified": "1f61c",
+        "name": "eye face joke wink tongue winking face with tongue"
+      },
+      {
+        "emoji": "рџ¤Є",
+        "unified": "1f92a",
+        "name": "eye goofy large small zany face"
+      },
+      {
+        "emoji": "рџќ",
+        "unified": "1f61d",
+        "name": "eye face taste tongue horrible squinting face with tongue"
+      },
+      {
+        "emoji": "рџ¤‘",
+        "unified": "1f911",
+        "name": "face money mouth money mouth face"
+      },
+      {
+        "emoji": "рџ¤—",
+        "unified": "1f917",
+        "name": "hug face hugging open hands smiling face smiling face with open hands"
+      },
+      {
+        "emoji": "рџ¤­",
+        "unified": "1f92d",
+        "name": "whoops face with hand over mouth"
+      },
+      {
+        "emoji": "рџ¤«",
+        "unified": "1f92b",
+        "name": "quiet shush shushing face"
+      },
+      {
+        "emoji": "рџ¤”",
+        "unified": "1f914",
+        "name": "face thinking thinking face"
+      },
+      {
+        "emoji": "рџ¤ђ",
+        "unified": "1f910",
+        "name": "zip face mouth zipper zipper mouth face"
+      },
+      {
+        "emoji": "рџ¤Ё",
+        "unified": "1f928",
+        "name": "skeptic distrust face with raised eyebrow"
+      },
+      {
+        "emoji": "рџђ",
+        "unified": "1f610",
+        "name": "meh face deadpan neutral neutral face"
+      },
+      {
+        "emoji": "рџ‘",
+        "unified": "1f611",
+        "name": "meh face inexpressive unexpressive expressionless expressionless face"
+      },
+      {
+        "emoji": "рџ¶",
+        "unified": "1f636",
+        "name": "face mouth quiet silent face without mouth"
+      },
+      {
+        "emoji": "рџ¶",
+        "unified": "1f636",
+        "name": "absentminded face in clouds head in clouds face in the fog"
+      },
+      {
+        "emoji": "рџЏ",
+        "unified": "1f60f",
+        "name": "face smirk smirking face"
+      },
+      {
+        "emoji": "рџ’",
+        "unified": "1f612",
+        "name": "face unhappy unamused unamused face"
+      },
+      {
+        "emoji": "рџ™„",
+        "unified": "1f644",
+        "name": "eyes face eyeroll rolling face with rolling eyes"
+      },
+      {
+        "emoji": "рџ¬",
+        "unified": "1f62c",
+        "name": "face grimace grimacing face"
+      },
+      {
+        "emoji": "рџ¤Ґ",
+        "unified": "1f925",
+        "name": "lie face pinocchio lying face"
+      },
+      {
+        "emoji": "рџ™‚",
+        "unified": "1f642",
+        "name": "no shake head shaking horizontally"
+      },
+      {
+        "emoji": "рџ™‚",
+        "unified": "1f642",
+        "name": "nod yes head shaking vertically"
+      },
+      {
+        "emoji": "рџЊ",
+        "unified": "1f60c",
+        "name": "face relieved relieved face"
+      },
+      {
+        "emoji": "рџ”",
+        "unified": "1f614",
+        "name": "face pensive dejected pensive face"
+      },
+      {
+        "emoji": "рџЄ",
+        "unified": "1f62a",
+        "name": "face sleep good night sleepy face"
+      },
+      {
+        "emoji": "рџ¤¤",
+        "unified": "1f924",
+        "name": "face drooling drooling face"
+      },
+      {
+        "emoji": "рџґ",
+        "unified": "1f634",
+        "name": "zzz face sleep good night sleeping face"
+      },
+      {
+        "emoji": "рџ·",
+        "unified": "1f637",
+        "name": "cold face mask sick doctor face with medical mask"
+      },
+      {
+        "emoji": "рџ¤’",
+        "unified": "1f912",
+        "name": "ill face sick thermometer face with thermometer"
+      },
+      {
+        "emoji": "рџ¤•",
+        "unified": "1f915",
+        "name": "face hurt injury bandage face with head bandage"
+      },
+      {
+        "emoji": "рџ¤ў",
+        "unified": "1f922",
+        "name": "face vomit nauseated nauseated face"
+      },
+      {
+        "emoji": "рџ¤®",
+        "unified": "1f92e",
+        "name": "puke sick vomit face vomiting"
+      },
+      {
+        "emoji": "рџҐґ",
+        "unified": "1f974",
+        "name": "dizzy tipsy woozy face wavy mouth intoxicated uneven eyes"
+      },
+      {
+        "emoji": "рџ¤Ї",
+        "unified": "1f92f",
+        "name": "shocked mind blown exploding head"
+      },
+      {
+        "emoji": "рџҐі",
+        "unified": "1f973",
+        "name": "hat horn party celebration partying face"
+      },
+      {
+        "emoji": "рџі",
+        "unified": "1f633",
+        "name": "face dazed flushed flushed face"
+      },
+      {
+        "emoji": "рџҐ±",
+        "unified": "1f971",
+        "name": "yawn bored tired yawning face"
+      },
+      {
+        "emoji": "рџ¤",
+        "unified": "1f624",
+        "name": "won face triumph face with steam from nose"
+      },
+      {
+        "emoji": "рџЎ",
+        "unified": "1f621",
+        "name": "mad red face rage angry enraged pouting enraged face"
+      },
+      {
+        "emoji": "рџ ",
+        "unified": "1f620",
+        "name": "mad face anger angry angry face"
+      },
+      {
+        "emoji": "рџ’Ђ",
+        "unified": "1f480",
+        "name": "face skull death monster fairy tale"
+      },
+      {
+        "emoji": "рџ’©",
+        "unified": "1f4a9",
+        "name": "poo dung face poop monster pile of poo"
+      },
+      {
+        "emoji": "рџ’",
+        "unified": "1f498",
+        "name": "arrow cupid heart with arrow"
+      },
+      {
+        "emoji": "рџ’ќ",
+        "unified": "1f49d",
+        "name": "ribbon valentine heart with ribbon"
+      },
+      {
+        "emoji": "рџ’–",
+        "unified": "1f496",
+        "name": "excited sparkle sparkling heart"
+      },
+      {
+        "emoji": "рџ’—",
+        "unified": "1f497",
+        "name": "pulse excited growing nervous growing heart"
+      },
+      {
+        "emoji": "рџ’“",
+        "unified": "1f493",
+        "name": "beating heartbeat pulsating beating heart"
+      },
+      {
+        "emoji": "рџ’ћ",
+        "unified": "1f49e",
+        "name": "revolving revolving hearts"
+      },
+      {
+        "emoji": "рџ’•",
+        "unified": "1f495",
+        "name": "love two hearts"
+      },
+      {
+        "emoji": "рџ’џ",
+        "unified": "1f49f",
+        "name": "heart heart decoration"
+      },
+      {
+        "emoji": "рџ’”",
+        "unified": "1f494",
+        "name": "break broken broken heart"
+      },
+      {
+        "emoji": "рџ§Ў",
+        "unified": "1f9e1",
+        "name": "orange orange heart"
+      },
+      {
+        "emoji": "рџ’›",
+        "unified": "1f49b",
+        "name": "yellow yellow heart"
+      },
+      {
+        "emoji": "рџ’љ",
+        "unified": "1f49a",
+        "name": "green green heart"
+      },
+      {
+        "emoji": "рџ’™",
+        "unified": "1f499",
+        "name": "blue blue heart"
+      },
+      {
+        "emoji": "рџ’њ",
+        "unified": "1f49c",
+        "name": "purple purple heart"
+      },
+      {
+        "emoji": "рџ¤Ћ",
+        "unified": "1f90e",
+        "name": "brown heart brown heart"
+      },
+      {
+        "emoji": "рџ–¤",
+        "unified": "1f5a4",
+        "name": "evil black wicked black heart"
+      },
+      {
+        "emoji": "рџ¤Ќ",
+        "unified": "1f90d",
+        "name": "heart white white heart"
+      }
+    ]
+  },
+  "Р СѓРєРё": {
+    "icon": "рџ‘Ќ",
+    "emojis": [
+      {
+        "emoji": "рџ‘Ќ",
+        "unified": "1f44d",
+        "name": "thumbs up ok good"
+      },
+      {
+        "emoji": "рџ‘Ћ",
+        "unified": "1f44e",
+        "name": "thumbs down bad disapprove"
+      },
+      {
+        "emoji": "вњЊпёЏ",
+        "unified": "270c",
+        "name": "victory peace hand sign"
+      },
+      {
+        "emoji": "рџ¤ћ",
+        "unified": "1f91e",
+        "name": "crossed fingers luck hope"
+      },
+      {
+        "emoji": "рџ¤џ",
+        "unified": "1f91f",
+        "name": "love you gesture ily"
+      },
+      {
+        "emoji": "рџ¤",
+        "unified": "1f918",
+        "name": "sign of the horns rock on"
+      },
+      {
+        "emoji": "рџ¤™",
+        "unified": "1f919",
+        "name": "call me hand call phone"
+      },
+      {
+        "emoji": "рџ‘€",
+        "unified": "1f448",
+        "name": "point left index backhand"
+      },
+      {
+        "emoji": "рџ‘‰",
+        "unified": "1f449",
+        "name": "point right index backhand"
+      },
+      {
+        "emoji": "рџ‘†",
+        "unified": "1f446",
+        "name": "point up index backhand"
+      },
+      {
+        "emoji": "рџ‘‡",
+        "unified": "1f447",
+        "name": "point down index backhand"
+      },
+      {
+        "emoji": "вќпёЏ",
+        "unified": "261d",
+        "name": "index pointing up hand"
+      },
+      {
+        "emoji": "вњ‹",
+        "unified": "1f44b",
+        "name": "raised hand stop high five"
+      },
+      {
+        "emoji": "рџ¤љ",
+        "unified": "1f91a",
+        "name": "raised back of hand high five"
+      },
+      {
+        "emoji": "рџ–ђпёЏ",
+        "unified": "1f590",
+        "name": "hand fingers splayed spread"
+      },
+      {
+        "emoji": "рџ––",
+        "unified": "1f596",
+        "name": "vulcan salute star trek spock"
+      },
+      {
+        "emoji": "рџ‘‹",
+        "unified": "1f44b",
+        "name": "wave goodbye hello hand"
+      },
+      {
+        "emoji": "рџ¤Џ",
+        "unified": "1f90f",
+        "name": "pinch small amount little"
+      },
+      {
+        "emoji": "рџ‘Њ",
+        "unified": "1f44c",
+        "name": "ok hand perfect good"
+      },
+      {
+        "emoji": "рџ¤Њ",
+        "unified": "1f90c",
+        "name": "fingers Italian gesture pinch"
+      },
+      {
+        "emoji": "рџ’Є",
+        "unified": "1f4aa",
+        "name": "bicep flex strong muscle"
+      },
+      {
+        "emoji": "рџ¤і",
+        "unified": "1f933",
+        "name": "selfie camera phone"
+      },
+      {
+        "emoji": "вњЉ",
+        "unified": "270a",
+        "name": "raised fist power solidarity"
+      },
+      {
+        "emoji": "рџ‘Љ",
+        "unified": "1f44a",
+        "name": "fist punch hi five"
+      },
+      {
+        "emoji": "рџ¤›",
+        "unified": "1f91b",
+        "name": "fist left facing hand"
+      },
+      {
+        "emoji": "рџ¤њ",
+        "unified": "1f91c",
+        "name": "fist right facing hand"
+      },
+      {
+        "emoji": "рџ‘Џ",
+        "unified": "1f44f",
+        "name": "clap hands applause bravo"
+      },
+      {
+        "emoji": "рџ™Њ",
+        "unified": "1f64c",
+        "name": "raising hands celebration yay"
+      },
+      {
+        "emoji": "рџ‘ђ",
+        "unified": "1f450",
+        "name": "open hands hands embrace"
+      },
+      {
+        "emoji": "рџ¤ќ",
+        "unified": "1f91d",
+        "name": "handshake deal agreement"
+      },
+      {
+        "emoji": "вњЌпёЏ",
+        "unified": "270d",
+        "name": "writing hand pen write"
+      }
+    ]
+  }
+}

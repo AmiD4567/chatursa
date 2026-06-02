@@ -1,0 +1,528 @@
+/* ============================================
+   Emoji Inline Picker — компактный поппер справа
+   Без поиска, над полем ввода
+   ============================================ */
+
+/* ---------- Контейнер поппера ---------- */
+.emoji-inline-picker {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
+  left: auto;
+  width: 340px;
+  max-height: 420px;
+  border-radius: 16px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  z-index: 10000;
+}
+
+/* ---------- Тёмная тема (по умолчанию) ---------- */
+.emoji-inline-picker.dark {
+  background: var(--bg-secondary);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+
+/* ---------- Светлая тема ---------- */
+.emoji-inline-picker.light {
+  background: #ffffff;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(0, 0, 0, 0.06);
+}
+
+/* ---------- Верхняя панель: Смайлы / Стикеры ---------- */
+.eip-top-bar {
+  display: flex;
+  padding: 6px 8px 0;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.eip-mode-btn {
+  flex: 1;
+  padding: 6px 12px;
+  border: none;
+  border-radius: 8px 8px 0 0;
+  background: transparent;
+  color: var(--text-tertiary, #888);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.15s ease;
+}
+
+.eip-mode-btn:hover {
+  color: var(--text-color, #ddd);
+  background: var(--hover-bg, rgba(255,255,255,0.06));
+}
+
+.eip-mode-btn.active {
+  color: var(--text-color, #eee);
+  background: var(--bg-secondary);
+  border-bottom: 2px solid var(--primary-color, #667eea);
+}
+
+/* ---------- Категории ---------- */
+.eip-categories {
+  display: flex;
+  gap: 2px;
+  padding: 8px 10px 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+  z-index: 2;
+}
+
+.eip-categories::-webkit-scrollbar {
+  display: none;
+}
+
+.eip-category-btn {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  border: none;
+  background: transparent;
+  font-size: 18px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+
+.eip-category-btn:hover {
+  background: var(--hover-bg);
+  transform: scale(1.15);
+}
+
+.eip-category-btn.active {
+  background: var(--primary-color);
+  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.35);
+  transform: scale(1.1);
+}
+
+/* ---------- Сетка эмодзи ---------- */
+.eip-grid {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 10px;
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 2px;
+  align-content: start;
+  scrollbar-width: thin;
+  scrollbar-color: var(--bg-tertiary) transparent;
+  min-height: 0;
+}
+
+.eip-grid::-webkit-scrollbar {
+  width: 4px;
+}
+
+.eip-grid::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.eip-grid::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+}
+
+.emoji-inline-picker.light .eip-grid::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+}
+
+/* ---------- Кнопка эмодзи ---------- */
+.eip-emoji-btn {
+  width: 38px;
+  height: 38px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.12s ease;
+  position: relative;
+}
+
+.eip-emoji-btn img {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+  pointer-events: none;
+  image-rendering: auto;
+}
+
+.eip-emoji-btn:hover {
+  background: var(--hover-bg);
+  transform: scale(1.25);
+  z-index: 1;
+}
+
+.eip-emoji-btn:active {
+  transform: scale(0.95);
+}
+
+
+
+/* ---------- Анимация появления (pop) ---------- */
+@keyframes eip-pop {
+  0% {
+    opacity: 0;
+    transform: translateY(10px) scale(0.85);
+  }
+  60% {
+    opacity: 1;
+    transform: translateY(-2px) scale(1.03);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.emoji-inline-picker.pop-in {
+  animation: eip-pop 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+/* ---------- Адаптив для узких экранов ---------- */
+@media (max-width: 480px) {
+  .emoji-inline-picker {
+    width: calc(100vw - 32px);
+    right: 16px;
+    left: auto;
+    transform: scale(0.92);
+    bottom: calc(100% + 8px);
+  }
+
+  .emoji-inline-picker.visible {
+    transform: scale(1);
+  }
+
+  .eip-emoji-btn {
+    width: 34px;
+    height: 34px;
+  }
+
+  .eip-emoji-btn img {
+    width: 20px;
+    height: 20px;
+  }
+
+  .eip-grid {
+    grid-template-columns: repeat(7, 1fr);
+  }
+}
+
+/* ---------- Стили для contentEditable при фокусе ---------- */
+.message-input-contenteditable:focus-within + .message-actions .emoji-btn-send::after,
+.message-form-main:focus-within .emoji-inline-picker {
+  /* Подсвечиваем поппер когда поле ввода в фокусе */
+}
+
+/* ---------- Убираем старую боковую панель полностью ---------- */
+.emoji-sidebar,
+.emoji-sidebar-content {
+  display: none !important;
+}
+
+/* ---------- Убираем отступы от старой логики panel-open ---------- */
+.message-form-main.emoji-panel-open {
+  padding-right: 0 !important;
+}
+
+.chat-main.emoji-panel-open {
+  margin-right: 0 !important;
+}
+
+/* ============================================
+   Стикеры — новые стили
+   ============================================ */
+
+/* ---------- Вкладки категорий стикеров ---------- */
+.eip-stickers-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 10px 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.eip-stickers-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.eip-sticker-tab-btn {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  border: none;
+  background: transparent;
+  font-size: 20px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+
+.eip-sticker-tab-btn:hover {
+  background: var(--hover-bg);
+  transform: scale(1.15);
+}
+
+.eip-sticker-tab-btn.active {
+  background: var(--primary-color);
+  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.35);
+  transform: scale(1.1);
+}
+
+/* ---------- Сетка стикеров ---------- */
+.eip-sticker-grid {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  align-content: start;
+  scrollbar-width: thin;
+  scrollbar-color: var(--bg-tertiary) transparent;
+  min-height: 0;
+}
+
+.eip-sticker-grid::-webkit-scrollbar {
+  width: 4px;
+}
+
+.eip-sticker-grid::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.eip-sticker-grid::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+}
+
+.emoji-inline-picker.light .eip-sticker-grid::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+}
+
+/* ---------- Кнопка стикера ---------- */
+.eip-sticker-btn {
+  width: 64px;
+  height: 64px;
+  border-radius: 12px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+  position: relative;
+}
+
+.eip-sticker-btn:hover {
+  background: var(--hover-bg);
+  transform: scale(1.15);
+  z-index: 1;
+}
+
+.eip-sticker-btn:active {
+  transform: scale(0.95);
+}
+
+.eip-sticker-img {
+  border-radius: 8px;
+  pointer-events: none;
+  user-select: none;
+}
+
+.eip-sticker-variants {
+  display: flex;
+  gap: 4px;
+  padding: 8px 8px 0;
+}
+
+.eip-sticker-variant-btn {
+  flex: 1;
+  padding: 4px 8px;
+  border: 1px solid var(--border-color, #444);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-color, #ddd);
+  cursor: pointer;
+  font-size: 12px;
+  transition: all 0.15s ease;
+}
+
+.eip-sticker-variant-btn:hover {
+  background: var(--hover-bg, rgba(255,255,255,0.1));
+}
+
+.eip-sticker-variant-btn.active {
+  background: var(--accent-color, #4a9eff);
+  color: #fff;
+  border-color: var(--accent-color, #4a9eff);
+}
+
+/* ---------- Анимации стикеров ---------- */
+.sticker-anim {
+  display: inline-block;
+  line-height: 1;
+  user-select: none;
+  pointer-events: none;
+}
+
+/* Пульсация */
+@keyframes stickerPulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.2); }
+}
+.sticker-pulse { animation: stickerPulse 1s ease-in-out infinite; }
+
+/* Прыжки */
+@keyframes stickerBounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+.sticker-bounce { animation: stickerBounce 0.6s ease-in-out infinite; }
+
+/* Покачивание */
+@keyframes stickerWobble {
+  0%, 100% { transform: rotate(0deg); }
+  25% { transform: rotate(-10deg); }
+  75% { transform: rotate(10deg); }
+}
+.sticker-wobble { animation: stickerWobble 0.8s ease-in-out infinite; }
+
+/* Битие сердца */
+@keyframes stickerHeartbeat {
+  0%, 100% { transform: scale(1); }
+  15% { transform: scale(1.25); }
+  30% { transform: scale(1); }
+  45% { transform: scale(1.15); }
+}
+.sticker-heartbeat { animation: stickerHeartbeat 1.2s ease-in-out infinite; }
+
+/* Конфетти */
+@keyframes stickerConfetti {
+  0%, 100% { transform: rotate(0deg) scale(1); }
+  25% { transform: rotate(-15deg) scale(1.1); }
+  75% { transform: rotate(15deg) scale(1.1); }
+}
+.sticker-confetti { animation: stickerConfetti 0.7s ease-in-out infinite; }
+
+/* Огонь */
+@keyframes stickerFire {
+  0%, 100% { transform: scale(1) translateY(0); filter: brightness(1); }
+  50% { transform: scale(1.15) translateY(-4px); filter: brightness(1.3); }
+}
+.sticker-fire { animation: stickerFire 0.8s ease-in-out infinite; }
+
+/* Плавание вверх */
+@keyframes stickerFloat {
+  0%, 100% { transform: translateY(0) scale(1); opacity: 1; }
+  50% { transform: translateY(-6px) scale(1.08); opacity: 0.85; }
+}
+.sticker-float { animation: stickerFloat 2s ease-in-out infinite; }
+
+/* Мерцание */
+@keyframes stickerTwinkle {
+  0%, 100% { transform: scale(1); opacity: 1; filter: brightness(1); }
+  50% { transform: scale(1.3); opacity: 0.7; filter: brightness(1.5); }
+}
+.sticker-twinkle { animation: stickerTwinkle 1s ease-in-out infinite; }
+
+/* Тряска */
+@keyframes stickerShake {
+  0%, 100% { transform: translateX(0); }
+  10%, 30%, 50%, 70%, 90% { transform: translateX(-3px); }
+  20%, 40%, 60%, 80% { transform: translateX(3px); }
+}
+.sticker-shake { animation: stickerShake 0.6s ease-in-out infinite; }
+
+/* Вращение */
+@keyframes stickerSpin {
+  0% { transform: rotate(0deg) scale(1); }
+  50% { transform: rotate(180deg) scale(1.2); }
+  100% { transform: rotate(360deg) scale(1); }
+}
+.sticker-spin { animation: stickerSpin 2s linear infinite; }
+
+/* Хлопки */
+@keyframes stickerClap {
+  0%, 100% { transform: scaleX(1); }
+  50% { transform: scaleX(1.2) scaleY(0.9); }
+}
+.sticker-clap { animation: stickerClap 0.5s ease-in-out infinite; }
+
+/* Волна */
+@keyframes stickerWave {
+  0%, 100% { transform: rotate(0deg); }
+  25% { transform: rotate(-20deg); }
+  75% { transform: rotate(20deg); }
+}
+.sticker-wave { animation: stickerWave 0.8s ease-in-out infinite; }
+
+/* ---------- Футер ---------- */
+.eip-footer {
+  padding: 6px 14px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  text-align: center;
+  border-top: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+/* ---------- Адаптив для узких экранов ---------- */
+@media (max-width: 480px) {
+  .emoji-inline-picker {
+    width: calc(100vw - 32px);
+    right: 16px;
+    left: auto;
+    transform: scale(0.92);
+    bottom: calc(100% + 8px);
+  }
+
+  .emoji-inline-picker.visible {
+    transform: scale(1);
+  }
+
+  .eip-emoji-btn {
+    width: 34px;
+    height: 34px;
+  }
+
+  .eip-emoji-btn img {
+    width: 20px;
+    height: 20px;
+  }
+
+  .eip-grid {
+    grid-template-columns: repeat(7, 1fr);
+  }
+
+  /* Стикеры на мобильных */
+  .eip-sticker-grid {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+    padding: 8px;
+  }
+
+  .eip-sticker-btn {
+    width: 72px;
+    height: 72px;
+  }
+}

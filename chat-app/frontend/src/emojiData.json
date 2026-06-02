@@ -1,0 +1,2498 @@
+{
+  "Популярные": {
+    "icon": "🔥",
+    "emojis": [
+      { "emoji": "😂", "name": "joy face with tears of joy" },
+      { "emoji": "❤️", "name": "red heart" },
+      { "emoji": "🔥", "name": "fire" },
+      { "emoji": "😍", "name": "smiling face with heart eyes" },
+      { "emoji": "🤣", "name": "rolling on the floor laughing" },
+      { "emoji": "😭", "name": "loudly crying face" },
+      { "emoji": "😊", "name": "smiling face with smiling eyes" },
+      { "emoji": "👍", "name": "thumbs up" },
+      { "emoji": "👏", "name": "clapping hands" },
+      { "emoji": "🙏", "name": "folded hands" },
+      { "emoji": "😒", "name": "unamused face" },
+      { "emoji": "😏", "name": "smirking face" },
+      { "emoji": "😩", "name": "weary face" },
+      { "emoji": "😅", "name": "grinning face with sweat" },
+      { "emoji": "😘", "name": "face blowing a kiss" },
+      { "emoji": "🥰", "name": "smiling face with hearts" },
+      { "emoji": "😁", "name": "beaming face with smiling eyes" },
+      { "emoji": "😎", "name": "smiling face with sunglasses" },
+      { "emoji": "💀", "name": "skull" },
+      { "emoji": "🤔", "name": "thinking face" },
+      { "emoji": "🫡", "name": "saluting face" },
+      { "emoji": "✨", "name": "sparkles" },
+      { "emoji": "💯", "name": "hundred points" },
+      { "emoji": "💪", "name": "flexed biceps" },
+      { "emoji": "🎉", "name": "party popper" },
+      { "emoji": "🥺", "name": "pleading face" },
+      { "emoji": "😢", "name": "crying face" },
+      { "emoji": "😤", "name": "face with steam from nose" },
+      { "emoji": "😡", "name": "pouting face" },
+      { "emoji": "🤗", "name": "hugging face" },
+      { "emoji": "🤩", "name": "star struck" },
+      { "emoji": "🙄", "name": "face with rolling eyes" },
+      { "emoji": "😴", "name": "sleeping face" },
+      { "emoji": "😋", "name": "face savoring food" },
+      { "emoji": "😜", "name": "winking face with tongue" },
+      { "emoji": "🥳", "name": "partying face" },
+      { "emoji": "😱", "name": "face screaming in fear" },
+      { "emoji": "🤯", "name": "exploding head" },
+      { "emoji": "🫶", "name": "heart hands" },
+      { "emoji": "👀", "name": "eyes" },
+      { "emoji": "🤝", "name": "handshake" },
+      { "emoji": "💅", "name": "nail polish" },
+      { "emoji": "👑", "name": "crown" },
+      { "emoji": "⭐", "name": "star" },
+      { "emoji": "🌸", "name": "cherry blossom" },
+      { "emoji": "✅", "name": "check mark button" },
+      { "emoji": "💕", "name": "two hearts" },
+      { "emoji": "💋", "name": "kiss mark" },
+      { "emoji": "🤡", "name": "clown face" },
+      { "emoji": "👋", "name": "waving hand" }
+    ]
+  },
+  "Смайлы": {
+    "icon": "😀",
+    "emojis": [
+      {
+        "emoji": "😀",
+        "name": "face grin grinning face"
+      },
+      {
+        "emoji": "😃",
+        "name": "face open mouth smile grinning face with big eyes"
+      },
+      {
+        "emoji": "😄",
+        "name": "eye face open mouth smile grinning face with smiling eyes"
+      },
+      {
+        "emoji": "😁",
+        "name": "eye face grin smile beaming face with smiling eyes"
+      },
+      {
+        "emoji": "😆",
+        "name": "face laugh mouth smile satisfied grinning squinting face"
+      },
+      {
+        "emoji": "😅",
+        "name": "cold face open smile sweat grinning face with sweat"
+      },
+      {
+        "emoji": "🤣",
+        "name": "face rofl floor laugh rotfl rolling rolling on the floor laughing"
+      },
+      {
+        "emoji": "😂",
+        "name": "joy face tear laugh face with tears of joy"
+      },
+      {
+        "emoji": "🙂",
+        "name": "face smile slightly smiling face"
+      },
+      {
+        "emoji": "🙃",
+        "name": "face upside down upside down face"
+      },
+      {
+        "emoji": "🫠",
+        "name": "melt liquid dissolve disappear melting face"
+      },
+      {
+        "emoji": "😉",
+        "name": "face wink winking face"
+      },
+      {
+        "emoji": "😊",
+        "name": "eye face blush smile smiling face with smiling eyes"
+      },
+      {
+        "emoji": "😇",
+        "name": "face halo angel fantasy innocent smiling face with halo"
+      },
+      {
+        "emoji": "🥰",
+        "name": "adore crush hearts in love smiling face with hearts"
+      },
+      {
+        "emoji": "😍",
+        "name": "eye face love smile smiling face with heart eyes"
+      },
+      {
+        "emoji": "🤩",
+        "name": "eyes face star grinning star struck"
+      },
+      {
+        "emoji": "😘",
+        "name": "face kiss face blowing a kiss"
+      },
+      {
+        "emoji": "😗",
+        "name": "face kiss kissing face"
+      },
+      {
+        "emoji": "☺",
+        "name": "face smile relaxed outlined smiling face"
+      },
+      {
+        "emoji": "😚",
+        "name": "eye face kiss closed kissing face with closed eyes"
+      },
+      {
+        "emoji": "😙",
+        "name": "eye face kiss smile kissing face with smiling eyes"
+      },
+      {
+        "emoji": "🥲",
+        "name": "tear proud smiling touched grateful relieved smiling face with tear"
+      },
+      {
+        "emoji": "😋",
+        "name": "yum face smile delicious savouring face savoring food"
+      },
+      {
+        "emoji": "😛",
+        "name": "face tongue face with tongue"
+      },
+      {
+        "emoji": "😜",
+        "name": "eye face joke wink tongue winking face with tongue"
+      },
+      {
+        "emoji": "🤪",
+        "name": "eye goofy large small zany face"
+      },
+      {
+        "emoji": "😝",
+        "name": "eye face taste tongue horrible squinting face with tongue"
+      },
+      {
+        "emoji": "🤑",
+        "name": "face money mouth money mouth face"
+      },
+      {
+        "emoji": "🤗",
+        "name": "hug face hugging open hands smiling face smiling face with open hands"
+      },
+      {
+        "emoji": "🫣",
+        "name": "peep stare captivated face with peeking eye"
+      },
+      {
+        "emoji": "🤫",
+        "name": "quiet shush shushing face"
+      },
+      {
+        "emoji": "🤔",
+        "name": "face thinking thinking face"
+      },
+      {
+        "emoji": "🫡",
+        "name": "ok yes sunny salute troops saluting face"
+      },
+      {
+        "emoji": "🤐",
+        "name": "zip face mouth zipper zipper mouth face"
+      },
+      {
+        "emoji": "🤨",
+        "name": "skeptic distrust face with raised eyebrow"
+      },
+      {
+        "emoji": "😐",
+        "name": "meh face deadpan neutral neutral face"
+      },
+      {
+        "emoji": "😑",
+        "name": "meh face inexpressive unexpressive expressionless expressionless face"
+      },
+      {
+        "emoji": "😶",
+        "name": "face mouth quiet silent face without mouth"
+      },
+      {
+        "emoji": "🫥",
+        "name": "hide depressed disappear introvert invisible dotted line face"
+      },
+      {
+        "emoji": "😶",
+        "name": "absentminded face in clouds head in clouds face in the fog"
+      },
+      {
+        "emoji": "😏",
+        "name": "face smirk smirking face"
+      },
+      {
+        "emoji": "😒",
+        "name": "face unhappy unamused unamused face"
+      },
+      {
+        "emoji": "🙄",
+        "name": "eyes face eyeroll rolling face with rolling eyes"
+      },
+      {
+        "emoji": "😬",
+        "name": "face grimace grimacing face"
+      },
+      {
+        "emoji": "😮",
+        "name": "gasp groan exhale relief whisper whistle face exhaling"
+      },
+      {
+        "emoji": "🤥",
+        "name": "lie face pinocchio lying face"
+      },
+      {
+        "emoji": "🫨",
+        "name": "face shock shaking vibrate earthquake shaking face"
+      },
+      {
+        "emoji": "🙂",
+        "name": "no shake head shaking horizontally"
+      },
+      {
+        "emoji": "🙂",
+        "name": "nod yes head shaking vertically"
+      },
+      {
+        "emoji": "😌",
+        "name": "face relieved relieved face"
+      },
+      {
+        "emoji": "😔",
+        "name": "face pensive dejected pensive face"
+      },
+      {
+        "emoji": "😪",
+        "name": "face sleep good night sleepy face"
+      },
+      {
+        "emoji": "🤤",
+        "name": "face drooling drooling face"
+      },
+      {
+        "emoji": "😴",
+        "name": "zzz face sleep good night sleeping face"
+      },
+      {
+        "emoji": "😷",
+        "name": "cold face mask sick doctor face with medical mask"
+      },
+      {
+        "emoji": "🤒",
+        "name": "ill face sick thermometer face with thermometer"
+      },
+      {
+        "emoji": "🤕",
+        "name": "face hurt injury bandage face with head bandage"
+      },
+      {
+        "emoji": "🤢",
+        "name": "face vomit nauseated nauseated face"
+      },
+      {
+        "emoji": "🤮",
+        "name": "puke sick vomit face vomiting"
+      },
+      {
+        "emoji": "🤧",
+        "name": "face sneeze gesundheit sneezing face"
+      },
+      {
+        "emoji": "🥵",
+        "name": "hot hot face feverish sweating red faced heat stroke"
+      },
+      {
+        "emoji": "🥶",
+        "name": "cold icicles freezing cold face frostbite blue faced"
+      },
+      {
+        "emoji": "🥴",
+        "name": "dizzy tipsy woozy face wavy mouth intoxicated uneven eyes"
+      },
+      {
+        "emoji": "😵",
+        "name": "dead face knocked out crossed out eyes face with crossed out eyes"
+      },
+      {
+        "emoji": "😵",
+        "name": "whoa dizzy spiral trouble hypnotized face with spiral eyes"
+      },
+      {
+        "emoji": "🤯",
+        "name": "shocked mind blown exploding head"
+      },
+      {
+        "emoji": "🤠",
+        "name": "hat face cowboy cowgirl cowboy hat face"
+      },
+      {
+        "emoji": "🥳",
+        "name": "hat horn party celebration partying face"
+      },
+      {
+        "emoji": "🥸",
+        "name": "face nose glasses disguise incognito disguised face"
+      },
+      {
+        "emoji": "😎",
+        "name": "sun cool face bright sunglasses smiling face with sunglasses"
+      },
+      {
+        "emoji": "🤓",
+        "name": "face geek nerd nerd face"
+      },
+      {
+        "emoji": "🧐",
+        "name": "face stuffy monocle face with monocle"
+      },
+      {
+        "emoji": "😕",
+        "name": "meh face confused confused face"
+      },
+      {
+        "emoji": "🫤",
+        "name": "meh unsure skeptical disappointed face with diagonal mouth"
+      },
+      {
+        "emoji": "😟",
+        "name": "face worried worried face"
+      },
+      {
+        "emoji": "🙁",
+        "name": "face frown slightly frowning face"
+      },
+      {
+        "emoji": "☹",
+        "name": "face frown frowning face"
+      },
+      {
+        "emoji": "😮",
+        "name": "face open mouth sympathy face with open mouth"
+      },
+      {
+        "emoji": "😯",
+        "name": "face hushed stunned surprised hushed face"
+      },
+      {
+        "emoji": "😲",
+        "name": "face shocked totally astonished astonished face"
+      },
+      {
+        "emoji": "😳",
+        "name": "face dazed flushed flushed face"
+      },
+      {
+        "emoji": "🥺",
+        "name": "mercy begging puppy eyes pleading face"
+      },
+      {
+        "emoji": "🥹",
+        "name": "cry sad angry proud resist face holding back tears"
+      },
+      {
+        "emoji": "😦",
+        "name": "face open frown mouth frowning face with open mouth"
+      },
+      {
+        "emoji": "😧",
+        "name": "face anguished anguished face"
+      },
+      {
+        "emoji": "😨",
+        "name": "face fear scared fearful fearful face"
+      },
+      {
+        "emoji": "😰",
+        "name": "blue cold face sweat rushed anxious face with sweat"
+      },
+      {
+        "emoji": "😥",
+        "name": "face whew relieved disappointed sad but relieved face"
+      },
+      {
+        "emoji": "😢",
+        "name": "cry sad face tear crying face"
+      },
+      {
+        "emoji": "😭",
+        "name": "cry sad sob face tear loudly crying face"
+      },
+      {
+        "emoji": "😱",
+        "name": "face fear munch scared scream face screaming in fear"
+      },
+      {
+        "emoji": "😖",
+        "name": "face confounded confounded face"
+      },
+      {
+        "emoji": "😣",
+        "name": "face persevere persevering face"
+      },
+      {
+        "emoji": "😞",
+        "name": "face disappointed disappointed face"
+      },
+      {
+        "emoji": "😓",
+        "name": "cold face sweat downcast face with sweat"
+      },
+      {
+        "emoji": "😩",
+        "name": "face tired weary weary face"
+      },
+      {
+        "emoji": "😫",
+        "name": "face tired tired face"
+      },
+      {
+        "emoji": "🥱",
+        "name": "yawn bored tired yawning face"
+      },
+      {
+        "emoji": "😤",
+        "name": "won face triumph face with steam from nose"
+      },
+      {
+        "emoji": "😡",
+        "name": "mad red face rage angry enraged pouting enraged face"
+      },
+      {
+        "emoji": "😠",
+        "name": "mad face anger angry angry face"
+      },
+      {
+        "emoji": "🤬",
+        "name": "swearing face with symbols on mouth"
+      },
+      {
+        "emoji": "😈",
+        "name": "face horns smile fantasy fairy tale smiling face with horns"
+      },
+      {
+        "emoji": "👿",
+        "name": "imp face demon devil fantasy angry face with horns"
+      },
+      {
+        "emoji": "💀",
+        "name": "face skull death monster fairy tale"
+      },
+      {
+        "emoji": "☠",
+        "name": "face death skull monster crossbones skull and crossbones"
+      },
+      {
+        "emoji": "💩",
+        "name": "poo dung face poop monster pile of poo"
+      },
+      {
+        "emoji": "🤡",
+        "name": "face clown clown face"
+      },
+      {
+        "emoji": "👹",
+        "name": "ogre face fantasy monster creature fairy tale"
+      },
+      {
+        "emoji": "👺",
+        "name": "face goblin fantasy monster creature fairy tale"
+      },
+      {
+        "emoji": "👻",
+        "name": "face ghost fantasy monster creature fairy tale"
+      },
+      {
+        "emoji": "👽",
+        "name": "ufo face alien fantasy creature extraterrestrial"
+      },
+      {
+        "emoji": "👾",
+        "name": "ufo face alien monster creature alien monster extraterrestrial"
+      },
+      {
+        "emoji": "🤖",
+        "name": "face robot monster"
+      },
+      {
+        "emoji": "😺",
+        "name": "cat face open mouth smile grinning grinning cat"
+      },
+      {
+        "emoji": "😸",
+        "name": "cat eye face grin smile grinning cat with smiling eyes"
+      },
+      {
+        "emoji": "😹",
+        "name": "cat joy face tear cat with tears of joy"
+      },
+      {
+        "emoji": "😻",
+        "name": "cat eye face love heart smile smiling cat with heart eyes"
+      },
+      {
+        "emoji": "😼",
+        "name": "cat wry face smile ironic cat with wry smile"
+      },
+      {
+        "emoji": "😽",
+        "name": "cat eye face kiss kissing cat"
+      },
+      {
+        "emoji": "🙀",
+        "name": "oh cat face weary weary cat surprised"
+      },
+      {
+        "emoji": "😿",
+        "name": "cat cry sad face tear crying cat"
+      },
+      {
+        "emoji": "😾",
+        "name": "cat face pouting pouting cat"
+      },
+      {
+        "emoji": "🙈",
+        "name": "see evil face monkey forbidden see no evil monkey"
+      },
+      {
+        "emoji": "🙉",
+        "name": "evil face hear monkey forbidden hear no evil monkey"
+      },
+      {
+        "emoji": "🙊",
+        "name": "evil face speak monkey forbidden speak no evil monkey"
+      },
+      {
+        "emoji": "💌",
+        "name": "love mail heart letter love letter"
+      },
+      {
+        "emoji": "💘",
+        "name": "arrow cupid heart with arrow"
+      },
+      {
+        "emoji": "💝",
+        "name": "ribbon valentine heart with ribbon"
+      },
+      {
+        "emoji": "💖",
+        "name": "excited sparkle sparkling heart"
+      },
+      {
+        "emoji": "💗",
+        "name": "pulse excited growing nervous growing heart"
+      },
+      {
+        "emoji": "💓",
+        "name": "beating heartbeat pulsating beating heart"
+      },
+      {
+        "emoji": "💞",
+        "name": "revolving revolving hearts"
+      },
+      {
+        "emoji": "💕",
+        "name": "love two hearts"
+      },
+      {
+        "emoji": "💟",
+        "name": "heart heart decoration"
+      },
+      {
+        "emoji": "❣",
+        "name": "mark exclamation punctuation heart exclamation"
+      },
+      {
+        "emoji": "💔",
+        "name": "break broken broken heart"
+      },
+      {
+        "emoji": "❤",
+        "name": "burn love lust heart sacred heart heart on fire"
+      },
+      {
+        "emoji": "❤",
+        "name": "well mending healthier improving recovering recuperating mending heart"
+      },
+      {
+        "emoji": "❤",
+        "name": "heart red heart"
+      },
+      {
+        "emoji": "🩷",
+        "name": "cute like love pink heart pink heart"
+      },
+      {
+        "emoji": "🧡",
+        "name": "orange orange heart"
+      },
+      {
+        "emoji": "💛",
+        "name": "yellow yellow heart"
+      },
+      {
+        "emoji": "💚",
+        "name": "green green heart"
+      },
+      {
+        "emoji": "💙",
+        "name": "blue blue heart"
+      },
+      {
+        "emoji": "🩵",
+        "name": "cyan teal heart light blue light blue heart"
+      },
+      {
+        "emoji": "💜",
+        "name": "purple purple heart"
+      },
+      {
+        "emoji": "🤎",
+        "name": "brown heart brown heart"
+      },
+      {
+        "emoji": "🖤",
+        "name": "evil black wicked black heart"
+      },
+      {
+        "emoji": "🩶",
+        "name": "gray heart slate silver grey heart"
+      },
+      {
+        "emoji": "🤍",
+        "name": "heart white white heart"
+      },
+      {
+        "emoji": "💋",
+        "name": "kiss lips kiss mark"
+      },
+      {
+        "emoji": "💯",
+        "name": "100 full score hundred hundred points"
+      },
+      {
+        "emoji": "💢",
+        "name": "mad angry comic anger symbol"
+      },
+      {
+        "emoji": "💥",
+        "name": "boom comic collision"
+      },
+      {
+        "emoji": "💫",
+        "name": "star dizzy comic"
+      },
+      {
+        "emoji": "💦",
+        "name": "comic sweat splashing sweat droplets"
+      },
+      {
+        "emoji": "💨",
+        "name": "dash comic running dashing away"
+      },
+      {
+        "emoji": "🕳",
+        "name": "hole"
+      },
+      {
+        "emoji": "💬",
+        "name": "comic bubble dialog speech balloon speech balloon"
+      },
+      {
+        "emoji": "👁",
+        "name": "eye bubble speech balloon witness eye in speech bubble"
+      },
+      {
+        "emoji": "🗨",
+        "name": "bubble dialog speech balloon left speech bubble"
+      },
+      {
+        "emoji": "🗯",
+        "name": "mad angry bubble balloon right anger bubble"
+      },
+      {
+        "emoji": "💭",
+        "name": "comic bubble balloon thought thought balloon"
+      },
+      {
+        "emoji": "💤",
+        "name": "ZZZ zzz comic sleep good night"
+      },
+      {
+        "emoji": "🫶🏻",
+        "name": "love heart hands"
+      },
+      {
+        "emoji": "🦾",
+        "name": "prosthetic accessibility mechanical arm"
+      },
+      {
+        "emoji": "🦿",
+        "name": "prosthetic accessibility mechanical leg"
+      },
+      {
+        "emoji": "🦵🏻",
+        "name": "leg kick limb"
+      },
+      {
+        "emoji": "🦶🏻",
+        "name": "foot kick stomp"
+      },
+      {
+        "emoji": "👂🏻",
+        "name": "ear body"
+      },
+      {
+        "emoji": "🦻🏻",
+        "name": "accessibility hard of hearing ear with hearing aid"
+      },
+      {
+        "emoji": "👃🏻",
+        "name": "nose body"
+      },
+      {
+        "emoji": "🧠",
+        "name": "brain intelligent"
+      },
+      {
+        "emoji": "🫀",
+        "name": "heart organ pulse anatomical cardiology anatomical heart"
+      },
+      {
+        "emoji": "🫁",
+        "name": "lungs organ breath exhalation inhalation respiration"
+      },
+      {
+        "emoji": "🦷",
+        "name": "tooth dentist"
+      },
+      {
+        "emoji": "🦴",
+        "name": "bone skeleton"
+      },
+      {
+        "emoji": "👀",
+        "name": "eye eyes face"
+      },
+      {
+        "emoji": "👁",
+        "name": "eye body"
+      },
+      {
+        "emoji": "👅",
+        "name": "body tongue"
+      },
+      {
+        "emoji": "👄",
+        "name": "lips mouth"
+      },
+      {
+        "emoji": "🫦",
+        "name": "fear anxious nervous worried flirting biting lip uncomfortable"
+      },
+      {
+        "emoji": "👶🏻",
+        "name": "baby young"
+      },
+      {
+        "emoji": "🧒🏻",
+        "name": "child young gender neutral unspecified gender"
+      },
+      {
+        "emoji": "👦🏻",
+        "name": "boy young"
+      },
+      {
+        "emoji": "👧🏻",
+        "name": "girl virgo young zodiac"
+      },
+      {
+        "emoji": "🧑🏻",
+        "name": "adult person gender neutral unspecified gender"
+      },
+      {
+        "emoji": "👱🏻",
+        "name": "hair blond person: blond hair blond haired person"
+      },
+      {
+        "emoji": "👨🏻",
+        "name": "man adult"
+      },
+      {
+        "emoji": "🧔🏻",
+        "name": "beard person person: beard"
+      },
+      {
+        "emoji": "🧔🏻‍♂️",
+        "name": "man beard man: beard"
+      },
+      {
+        "emoji": "🧔🏻‍♀️",
+        "name": "beard woman woman: beard"
+      },
+      {
+        "emoji": "👨🏻‍🦰",
+        "name": "man adult red hair man: red hair"
+      },
+      {
+        "emoji": "👨🏻‍🦱",
+        "name": "man adult curly hair man: curly hair"
+      },
+      {
+        "emoji": "👨🏻‍🦳",
+        "name": "man adult white hair man: white hair"
+      },
+      {
+        "emoji": "👨🏻‍🦲",
+        "name": "man bald adult man: bald"
+      },
+      {
+        "emoji": "👩🏻",
+        "name": "woman adult"
+      },
+      {
+        "emoji": "👩🏻‍🦰",
+        "name": "adult woman red hair woman: red hair"
+      },
+      {
+        "emoji": "🧑🏻‍🦰",
+        "name": "adult person red hair gender neutral person: red hair unspecified gender"
+      },
+      {
+        "emoji": "👩🏻‍🦱",
+        "name": "adult woman curly hair woman: curly hair"
+      },
+      {
+        "emoji": "🧑🏻‍🦱",
+        "name": "adult person curly hair gender neutral person: curly hair unspecified gender"
+      },
+      {
+        "emoji": "👩🏻‍🦳",
+        "name": "adult woman white hair woman: white hair"
+      },
+      {
+        "emoji": "🧑🏻‍🦳",
+        "name": "adult person white hair gender neutral person: white hair unspecified gender"
+      },
+      {
+        "emoji": "👩🏻‍🦲",
+        "name": "bald adult woman woman: bald"
+      },
+      {
+        "emoji": "🧑🏻‍🦲",
+        "name": "bald adult person person: bald gender neutral unspecified gender"
+      },
+      {
+        "emoji": "👱🏻‍♀️",
+        "name": "hair woman blonde woman: blond hair blond haired woman"
+      },
+      {
+        "emoji": "👱🏻‍♂️",
+        "name": "man hair blond man: blond hair blond haired man"
+      },
+      {
+        "emoji": "🧓🏻",
+        "name": "old adult older person gender neutral unspecified gender"
+      },
+      {
+        "emoji": "👴🏻",
+        "name": "man old adult old man"
+      },
+      {
+        "emoji": "👵🏻",
+        "name": "old adult woman old woman"
+      },
+      {
+        "emoji": "🙍🏻",
+        "name": "frown gesture person frowning"
+      },
+      {
+        "emoji": "🙍🏻‍♂️",
+        "name": "man gesture frowning man frowning"
+      },
+      {
+        "emoji": "🙍🏻‍♀️",
+        "name": "woman gesture frowning woman frowning"
+      },
+      {
+        "emoji": "🙎🏻",
+        "name": "gesture pouting person pouting"
+      },
+      {
+        "emoji": "🙎🏻‍♂️",
+        "name": "man gesture pouting man pouting"
+      },
+      {
+        "emoji": "🙎🏻‍♀️",
+        "name": "woman gesture pouting woman pouting"
+      },
+      {
+        "emoji": "🧏🏻",
+        "name": "ear deaf hear deaf person accessibility"
+      },
+      {
+        "emoji": "🧏🏻‍♂️",
+        "name": "man deaf deaf man"
+      },
+      {
+        "emoji": "🧏🏻‍♀️",
+        "name": "deaf woman deaf woman"
+      },
+      {
+        "emoji": "🙇🏻",
+        "name": "bow sorry apology gesture person bowing"
+      },
+      {
+        "emoji": "🙇🏻‍♂️",
+        "name": "man favor sorry bowing apology gesture man bowing"
+      },
+      {
+        "emoji": "🙇🏻‍♀️",
+        "name": "favor sorry woman bowing apology gesture woman bowing"
+      },
+      {
+        "emoji": "🤦🏻",
+        "name": "face palm disbelief exasperation person facepalming"
+      },
+      {
+        "emoji": "🤦🏻‍♂️",
+        "name": "man facepalm disbelief exasperation man facepalming"
+      },
+      {
+        "emoji": "🤦🏻‍♀️",
+        "name": "woman facepalm disbelief exasperation woman facepalming"
+      },
+      {
+        "emoji": "🤷🏻",
+        "name": "doubt shrug ignorance indifference person shrugging"
+      },
+      {
+        "emoji": "🤷🏻‍♂️",
+        "name": "man doubt shrug ignorance indifference man shrugging"
+      },
+      {
+        "emoji": "🤷🏻‍♀️",
+        "name": "doubt shrug woman ignorance indifference woman shrugging"
+      },
+      {
+        "emoji": "🧑🏻‍⚕️",
+        "name": "nurse doctor therapist healthcare health worker"
+      },
+      {
+        "emoji": "👨🏻‍⚕️",
+        "name": "man nurse doctor therapist healthcare man health worker"
+      },
+      {
+        "emoji": "👩🏻‍⚕️",
+        "name": "nurse woman doctor therapist healthcare woman health worker"
+      },
+      {
+        "emoji": "🧑🏻‍🎓",
+        "name": "student graduate"
+      },
+      {
+        "emoji": "👨🏻‍🎓",
+        "name": "man student graduate man student"
+      },
+      {
+        "emoji": "👩🏻‍🎓",
+        "name": "woman student graduate woman student"
+      },
+      {
+        "emoji": "🧑🏻‍🏫",
+        "name": "teacher lecturer professor instructor"
+      },
+      {
+        "emoji": "👨🏻‍🏫",
+        "name": "man teacher lecturer professor instructor man teacher"
+      },
+      {
+        "emoji": "👩🏻‍🏫",
+        "name": "woman teacher lecturer professor instructor woman teacher"
+      },
+      {
+        "emoji": "🧑🏻‍⚖️",
+        "name": "law judge scales justice"
+      },
+      {
+        "emoji": "👨🏻‍⚖️",
+        "name": "law man judge scales justice man judge"
+      },
+      {
+        "emoji": "👩🏻‍⚖️",
+        "name": "law judge woman scales justice woman judge"
+      },
+      {
+        "emoji": "🧑🏻‍🌾",
+        "name": "farmer rancher gardener"
+      },
+      {
+        "emoji": "👨🏻‍🌾",
+        "name": "man farmer rancher gardener man farmer"
+      },
+      {
+        "emoji": "👩🏻‍🌾",
+        "name": "woman farmer rancher gardener woman farmer"
+      },
+      {
+        "emoji": "🧑🏻‍🍳",
+        "name": "cook chef"
+      },
+      {
+        "emoji": "👨🏻‍🍳",
+        "name": "man chef cook man cook"
+      },
+      {
+        "emoji": "👩🏻‍🍳",
+        "name": "chef cook woman woman cook"
+      },
+      {
+        "emoji": "🧑🏻‍🔧",
+        "name": "plumber mechanic electrician tradesperson"
+      },
+      {
+        "emoji": "👨🏻‍🔧",
+        "name": "man plumber mechanic electrician man mechanic tradesperson"
+      },
+      {
+        "emoji": "👩🏻‍🔧",
+        "name": "woman plumber mechanic electrician tradesperson woman mechanic"
+      },
+      {
+        "emoji": "🧑🏻‍🏭",
+        "name": "worker factory assembly industrial factory worker"
+      },
+      {
+        "emoji": "👨🏻‍🏭",
+        "name": "man worker factory assembly industrial man factory worker"
+      },
+      {
+        "emoji": "👩🏻‍🏭",
+        "name": "woman worker factory assembly industrial woman factory worker"
+      },
+      {
+        "emoji": "🧑🏻‍💼",
+        "name": "manager business architect white collar office worker"
+      },
+      {
+        "emoji": "👨🏻‍💼",
+        "name": "man manager business architect white collar man office worker"
+      },
+      {
+        "emoji": "👩🏻‍💼",
+        "name": "woman manager business architect white collar woman office worker"
+      },
+      {
+        "emoji": "🧑🏻‍🔬",
+        "name": "chemist engineer scientist biologist physicist"
+      },
+      {
+        "emoji": "👨🏻‍🔬",
+        "name": "man chemist engineer biologist physicist scientist man scientist"
+      },
+      {
+        "emoji": "👩🏻‍🔬",
+        "name": "woman chemist engineer biologist physicist scientist woman scientist"
+      },
+      {
+        "emoji": "🧑🏻‍💻",
+        "name": "coder inventor software developer technologist"
+      },
+      {
+        "emoji": "👨🏻‍💻",
+        "name": "man coder inventor software developer technologist man technologist"
+      },
+      {
+        "emoji": "👩🏻‍💻",
+        "name": "coder woman inventor software developer technologist woman technologist"
+      },
+      {
+        "emoji": "🧑🏻‍🎤",
+        "name": "rock star actor singer entertainer"
+      },
+      {
+        "emoji": "👨🏻‍🎤",
+        "name": "man rock star actor singer man singer entertainer"
+      },
+      {
+        "emoji": "👩🏻‍🎤",
+        "name": "rock star actor woman singer entertainer woman singer"
+      },
+      {
+        "emoji": "🧑🏻‍🎨",
+        "name": "artist palette"
+      },
+      {
+        "emoji": "👨🏻‍🎨",
+        "name": "man artist palette man artist"
+      },
+      {
+        "emoji": "👩🏻‍🎨",
+        "name": "woman artist palette woman artist"
+      },
+      {
+        "emoji": "🧑🏻‍✈️",
+        "name": "pilot plane"
+      },
+      {
+        "emoji": "👨🏻‍✈️",
+        "name": "man pilot plane man pilot"
+      },
+      {
+        "emoji": "👩🏻‍✈️",
+        "name": "pilot plane woman woman pilot"
+      },
+      {
+        "emoji": "🧑🏻‍🚀",
+        "name": "rocket astronaut"
+      },
+      {
+        "emoji": "👨🏻‍🚀",
+        "name": "man rocket astronaut man astronaut"
+      },
+      {
+        "emoji": "👩🏻‍🚀",
+        "name": "woman rocket astronaut woman astronaut"
+      },
+      {
+        "emoji": "🧑🏻‍🚒",
+        "name": "fire firetruck firefighter"
+      },
+      {
+        "emoji": "👨🏻‍🚒",
+        "name": "man firetruck firefighter man firefighter"
+      },
+      {
+        "emoji": "👩🏻‍🚒",
+        "name": "woman firetruck firefighter woman firefighter"
+      },
+      {
+        "emoji": "👮🏻",
+        "name": "cop police officer police officer"
+      },
+      {
+        "emoji": "👮🏻‍♂️",
+        "name": "cop man police officer man police officer"
+      },
+      {
+        "emoji": "👮🏻‍♀️",
+        "name": "cop woman police officer woman police officer"
+      },
+      {
+        "emoji": "🕵🏻",
+        "name": "spy sleuth detective"
+      },
+      {
+        "emoji": "🕵🏻‍♂️",
+        "name": "man spy sleuth detective man detective"
+      },
+      {
+        "emoji": "🕵🏻‍♀️",
+        "name": "spy woman sleuth detective woman detective"
+      },
+      {
+        "emoji": "💂🏻",
+        "name": "guard"
+      },
+      {
+        "emoji": "💂🏻‍♂️",
+        "name": "man guard man guard"
+      },
+      {
+        "emoji": "💂🏻‍♀️",
+        "name": "guard woman woman guard"
+      },
+      {
+        "emoji": "🥷🏻",
+        "name": "ninja hidden fighter stealth"
+      },
+      {
+        "emoji": "👷🏻",
+        "name": "hat worker construction construction worker"
+      },
+      {
+        "emoji": "👷🏻‍♂️",
+        "name": "man worker construction man construction worker"
+      },
+      {
+        "emoji": "👷🏻‍♀️",
+        "name": "woman worker construction woman construction worker"
+      },
+      {
+        "emoji": "🫅🏻",
+        "name": "noble regal monarch royalty person with crown"
+      },
+      {
+        "emoji": "🤴🏻",
+        "name": "prince"
+      },
+      {
+        "emoji": "👸🏻",
+        "name": "fantasy princess fairy tale"
+      },
+      {
+        "emoji": "👳🏻",
+        "name": "turban person wearing turban"
+      },
+      {
+        "emoji": "👳🏻‍♂️",
+        "name": "man turban man wearing turban"
+      },
+      {
+        "emoji": "👳🏻‍♀️",
+        "name": "woman turban woman wearing turban"
+      },
+      {
+        "emoji": "👲🏻",
+        "name": "cap hat person skullcap gua pi mao person with skullcap"
+      },
+      {
+        "emoji": "🧕🏻",
+        "name": "hijab tichel mantilla headscarf woman with headscarf"
+      },
+      {
+        "emoji": "🤵🏻",
+        "name": "groom person tuxedo person in tuxedo"
+      },
+      {
+        "emoji": "🤵🏻‍♂️",
+        "name": "man tuxedo man in tuxedo"
+      },
+      {
+        "emoji": "🤵🏻‍♀️",
+        "name": "woman tuxedo woman in tuxedo"
+      },
+      {
+        "emoji": "👰🏻",
+        "name": "veil bride person wedding person with veil"
+      },
+      {
+        "emoji": "👰🏻‍♂️",
+        "name": "man veil man with veil"
+      },
+      {
+        "emoji": "👰🏻‍♀️",
+        "name": "veil woman woman with veil"
+      },
+      {
+        "emoji": "🤰🏻",
+        "name": "woman pregnant pregnant woman"
+      },
+      {
+        "emoji": "🫃🏻",
+        "name": "full belly bloated pregnant pregnant man"
+      },
+      {
+        "emoji": "🫄🏻",
+        "name": "full belly bloated pregnant pregnant person"
+      },
+      {
+        "emoji": "🤱🏻",
+        "name": "baby breast nursing breast feeding"
+      },
+      {
+        "emoji": "👩🏻‍🍼",
+        "name": "baby woman feeding nursing woman feeding baby"
+      },
+      {
+        "emoji": "👨🏻‍🍼",
+        "name": "man baby feeding nursing man feeding baby"
+      },
+      {
+        "emoji": "🧑🏻‍🍼",
+        "name": "baby person feeding nursing person feeding baby"
+      },
+      {
+        "emoji": "👼🏻",
+        "name": "baby face angel fantasy baby angel fairy tale"
+      },
+      {
+        "emoji": "🎅🏻",
+        "name": "claus santa father christmas Santa Claus celebration"
+      },
+      {
+        "emoji": "🤶🏻",
+        "name": "mrs. claus mother christmas Mrs. Claus celebration"
+      },
+      {
+        "emoji": "🧑🏻‍🎄",
+        "name": "claus mx claus christmas"
+      },
+      {
+        "emoji": "🦸🏻",
+        "name": "good hero heroine superhero superpower"
+      },
+      {
+        "emoji": "🦸🏻‍♂️",
+        "name": "man good hero superpower man superhero"
+      },
+      {
+        "emoji": "🦸🏻‍♀️",
+        "name": "good hero woman heroine superpower woman superhero"
+      },
+      {
+        "emoji": "🦹🏻",
+        "name": "evil villain criminal superpower supervillain"
+      },
+      {
+        "emoji": "🦹🏻‍♂️",
+        "name": "man evil villain criminal superpower man supervillain"
+      },
+      {
+        "emoji": "🦹🏻‍♀️",
+        "name": "evil woman villain criminal superpower woman supervillain"
+      },
+      {
+        "emoji": "🧙🏻",
+        "name": "mage witch wizard sorcerer sorceress"
+      },
+      {
+        "emoji": "🧙🏻‍♂️",
+        "name": "wizard man mage sorcerer"
+      },
+      {
+        "emoji": "🧙🏻‍♀️",
+        "name": "witch sorceress woman mage"
+      },
+      {
+        "emoji": "🧚🏻",
+        "name": "puck fairy oberon titania"
+      },
+      {
+        "emoji": "🧚🏻‍♂️",
+        "name": "puck oberon man fairy"
+      },
+      {
+        "emoji": "🧚🏻‍♀️",
+        "name": "titania woman fairy"
+      },
+      {
+        "emoji": "🧛🏻",
+        "name": "undead vampire dracula"
+      },
+      {
+        "emoji": "🧛🏻‍♂️",
+        "name": "undead dracula man vampire"
+      },
+      {
+        "emoji": "🧛🏻‍♀️",
+        "name": "undead woman vampire"
+      },
+      {
+        "emoji": "🧜🏻",
+        "name": "merman mermaid merwoman merperson"
+      },
+      {
+        "emoji": "🧜🏻‍♂️",
+        "name": "merman triton"
+      },
+      {
+        "emoji": "🧜🏻‍♀️",
+        "name": "mermaid merwoman"
+      },
+      {
+        "emoji": "🧝🏻",
+        "name": "elf magical"
+      },
+      {
+        "emoji": "🧝🏻‍♂️",
+        "name": "man elf magical"
+      },
+      {
+        "emoji": "🧝🏻‍♀️",
+        "name": "magical woman elf"
+      },
+      {
+        "emoji": "🧞",
+        "name": "genie djinn"
+      },
+      {
+        "emoji": "🧞",
+        "name": "djinn man genie"
+      },
+      {
+        "emoji": "🧞",
+        "name": "djinn woman genie"
+      },
+      {
+        "emoji": "🧟",
+        "name": "zombie undead walking dead"
+      },
+      {
+        "emoji": "🧟",
+        "name": "undead man zombie walking dead"
+      },
+      {
+        "emoji": "🧟",
+        "name": "undead woman zombie walking dead"
+      },
+      {
+        "emoji": "🧌",
+        "name": "troll fantasy monster fairy tale"
+      },
+      {
+        "emoji": "💆🏻",
+        "name": "face salon massage person getting massage"
+      },
+      {
+        "emoji": "💆🏻‍♂️",
+        "name": "man face massage man getting massage"
+      },
+      {
+        "emoji": "💆🏻‍♀️",
+        "name": "face woman massage woman getting massage"
+      },
+      {
+        "emoji": "💇🏻",
+        "name": "barber beauty parlor haircut person getting haircut"
+      },
+      {
+        "emoji": "💇🏻‍♂️",
+        "name": "man haircut man getting haircut"
+      },
+      {
+        "emoji": "💇🏻‍♀️",
+        "name": "woman haircut woman getting haircut"
+      },
+      {
+        "emoji": "🚶🏻",
+        "name": "hike walk walking person walking"
+      },
+      {
+        "emoji": "🚶🏻‍♂️",
+        "name": "man hike walk man walking"
+      },
+      {
+        "emoji": "🚶🏻‍♀️",
+        "name": "hike walk woman woman walking"
+      },
+      {
+        "emoji": "🚶🏻‍➡️",
+        "name": "hike walk walking person walking person walking facing right"
+      },
+      {
+        "emoji": "🚶🏻‍♀️‍➡️",
+        "name": "hike walk woman woman walking woman walking facing right"
+      },
+      {
+        "emoji": "🚶🏻‍♂️‍➡️",
+        "name": "man hike walk man walking man walking facing right"
+      },
+      {
+        "emoji": "🧍🏻",
+        "name": "stand standing person standing"
+      },
+      {
+        "emoji": "🧍🏻‍♂️",
+        "name": "man standing man standing"
+      },
+      {
+        "emoji": "🧍🏻‍♀️",
+        "name": "woman standing woman standing"
+      },
+      {
+        "emoji": "🧎🏻",
+        "name": "kneel kneeling person kneeling"
+      },
+      {
+        "emoji": "🧎🏻‍♂️",
+        "name": "man kneeling man kneeling"
+      },
+      {
+        "emoji": "🧎🏻‍♀️",
+        "name": "woman kneeling woman kneeling"
+      },
+      {
+        "emoji": "🧎🏻‍➡️",
+        "name": "kneel kneeling person kneeling person kneeling facing right"
+      },
+      {
+        "emoji": "🧎🏻‍♀️‍➡️",
+        "name": "woman kneeling woman kneeling facing right"
+      },
+      {
+        "emoji": "🧎🏻‍♂️‍➡️",
+        "name": "man kneeling man kneeling facing right"
+      },
+      {
+        "emoji": "🧑🏻‍🦯",
+        "name": "blind accessibility person with white cane"
+      },
+      {
+        "emoji": "🧑🏻‍🦯‍➡️",
+        "name": "blind accessibility person with white cane person with white cane facing right"
+      },
+      {
+        "emoji": "👨🏻‍🦯",
+        "name": "man blind accessibility man with white cane"
+      },
+      {
+        "emoji": "👨🏻‍🦯‍➡️",
+        "name": "man blind accessibility man with white cane man with white cane facing right"
+      },
+      {
+        "emoji": "👩🏻‍🦯",
+        "name": "blind woman accessibility woman with white cane"
+      },
+      {
+        "emoji": "👩🏻‍🦯‍➡️",
+        "name": "blind woman accessibility woman with white cane woman with white cane facing right"
+      },
+      {
+        "emoji": "🧑🏻‍🦼",
+        "name": "wheelchair accessibility person in motorized wheelchair"
+      },
+      {
+        "emoji": "🧑🏻‍🦼‍➡️",
+        "name": "wheelchair accessibility person in motorized wheelchair person in motorized wheelchair facing right"
+      },
+      {
+        "emoji": "👨🏻‍🦼",
+        "name": "man wheelchair accessibility man in motorized wheelchair"
+      },
+      {
+        "emoji": "👨🏻‍🦼‍➡️",
+        "name": "man wheelchair accessibility man in motorized wheelchair man in motorized wheelchair facing right"
+      },
+      {
+        "emoji": "👩🏻‍🦼",
+        "name": "woman wheelchair accessibility woman in motorized wheelchair"
+      },
+      {
+        "emoji": "👩🏻‍🦼‍➡️",
+        "name": "woman wheelchair accessibility woman in motorized wheelchair woman in motorized wheelchair facing right"
+      },
+      {
+        "emoji": "🧑🏻‍🦽",
+        "name": "wheelchair accessibility person in manual wheelchair"
+      },
+      {
+        "emoji": "🧑🏻‍🦽‍➡️",
+        "name": "wheelchair accessibility person in manual wheelchair person in manual wheelchair facing right"
+      },
+      {
+        "emoji": "👨🏻‍🦽",
+        "name": "man wheelchair accessibility man in manual wheelchair"
+      },
+      {
+        "emoji": "👨🏻‍🦽‍➡️",
+        "name": "man wheelchair accessibility man in manual wheelchair man in manual wheelchair facing right"
+      },
+      {
+        "emoji": "👩🏻‍🦽",
+        "name": "woman wheelchair accessibility woman in manual wheelchair"
+      },
+      {
+        "emoji": "👩🏻‍🦽‍➡️",
+        "name": "woman wheelchair accessibility woman in manual wheelchair woman in manual wheelchair facing right"
+      },
+      {
+        "emoji": "🏃🏻",
+        "name": "running marathon person running"
+      },
+      {
+        "emoji": "🏃🏻‍♂️",
+        "name": "man racing running marathon man running"
+      },
+      {
+        "emoji": "🏃🏻‍♀️",
+        "name": "woman racing running marathon woman running"
+      },
+      {
+        "emoji": "🏃🏻‍➡️",
+        "name": "running marathon person running person running facing right"
+      },
+      {
+        "emoji": "🏃🏻‍♀️‍➡️",
+        "name": "woman racing running marathon woman running facing right"
+      },
+      {
+        "emoji": "🏃🏻‍♂️‍➡️",
+        "name": "man racing running marathon man running facing right"
+      },
+      {
+        "emoji": "💃🏻",
+        "name": "dance woman dancing woman dancing"
+      },
+      {
+        "emoji": "🕺🏻",
+        "name": "man dance dancing man dancing"
+      },
+      {
+        "emoji": "🕴🏻",
+        "name": "suit person business person in suit levitating"
+      },
+      {
+        "emoji": "👯",
+        "name": "dancer partying bunny ear people with bunny ears"
+      },
+      {
+        "emoji": "👯",
+        "name": "men dancer partying bunny ear men with bunny ears"
+      },
+      {
+        "emoji": "👯",
+        "name": "women dancer partying bunny ear women with bunny ears"
+      },
+      {
+        "emoji": "🧖🏻",
+        "name": "sauna steam room person in steamy room"
+      },
+      {
+        "emoji": "🧖🏻‍♂️",
+        "name": "sauna steam room man in steamy room"
+      },
+      {
+        "emoji": "🧖🏻‍♀️",
+        "name": "sauna steam room woman in steamy room"
+      },
+      {
+        "emoji": "🧗🏻",
+        "name": "climber person climbing"
+      },
+      {
+        "emoji": "🧗🏻‍♂️",
+        "name": "climber man climbing"
+      },
+      {
+        "emoji": "🧗🏻‍♀️",
+        "name": "climber woman climbing"
+      },
+      {
+        "emoji": "🤺",
+        "name": "sword fencer fencing person fencing"
+      },
+      {
+        "emoji": "🏇🏻",
+        "name": "horse jockey racing racehorse horse racing"
+      },
+      {
+        "emoji": "⛷",
+        "name": "ski snow skier"
+      },
+      {
+        "emoji": "🏂🏻",
+        "name": "ski snow snowboard snowboarder"
+      },
+      {
+        "emoji": "🏌🏻",
+        "name": "ball golf person golfing"
+      },
+      {
+        "emoji": "🏌🏻‍♂️",
+        "name": "man golf man golfing"
+      },
+      {
+        "emoji": "🏌🏻‍♀️",
+        "name": "golf woman woman golfing"
+      },
+      {
+        "emoji": "🏄🏻",
+        "name": "surfing person surfing"
+      },
+      {
+        "emoji": "🏄🏻‍♂️",
+        "name": "man surfing man surfing"
+      },
+      {
+        "emoji": "🏄🏻‍♀️",
+        "name": "woman surfing woman surfing"
+      },
+      {
+        "emoji": "🚣🏻",
+        "name": "boat rowboat person rowing boat"
+      },
+      {
+        "emoji": "🚣🏻‍♂️",
+        "name": "man boat rowboat man rowing boat"
+      },
+      {
+        "emoji": "🚣🏻‍♀️",
+        "name": "boat woman rowboat woman rowing boat"
+      },
+      {
+        "emoji": "🏊🏻",
+        "name": "swim person swimming"
+      },
+      {
+        "emoji": "🏊🏻‍♂️",
+        "name": "man swim man swimming"
+      },
+      {
+        "emoji": "🏊🏻‍♀️",
+        "name": "swim woman woman swimming"
+      },
+      {
+        "emoji": "⛹🏻",
+        "name": "ball person bouncing ball"
+      },
+      {
+        "emoji": "⛹🏻‍♂️",
+        "name": "man ball man bouncing ball"
+      },
+      {
+        "emoji": "⛹🏻‍♀️",
+        "name": "ball woman woman bouncing ball"
+      },
+      {
+        "emoji": "🏋🏻",
+        "name": "lifter weight person lifting weights"
+      },
+      {
+        "emoji": "🏋🏻‍♂️",
+        "name": "man weight lifter man lifting weights"
+      },
+      {
+        "emoji": "🏋🏻‍♀️",
+        "name": "woman weight lifter woman lifting weights"
+      },
+      {
+        "emoji": "🚴🏻",
+        "name": "biking bicycle cyclist person biking"
+      },
+      {
+        "emoji": "🚴🏻‍♂️",
+        "name": "man biking bicycle cyclist man biking"
+      },
+      {
+        "emoji": "🚴🏻‍♀️",
+        "name": "woman biking bicycle cyclist woman biking"
+      },
+      {
+        "emoji": "🚵🏻",
+        "name": "bike bicycle cyclist mountain bicyclist person mountain biking"
+      },
+      {
+        "emoji": "🚵🏻‍♂️",
+        "name": "man bike bicycle cyclist mountain man mountain biking"
+      },
+      {
+        "emoji": "🚵🏻‍♀️",
+        "name": "bike woman biking bicycle cyclist mountain woman mountain biking"
+      },
+      {
+        "emoji": "🤸🏻",
+        "name": "cartwheel gymnastics person cartwheeling"
+      },
+      {
+        "emoji": "🤸🏻‍♂️",
+        "name": "man cartwheel gymnastics man cartwheeling"
+      },
+      {
+        "emoji": "🤸🏻‍♀️",
+        "name": "woman cartwheel gymnastics woman cartwheeling"
+      },
+      {
+        "emoji": "🤼",
+        "name": "wrestle wrestler people wrestling"
+      },
+      {
+        "emoji": "🤼",
+        "name": "men wrestle men wrestling"
+      },
+      {
+        "emoji": "🤼",
+        "name": "women wrestle women wrestling"
+      },
+      {
+        "emoji": "🤽🏻",
+        "name": "polo water person playing water polo"
+      },
+      {
+        "emoji": "🤽🏻‍♂️",
+        "name": "man water polo man playing water polo"
+      },
+      {
+        "emoji": "🤽🏻‍♀️",
+        "name": "woman water polo woman playing water polo"
+      },
+      {
+        "emoji": "🤾🏻",
+        "name": "ball handball person playing handball"
+      },
+      {
+        "emoji": "🤾🏻‍♂️",
+        "name": "man handball man playing handball"
+      },
+      {
+        "emoji": "🤾🏻‍♀️",
+        "name": "woman handball woman playing handball"
+      },
+      {
+        "emoji": "🤹🏻",
+        "name": "skill juggle balance multitask person juggling"
+      },
+      {
+        "emoji": "🤹🏻‍♂️",
+        "name": "man juggling multitask man juggling"
+      },
+      {
+        "emoji": "🤹🏻‍♀️",
+        "name": "woman juggling multitask woman juggling"
+      },
+      {
+        "emoji": "🧘🏻",
+        "name": "yoga meditation person in lotus position"
+      },
+      {
+        "emoji": "🧘🏻‍♂️",
+        "name": "yoga meditation man in lotus position"
+      },
+      {
+        "emoji": "🧘🏻‍♀️",
+        "name": "yoga meditation woman in lotus position"
+      },
+      {
+        "emoji": "🛀🏻",
+        "name": "bath bathtub person taking bath"
+      },
+      {
+        "emoji": "🛌🏻",
+        "name": "hotel sleep good night person in bed"
+      },
+      {
+        "emoji": "💏🏻",
+        "name": "kiss couple"
+      },
+      {
+        "emoji": "👩🏻‍❤️‍💋‍👨🏻",
+        "name": "man kiss woman couple kiss: woman, man"
+      },
+      {
+        "emoji": "👨🏻‍❤️‍💋‍👨🏻",
+        "name": "man kiss couple kiss: man, man"
+      },
+      {
+        "emoji": "👩🏻‍❤️‍💋‍👩🏻",
+        "name": "kiss woman couple kiss: woman, woman"
+      },
+      {
+        "emoji": "💑🏻",
+        "name": "love couple couple with heart"
+      },
+      {
+        "emoji": "👩🏻‍❤️‍👨🏻",
+        "name": "man love woman couple couple with heart couple with heart: woman, man"
+      },
+      {
+        "emoji": "👨🏻‍❤️‍👨🏻",
+        "name": "man love couple couple with heart couple with heart: man, man"
+      },
+      {
+        "emoji": "👩🏻‍❤️‍👩🏻",
+        "name": "love woman couple couple with heart couple with heart: woman, woman"
+      },
+      {
+        "emoji": "👨",
+        "name": "boy man woman family family: man, woman, boy"
+      },
+      {
+        "emoji": "👨",
+        "name": "man girl woman family family: man, woman, girl"
+      },
+      {
+        "emoji": "👨",
+        "name": "boy man girl woman family family: man, woman, girl, boy"
+      },
+      {
+        "emoji": "👨",
+        "name": "boy man woman family family: man, woman, boy, boy"
+      },
+      {
+        "emoji": "👨",
+        "name": "man girl woman family family: man, woman, girl, girl"
+      },
+      {
+        "emoji": "👨",
+        "name": "boy man family family: man, man, boy"
+      },
+      {
+        "emoji": "👨",
+        "name": "man girl family family: man, man, girl"
+      },
+      {
+        "emoji": "👨",
+        "name": "boy man girl family family: man, man, girl, boy"
+      },
+      {
+        "emoji": "👨",
+        "name": "boy man family family: man, man, boy, boy"
+      },
+      {
+        "emoji": "👨",
+        "name": "man girl family family: man, man, girl, girl"
+      },
+      {
+        "emoji": "👩",
+        "name": "boy woman family family: woman, woman, boy"
+      },
+      {
+        "emoji": "👩",
+        "name": "girl woman family family: woman, woman, girl"
+      },
+      {
+        "emoji": "👩",
+        "name": "boy girl woman family family: woman, woman, girl, boy"
+      },
+      {
+        "emoji": "👩",
+        "name": "boy woman family family: woman, woman, boy, boy"
+      },
+      {
+        "emoji": "👩",
+        "name": "girl woman family family: woman, woman, girl, girl"
+      },
+      {
+        "emoji": "👨",
+        "name": "boy man family family: man, boy"
+      },
+      {
+        "emoji": "👨",
+        "name": "boy man family family: man, boy, boy"
+      },
+      {
+        "emoji": "👨",
+        "name": "man girl family family: man, girl"
+      },
+      {
+        "emoji": "👨",
+        "name": "boy man girl family family: man, girl, boy"
+      },
+      {
+        "emoji": "👨",
+        "name": "man girl family family: man, girl, girl"
+      },
+      {
+        "emoji": "👩",
+        "name": "boy woman family family: woman, boy"
+      },
+      {
+        "emoji": "👩",
+        "name": "boy woman family family: woman, boy, boy"
+      },
+      {
+        "emoji": "👩",
+        "name": "girl woman family family: woman, girl"
+      },
+      {
+        "emoji": "👩",
+        "name": "boy girl woman family family: woman, girl, boy"
+      },
+      {
+        "emoji": "👩",
+        "name": "girl woman family family: woman, girl, girl"
+      },
+      {
+        "emoji": "🗣",
+        "name": "face head speak speaking silhouette speaking head"
+      },
+      {
+        "emoji": "👤",
+        "name": "bust silhouette bust in silhouette"
+      },
+      {
+        "emoji": "👥",
+        "name": "bust silhouette busts in silhouette"
+      },
+      {
+        "emoji": "🫂",
+        "name": "hug hello thanks goodbye people hugging"
+      },
+      {
+        "emoji": "👪",
+        "name": "family"
+      },
+      {
+        "emoji": "🧑",
+        "name": "family: adult, adult, child"
+      },
+      {
+        "emoji": "🧑",
+        "name": "family: adult, adult, child, child"
+      },
+      {
+        "emoji": "🧑",
+        "name": "family: adult, child"
+      },
+      {
+        "emoji": "🧑",
+        "name": "family: adult, child, child"
+      },
+      {
+        "emoji": "👣",
+        "name": "print clothing footprint footprints"
+      }
+    ]
+  },
+  "Жесты": {
+    "icon": "👋",
+    "emojis": [
+      {
+        "emoji": "🤭",
+        "name": "whoops face with hand over mouth"
+      },
+      {
+        "emoji": "🫢",
+        "name": "awe scared surprise amazement disbelief embarrass face with open eyes and hand over mouth"
+      },
+      {
+        "emoji": "👋🏻",
+        "name": "hand wave waving waving hand"
+      },
+      {
+        "emoji": "🤚🏻",
+        "name": "raised backhand raised back of hand"
+      },
+      {
+        "emoji": "🖐🏻",
+        "name": "hand finger splayed hand with fingers splayed"
+      },
+      {
+        "emoji": "✋🏻",
+        "name": "hand high 5 high five raised hand"
+      },
+      {
+        "emoji": "🖖🏻",
+        "name": "hand spock finger vulcan vulcan salute"
+      },
+      {
+        "emoji": "🫱🏻",
+        "name": "hand right rightward rightwards hand"
+      },
+      {
+        "emoji": "🫲🏻",
+        "name": "hand left leftward leftwards hand"
+      },
+      {
+        "emoji": "🫳🏻",
+        "name": "drop shoo dismiss palm down hand"
+      },
+      {
+        "emoji": "🫴🏻",
+        "name": "come catch offer beckon palm up hand"
+      },
+      {
+        "emoji": "🫷🏻",
+        "name": "push stop wait refuse leftward high five leftwards pushing hand"
+      },
+      {
+        "emoji": "🫸🏻",
+        "name": "push stop wait refuse high five rightward rightwards pushing hand"
+      },
+      {
+        "emoji": "👌🏻",
+        "name": "ok hand OK hand"
+      },
+      {
+        "emoji": "🤌🏻",
+        "name": "fingers pinched sarcastic hand gesture interrogation pinched fingers"
+      },
+      {
+        "emoji": "🤏🏻",
+        "name": "small amount pinching hand"
+      },
+      {
+        "emoji": "✌🏻",
+        "name": "v hand victory victory hand"
+      },
+      {
+        "emoji": "🤞🏻",
+        "name": "hand luck cross finger crossed fingers"
+      },
+      {
+        "emoji": "🫰🏻",
+        "name": "love snap heart money expensive hand with index finger and thumb crossed"
+      },
+      {
+        "emoji": "🤟🏻",
+        "name": "ily hand love you gesture"
+      },
+      {
+        "emoji": "🤘🏻",
+        "name": "hand horns finger rock on sign of the horns"
+      },
+      {
+        "emoji": "🤙🏻",
+        "name": "call hand shaka hang loose call me hand"
+      },
+      {
+        "emoji": "👈🏻",
+        "name": "hand index point finger backhand backhand index pointing left"
+      },
+      {
+        "emoji": "👉🏻",
+        "name": "hand index point finger backhand backhand index pointing right"
+      },
+      {
+        "emoji": "👆🏻",
+        "name": "up hand point finger backhand backhand index pointing up"
+      },
+      {
+        "emoji": "🖕🏻",
+        "name": "hand finger middle finger"
+      },
+      {
+        "emoji": "👇🏻",
+        "name": "down hand point finger backhand backhand index pointing down"
+      },
+      {
+        "emoji": "☝🏻",
+        "name": "up hand index point finger index pointing up"
+      },
+      {
+        "emoji": "🫵🏻",
+        "name": "you point index pointing at the viewer"
+      },
+      {
+        "emoji": "👍🏻",
+        "name": "+1 up hand thumb thumbs up"
+      },
+      {
+        "emoji": "👎🏻",
+        "name": " 1 down hand thumb thumbs down"
+      },
+      {
+        "emoji": "✊🏻",
+        "name": "fist hand punch clenched raised fist"
+      },
+      {
+        "emoji": "👊🏻",
+        "name": "fist hand punch clenched oncoming fist"
+      },
+      {
+        "emoji": "🤛🏻",
+        "name": "fist leftwards left facing fist"
+      },
+      {
+        "emoji": "🤜🏻",
+        "name": "fist rightwards right facing fist"
+      },
+      {
+        "emoji": "👏🏻",
+        "name": "clap hand clapping hands"
+      },
+      {
+        "emoji": "🙌🏻",
+        "name": "hand hooray raised gesture celebration raising hands"
+      },
+      {
+        "emoji": "👐🏻",
+        "name": "hand open open hands"
+      },
+      {
+        "emoji": "🤲🏻",
+        "name": "prayer palms up together"
+      },
+      {
+        "emoji": "🤝🏻",
+        "name": "hand shake meeting handshake agreement"
+      },
+      {
+        "emoji": "🙏🏻",
+        "name": "ask hand pray high 5 please thanks high five folded hands"
+      },
+      {
+        "emoji": "✍🏻",
+        "name": "hand write writing hand"
+      },
+      {
+        "emoji": "💅🏻",
+        "name": "care nail polish manicure cosmetics nail polish"
+      },
+      {
+        "emoji": "🤳🏻",
+        "name": "phone selfie camera"
+      },
+      {
+        "emoji": "💪🏻",
+        "name": "flex comic biceps muscle flexed biceps"
+      },
+      {
+        "emoji": "🙅🏻",
+        "name": "hand gesture forbidden prohibited person gesturing NO person gesturing no"
+      },
+      {
+        "emoji": "🙅🏻‍♂️",
+        "name": "man hand gesture forbidden prohibited man gesturing NO man gesturing no"
+      },
+      {
+        "emoji": "🙅🏻‍♀️",
+        "name": "hand woman gesture forbidden prohibited woman gesturing NO woman gesturing no"
+      },
+      {
+        "emoji": "🙆🏻",
+        "name": "ok hand gesture person gesturing OK person gesturing ok"
+      },
+      {
+        "emoji": "🙆🏻‍♂️",
+        "name": "ok man hand gesture man gesturing OK man gesturing ok"
+      },
+      {
+        "emoji": "🙆🏻‍♀️",
+        "name": "ok hand woman gesture woman gesturing OK woman gesturing ok"
+      },
+      {
+        "emoji": "💁🏻",
+        "name": "hand help sassy tipping information person tipping hand"
+      },
+      {
+        "emoji": "💁🏻‍♂️",
+        "name": "man sassy tipping hand man tipping hand"
+      },
+      {
+        "emoji": "💁🏻‍♀️",
+        "name": "sassy woman tipping hand woman tipping hand"
+      },
+      {
+        "emoji": "🙋🏻",
+        "name": "hand happy raised gesture person raising hand"
+      },
+      {
+        "emoji": "🙋🏻‍♂️",
+        "name": "man gesture raising hand man raising hand"
+      },
+      {
+        "emoji": "🙋🏻‍♀️",
+        "name": "woman gesture raising hand woman raising hand"
+      },
+      {
+        "emoji": "🧑🏻‍🤝‍🧑🏻",
+        "name": "hand hold couple person holding hands people holding hands"
+      },
+      {
+        "emoji": "👭🏻",
+        "name": "hand women couple holding hands women holding hands"
+      },
+      {
+        "emoji": "👫🏻",
+        "name": "man hand hold woman couple holding hands woman and man holding hands"
+      },
+      {
+        "emoji": "👬🏻",
+        "name": "man men twins couple gemini zodiac holding hands men holding hands"
+      }
+    ]
+  },
+  "Природа": {
+    "icon": "🐱",
+    "emojis": [
+      {
+        "emoji": "🐵",
+        "name": "face monkey monkey face"
+      },
+      {
+        "emoji": "🐒",
+        "name": "monkey"
+      },
+      {
+        "emoji": "🦍",
+        "name": "gorilla"
+      },
+      {
+        "emoji": "🦧",
+        "name": "ape orangutan"
+      },
+      {
+        "emoji": "🙈",
+        "name": "see no evil monkey"
+      },
+      {
+        "emoji": "🐶",
+        "name": "dog pet face dog face"
+      },
+      {
+        "emoji": "🐕",
+        "name": "dog pet"
+      },
+      {
+        "emoji": "🦮",
+        "name": "blind guide guide dog accessibility"
+      },
+      {
+        "emoji": "🐕",
+        "name": "dog service assistance service dog accessibility"
+      },
+      {
+        "emoji": "🐩",
+        "name": "dog poodle"
+      },
+      {
+        "emoji": "🐺",
+        "name": "wolf face"
+      },
+      {
+        "emoji": "🦊",
+        "name": "fox face"
+      },
+      {
+        "emoji": "🦝",
+        "name": "sly raccoon curious"
+      },
+      {
+        "emoji": "🐱",
+        "name": "cat pet face cat face"
+      },
+      {
+        "emoji": "🐈",
+        "name": "cat pet"
+      },
+      {
+        "emoji": "🐈",
+        "name": "cat black unlucky black cat"
+      },
+      {
+        "emoji": "🦁",
+        "name": "leo lion face zodiac"
+      },
+      {
+        "emoji": "🐯",
+        "name": "face tiger tiger face"
+      },
+      {
+        "emoji": "🐅",
+        "name": "tiger"
+      },
+      {
+        "emoji": "🐆",
+        "name": "leopard"
+      },
+      {
+        "emoji": "🐴",
+        "name": "face horse horse face"
+      },
+      {
+        "emoji": "🫎",
+        "name": "elk moose animal mammal antlers"
+      },
+      {
+        "emoji": "🫏",
+        "name": "ass mule burro donkey animal mammal stubborn"
+      },
+      {
+        "emoji": "🐎",
+        "name": "horse racing racehorse equestrian"
+      },
+      {
+        "emoji": "🦄",
+        "name": "face unicorn"
+      },
+      {
+        "emoji": "🦓",
+        "name": "zebra stripe"
+      },
+      {
+        "emoji": "🦌",
+        "name": "deer"
+      },
+      {
+        "emoji": "🦬",
+        "name": "herd bison wisent buffalo"
+      },
+      {
+        "emoji": "🐮",
+        "name": "cow face cow face"
+      },
+      {
+        "emoji": "🐂",
+        "name": "ox bull taurus zodiac"
+      },
+      {
+        "emoji": "🐃",
+        "name": "water buffalo water buffalo"
+      }
+    ]
+  },
+  "Реакции": {
+    "icon": "💬",
+    "emojis": [
+      {
+        "emoji": "👍",
+        "unified": "1f44d",
+        "name": "thumbs up thumbs up"
+      },
+      {
+        "emoji": "🙈",
+        "unified": "1f648",
+        "name": "see no evil monkey"
+      },
+      {
+        "emoji": "❤️",
+        "unified": "2764",
+        "name": "heart love heart"
+      },
+      {
+        "emoji": "😂",
+        "unified": "1f602",
+        "name": "joy laugh face with tears of joy"
+      },
+      {
+        "emoji": "😮",
+        "unified": "1f62e",
+        "name": "face open mouth surprised"
+      },
+      {
+        "emoji": "😢",
+        "unified": "1f622",
+        "name": "cry sad crying face"
+      },
+      {
+        "emoji": "😡",
+        "unified": "1f621",
+        "name": "angry mad angry face"
+      },
+      {
+        "emoji": "🎉",
+        "unified": "1f389",
+        "name": "party celebration confetti"
+      },
+      {
+        "emoji": "🔥",
+        "unified": "1f525",
+        "name": "fire hot fire"
+      },
+      {
+        "emoji": "💯",
+        "unified": "1f4af",
+        "name": "100 hundred perfect score"
+      },
+      {
+        "emoji": "🚀",
+        "unified": "1f680",
+        "name": "rocket launch space"
+      },
+      {
+        "emoji": "💪",
+        "unified": "1f4aa",
+        "name": "flex strength muscle"
+      },
+      {
+        "emoji": "👏",
+        "unified": "1f44f",
+        "name": "hands clapping applause"
+      },
+      {
+        "emoji": "🙌",
+        "unified": "1f64c",
+        "name": "hands raising celebration praise"
+      },
+      {
+        "emoji": "😊",
+        "unified": "1f60a",
+        "name": "smile happy glad"
+      },
+      {
+        "emoji": "🤗",
+        "unified": "1f917",
+        "name": "hug embrace hug"
+      },
+      {
+        "emoji": "😍",
+        "unified": "1f60d",
+        "name": "love heart eyes love"
+      }
+    ]
+  }
+}
