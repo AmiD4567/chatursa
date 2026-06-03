@@ -77,7 +77,16 @@
 }
 
 .eip-categories::-webkit-scrollbar {
-  display: none;
+  height: 4px;
+}
+
+.eip-categories::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.eip-categories::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.25);
+  border-radius: 4px;
 }
 
 .eip-category-btn {
@@ -258,7 +267,16 @@
 }
 
 .eip-stickers-tabs::-webkit-scrollbar {
-  display: none;
+  height: 4px;
+}
+
+.eip-stickers-tabs::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.eip-stickers-tabs::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.25);
+  border-radius: 4px;
 }
 
 .eip-sticker-tab-btn {

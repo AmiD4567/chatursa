@@ -172,6 +172,81 @@
           { "name": "годзи 1", "file": "popular/Godzi_1.avif", "emoji": "🦎" },
           { "name": "годзи 2", "file": "popular/Godzi_2.avif", "emoji": "🦎" }
         ]
+      },
+      "BLACKPINK": {
+        "icon": "🖤",
+        "stickers": [
+          { "name": "блэкпинк 1", "file": "popular/BLACKPINK_1.avif", "emoji": "🖤" },
+          { "name": "блэкпинк 2", "file": "popular/BLACKPINK_2.avif", "emoji": "💗" },
+          { "name": "блэкпинк 3", "file": "popular/BLACKPINK_3.avif", "emoji": "🖤" },
+          { "name": "блэкпинк 4", "file": "popular/BLACKPINK_4.avif", "emoji": "💖" },
+          { "name": "блэкпинк 5", "file": "popular/BLACKPINK_5.avif", "emoji": "🖤" },
+          { "name": "блэкпинк 6", "file": "popular/BLACKPINK_6.avif", "emoji": "💗" },
+          { "name": "блэкпинк 7", "file": "popular/BLACKPINK_7.avif", "emoji": "🖤" },
+          { "name": "блэкпинк 8", "file": "popular/BLACKPINK_8.avif", "emoji": "💖" },
+          { "name": "блэкпинк 9", "file": "popular/BLACKPINK_9.avif", "emoji": "🖤" },
+          { "name": "блэкпинк 10", "file": "popular/BLACKPINK_10.avif", "emoji": "💗" }
+        ]
+      },
+      "JINX": {
+        "icon": "💣",
+        "stickers": [
+          { "name": "джинкс 1", "file": "popular/JINX_1.avif", "emoji": "💣" },
+          { "name": "джинкс 2", "file": "popular/JINX_2.avif", "emoji": "🔫" },
+          { "name": "джинкс 3", "file": "popular/JINX_3.avif", "emoji": "💥" },
+          { "name": "джинкс 4", "file": "popular/JINX_4.avif", "emoji": "💣" },
+          { "name": "джинкс 5", "file": "popular/JINX_5.avif", "emoji": "🔫" },
+          { "name": "джинкс 6", "file": "popular/JINX_6.avif", "emoji": "💥" },
+          { "name": "джинкс 7", "file": "popular/JINX_7.avif", "emoji": "💣" },
+          { "name": "джинкс 8", "file": "popular/JINX_8.avif", "emoji": "🔫" },
+          { "name": "джинкс 9", "file": "popular/JINX_9.avif", "emoji": "💥" },
+          { "name": "джинкс 10", "file": "popular/JINX_10.avif", "emoji": "💣" }
+        ]
+      },
+      "UtyaDuck": {
+        "icon": "🐤",
+        "stickers": [
+          { "name": "утёнок 1", "file": "popular/UtyaDuck_1.avif", "emoji": "🐤" },
+          { "name": "утёнок 2", "file": "popular/UtyaDuck_2.avif", "emoji": "🐥" },
+          { "name": "утёнок 3", "file": "popular/UtyaDuck_3.avif", "emoji": "🐤" },
+          { "name": "утёнок 4", "file": "popular/UtyaDuck_4.avif", "emoji": "🐥" },
+          { "name": "утёнок 5", "file": "popular/UtyaDuck_5.avif", "emoji": "🐤" },
+          { "name": "утёнок 6", "file": "popular/UtyaDuck_6.avif", "emoji": "🐥" },
+          { "name": "утёнок 7", "file": "popular/UtyaDuck_7.avif", "emoji": "🐤" },
+          { "name": "утёнок 8", "file": "popular/UtyaDuck_8.avif", "emoji": "🐥" },
+          { "name": "утёнок 9", "file": "popular/UtyaDuck_9.avif", "emoji": "🐤" },
+          { "name": "утёнок 10", "file": "popular/UtyaDuck_10.avif", "emoji": "🐥" }
+        ]
+      },
+      "PeopleMemes2": {
+        "icon": "🤣",
+        "stickers": [
+          { "name": "мем 2.1", "file": "popular/PeopleMemes2_1.avif", "emoji": "😂" },
+          { "name": "мем 2.2", "file": "popular/PeopleMemes2_2.avif", "emoji": "😅" },
+          { "name": "мем 2.3", "file": "popular/PeopleMemes2_3.avif", "emoji": "🤣" },
+          { "name": "мем 2.4", "file": "popular/PeopleMemes2_4.avif", "emoji": "😆" },
+          { "name": "мем 2.5", "file": "popular/PeopleMemes2_5.avif", "emoji": "😁" },
+          { "name": "мем 2.6", "file": "popular/PeopleMemes2_6.avif", "emoji": "🙂" },
+          { "name": "мем 2.7", "file": "popular/PeopleMemes2_7.avif", "emoji": "🙃" },
+          { "name": "мем 2.8", "file": "popular/PeopleMemes2_8.avif", "emoji": "😉" },
+          { "name": "мем 2.9", "file": "popular/PeopleMemes2_9.avif", "emoji": "😊" },
+          { "name": "мем 2.10", "file": "popular/PeopleMemes2_10.avif", "emoji": "😇" }
+        ]
+      },
+      "SantaEmoji": {
+        "icon": "🎅",
+        "stickers": [
+          { "name": "санта 1", "file": "popular/SantaEmoji_1.avif", "emoji": "🎅" },
+          { "name": "санта 2", "file": "popular/SantaEmoji_2.avif", "emoji": "🎄" },
+          { "name": "санта 3", "file": "popular/SantaEmoji_3.avif", "emoji": "🎅" },
+          { "name": "санта 4", "file": "popular/SantaEmoji_4.avif", "emoji": "🎄" },
+          { "name": "санта 5", "file": "popular/SantaEmoji_5.avif", "emoji": "🎅" },
+          { "name": "санта 6", "file": "popular/SantaEmoji_6.avif", "emoji": "🎄" },
+          { "name": "санта 7", "file": "popular/SantaEmoji_7.avif", "emoji": "🎅" },
+          { "name": "санта 8", "file": "popular/SantaEmoji_8.avif", "emoji": "🎄" },
+          { "name": "санта 9", "file": "popular/SantaEmoji_9.avif", "emoji": "🎅" },
+          { "name": "санта 10", "file": "popular/SantaEmoji_10.avif", "emoji": "🎄" }
+        ]
       }
     }
   }

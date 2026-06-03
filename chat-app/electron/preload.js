@@ -14,15 +14,38 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Автообновления
   checkForUpdates: () => ipcRenderer.send('check-for-updates'),
-  onCheckingForUpdate: (callback) => ipcRenderer.on('checking-for-update', callback),
-  onUpdateAvailable: (callback) => ipcRenderer.on('update-available', callback),
-  onUpdateNotAvailable: (callback) => ipcRenderer.on('update-not-available', callback),
-  onUpdateDownloaded: (callback) => ipcRenderer.on('update-downloaded', callback),
-  onDownloadProgress: (callback) => ipcRenderer.on('download-progress', callback),
-  onUpdateError: (callback) => ipcRenderer.on('update-error', callback),
-  onUpdatePostponed: (callback) => ipcRenderer.on('update-postponed', callback),
-  startUpdate: () => ipcRenderer.send('start-update'),
+  downloadUpdate: () => ipcRenderer.send('start-update'),
   quitAndInstall: () => ipcRenderer.send('quit-and-install'),
+  onUpdateChecking: (callback) => {
+    const handler = (_, info) => callback(info);
+    ipcRenderer.on('checking-for-update', handler);
+    return () => ipcRenderer.removeListener('checking-for-update', handler);
+  },
+  onUpdateAvailable: (callback) => {
+    const handler = (_, info) => callback(info);
+    ipcRenderer.on('update-available', handler);
+    return () => ipcRenderer.removeListener('update-available', handler);
+  },
+  onUpdateNotAvailable: (callback) => {
+    const handler = (_, info) => callback(info);
+    ipcRenderer.on('update-not-available', handler);
+    return () => ipcRenderer.removeListener('update-not-available', handler);
+  },
+  onUpdateDownloaded: (callback) => {
+    const handler = (_, info) => callback(info);
+    ipcRenderer.on('update-downloaded', handler);
+    return () => ipcRenderer.removeListener('update-downloaded', handler);
+  },
+  onDownloadProgress: (callback) => {
+    const handler = (_, progressObj) => callback(progressObj);
+    ipcRenderer.on('download-progress', handler);
+    return () => ipcRenderer.removeListener('download-progress', handler);
+  },
+  onUpdateError: (callback) => {
+    const handler = (_, err) => callback(err);
+    ipcRenderer.on('update-error', handler);
+    return () => ipcRenderer.removeListener('update-error', handler);
+  },
 
   // Открытие чата из уведомления
   onOpenChatFromNotification: (callback) => {

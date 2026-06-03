@@ -46,6 +46,37 @@ function getRecentEmojis(limit = 32) {
   }
 }
 
+// Ключ localStorage для истории стикеров
+const RECENT_STICKERS_KEY = 'recent_stickers';
+
+/** Получает последние N отправленных стикеров из localStorage */
+function getRecentStickers(limit = 32) {
+  try {
+    const stored = localStorage.getItem(RECENT_STICKERS_KEY);
+    if (!stored) return [];
+    const stickers = JSON.parse(stored);
+    return stickers.slice(-limit).reverse();
+  } catch {
+    return [];
+  }
+}
+
+/** Добавляет стикер в историю последних отправленных */
+function addStickerToHistory(sticker) {
+  try {
+    const stored = localStorage.getItem(RECENT_STICKERS_KEY);
+    let stickers = stored ? JSON.parse(stored) : [];
+    stickers = stickers.filter(s => s.file !== sticker.file);
+    stickers.push({ file: sticker.file, name: sticker.name, emoji: sticker.emoji });
+    if (stickers.length > 64) {
+      stickers = stickers.slice(-64);
+    }
+    localStorage.setItem(RECENT_STICKERS_KEY, JSON.stringify(stickers));
+  } catch (e) {
+    console.warn('Не удалось сохранить историю стикеров:', e);
+  }
+}
+
 /** Добавляет эмодзи в историю последних отправленных */
 function addEmojiToHistory(emoji) {
   try {
@@ -135,7 +166,9 @@ function StickerItem({ file, name, emoji, size = '64px', onClick, serverUrl }) {
 
 export default function EmojiInlinePicker({ show, onEmojiClick, onClose, theme, onStickerSend, serverUrl }) {
   const [activeCategory, setActiveCategory] = useState('smilies');
-  const [stickersTab, setStickersTab] = useState(Object.keys(stickerData.popular?.categories || {})[0] || '');
+  const recentInit = getRecentStickers(32);
+  const firstTab = recentInit.length > 0 ? '__recent__' : (Object.keys(stickerData.popular?.categories || {})[0] || '');
+  const [stickersTab, setStickersTab] = useState(firstTab);
   const [stickerVariant, setStickerVariant] = useState('popular');
   const [panelMode, setPanelMode] = useState('emojis'); // 'emojis' | 'stickers'
   const [animating, setAnimating] = useState(false);
@@ -169,7 +202,7 @@ export default function EmojiInlinePicker({ show, onEmojiClick, onClose, theme, 
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [show, onClose]);
 
-  // Сбрасываем категорию на первую при каждом открытии пикера
+  // Сбрасываем категории на первую при каждом открытии пикера
   useEffect(() => {
     if (show) {
       setActiveCategory(categoriesWithRecent[0]?.id || 'recent');
@@ -184,7 +217,20 @@ export default function EmojiInlinePicker({ show, onEmojiClick, onClose, theme, 
     onEmojiClick(emoji);
   };
 
+  // Получаем последние стикеры из localStorage
+  const recentStickers = getRecentStickers(32);
+
+  // Категории стикеров с "Последние" в начале
+  const stickerCategories = stickerData[stickerVariant].categories;
+  const stickerCategoryEntries = Object.entries(stickerCategories);
+  const allStickerTabs = [
+    ...(recentStickers.length > 0 ? [{ id: '__recent__', label: 'Последние', icon: '🕐', stickers: recentStickers }] : []),
+    ...stickerCategoryEntries.map(([name, data]) => ({ id: name, ...data })),
+  ];
+
   const handleStickerClick = (stickerObj) => {
+    // Сохраняем в историю последних стикеров
+    addStickerToHistory({ file: stickerObj.file, name: stickerObj.name, emoji: stickerObj.emoji });
     if (onStickerSend) {
       onStickerSend(stickerObj);
     } else {
@@ -219,7 +265,7 @@ export default function EmojiInlinePicker({ show, onEmojiClick, onClose, theme, 
 
       {/* Верхние категории (только для эмодзи) */}
       {panelMode === 'emojis' && (
-        <div className="eip-categories">
+        <div className="eip-categories" onWheel={(e) => { if (e.deltaY !== 0) { e.currentTarget.scrollLeft += e.deltaY; e.preventDefault(); } }}>
           {categoriesWithRecent.map(cat => (
             <button
               key={cat.id}
@@ -274,23 +320,23 @@ export default function EmojiInlinePicker({ show, onEmojiClick, onClose, theme, 
           </div>
 
           {/* Категории стикеров */}
-          <div className="eip-stickers-tabs">
-            {Object.entries(stickerData[stickerVariant].categories).map(([name, data]) => (
+          <div className="eip-stickers-tabs" onWheel={(e) => { if (e.deltaY !== 0) { e.currentTarget.scrollLeft += e.deltaY; e.preventDefault(); } }}>
+            {allStickerTabs.map(tab => (
               <button
-                key={name}
+                key={tab.id}
                 type="button"
-                className={`eip-sticker-tab-btn ${stickersTab === name ? 'active' : ''}`}
-                onClick={() => setStickersTab(name)}
-                title={name}
+                className={`eip-sticker-tab-btn ${stickersTab === tab.id ? 'active' : ''}`}
+                onClick={() => setStickersTab(tab.id)}
+                title={tab.label}
               >
-                {data.icon}
+                {tab.icon}
               </button>
             ))}
           </div>
 
           {/* Сетка стикеров */}
           <div className="eip-sticker-grid">
-            {stickerData[stickerVariant].categories[stickersTab]?.stickers.map((sticker, i) => (
+            {(allStickerTabs.find(t => t.id === stickersTab)?.stickers || []).map((sticker, i) => (
               <StickerItem
                 key={`sticker-${stickerVariant}-${stickersTab}-${i}`}
                 file={sticker.file}
@@ -310,7 +356,7 @@ export default function EmojiInlinePicker({ show, onEmojiClick, onClose, theme, 
         {panelMode === 'emojis' ? (
           <span>{currentEmojis.length} эмодзи</span>
         ) : (
-          <span>{stickerData[stickerVariant].categories[stickersTab]?.stickers.length || 0} стикеров</span>
+          <span>{(allStickerTabs.find(t => t.id === stickersTab)?.stickers.length || 0)} стикеров</span>
         )}
       </div>
     </div>

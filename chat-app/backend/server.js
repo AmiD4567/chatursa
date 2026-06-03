@@ -2,6 +2,7 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
+const helmet = require('helmet');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
@@ -9,7 +10,6 @@ const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcryptjs');
 const initSqlJs = require('sql.js');
 const crypto = require('crypto');
-
 // Настройки шифрования для конфиденциальности сообщений
 const ENCRYPTION_KEY = process.env.CHAT_ENCRYPTION_KEY || 'my-super-secret-key-2026';
 console.log('Ключ шифрования:', ENCRYPTION_KEY);
@@ -274,6 +274,8 @@ const io = new Server(server, {
     methods: ["GET", "POST"]
   }
 });
+
+startIdleChecker();
 
 let db = null;
 
@@ -699,8 +701,33 @@ function stopAutoSave() {
   }
 }
 
+// Проверка бездействия: раз в 30 секунд ищем пользователей, неактивных >10 минут
+function startIdleChecker() {
+  setInterval(() => {
+    const now = Date.now();
+    const timeout = 10 * 60 * 1000; // 10 минут
+    for (const [socketId, user] of onlineUsers.entries()) {
+      if (user.status !== 'online') continue;
+      const lastActive = userActivity.get(user.id);
+      if (lastActive && (now - lastActive) > timeout) {
+        user.status = 'idle';
+        onlineUsers.set(socketId, { ...user, status: 'idle' });
+        io.emit('user_status_changed', {
+          userId: user.id,
+          username: user.username,
+          status: 'idle'
+        });
+        console.log(`${user.username} переведён в idle (неактивен >10мин)`);
+      }
+    }
+  }, 30000);
+}
+
 // Хранилище онлайн пользователей в памяти
-const onlineUsers = new Map(); // socketId -> { id, username, socketId }
+const onlineUsers = new Map(); // socketId -> { id, username, socketId, status }
+
+// Время последней активности каждого пользователя (userId -> timestamp)
+const userActivity = new Map();
 
 // Rate-limiting для бота-помощника: 2 секунды между командами на один сокет
 const botRateLimit = new Map(); // socketId -> timestamp последнего запроса
@@ -710,6 +737,42 @@ let conversationStates; // будет инициализирован в initData
 
 // Аналитика использования бота
 let botAnalytics; // будет инициализирован в initDatabase().then()
+
+// Rate-limiting для регистрации и входа
+const registerAttempts = new Map();
+const loginAttempts = new Map();
+
+function checkRateLimit(map, key, maxAttempts, windowMs) {
+  const now = Date.now();
+  const entry = map.get(key);
+
+  if (!entry) {
+    map.set(key, { count: 1, startTime: now });
+    return true;
+  }
+
+  if (entry.blockedUntil) {
+    if (now < entry.blockedUntil) return false;
+    // Разблокируем по истечении времени
+    entry.blockedUntil = null;
+    entry.count = 1;
+    entry.startTime = now;
+    return true;
+  }
+
+  if (now - entry.startTime > windowMs) {
+    map.set(key, { count: 1, startTime: now });
+    return true;
+  }
+
+  if (entry.count > maxAttempts) {
+    entry.blockedUntil = now + windowMs;
+    return false;
+  }
+
+  entry.count++;
+  return true;
+}
 
 // Настройка multer для загрузки файлов
 const storage = multer.diskStorage({
@@ -730,11 +793,86 @@ const upload = multer({
   limits: { fileSize: config.uploads?.maxFileSize || 50 * 1024 * 1024 } // 50MB лимит
 });
 
+console.log('HELMET_CHECK: helmet middleware NOT applied');
 app.use(cors());
+
+// Явно разрешаем cross-origin загрузку ресурсов (CORP)
+app.use((req, res, next) => {
+  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+  next();
+});
+
+// Регистрируем MIME-тип для .avif (стикеры)
+express.static.mime.define({ 'image/avif': ['avif'] });
 app.use(express.json());
 app.use('/uploads', express.static(UPLOADS_PATH));
 app.use('/stickers', express.static(path.join(__dirname, '../frontend/build/stickers')));
 app.use(express.static(path.join(__dirname, '../frontend/build')));
+
+// ============================================
+// API для проверки версии и обновлений
+// ============================================
+
+// Получение текущей версии приложения из package.json
+app.get('/api/version', (req, res) => {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+    res.json({ version: pkg.version || '1.0.0' });
+  } catch (err) {
+    res.json({ version: '1.0.0' });
+  }
+});
+
+// Проверка новой версии на GitHub
+app.get('/api/check-update', async (req, res) => {
+  try {
+    const response = await fetch('https://api.github.com/repos/AmiD4567/chatursa/releases/latest', {
+      headers: {
+        'Accept': 'application/vnd.github.v3+json',
+        'User-Agent': 'chat-app'
+      }
+    });
+    if (!response.ok) {
+      return res.json({ hasUpdate: false, error: 'GitHub API error' });
+    }
+    const data = await response.json();
+    const latestTag = data.tag_name || '';
+    // tag_name может быть "v1.2.3" или "1.2.3"
+    const latestVersion = latestTag.replace(/^v/i, '');
+
+    // Получаем текущую версию
+    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+    const currentVersion = pkg.version || '1.0.0';
+
+    // Сравниваем версии
+    const hasUpdate = compareVersions(latestVersion, currentVersion) > 0;
+
+    res.json({
+      hasUpdate,
+      currentVersion,
+      latestVersion,
+      latestTag,
+      releaseUrl: data.html_url || `https://github.com/AmiD4567/chatursa/releases/tag/${latestTag}`,
+      publishedAt: data.published_at,
+      releaseName: data.name || latestTag
+    });
+  } catch (err) {
+    res.json({ hasUpdate: false, error: err.message });
+  }
+});
+
+// Простое сравнение семантических версий
+function compareVersions(v1, v2) {
+  const p1 = v1.split('.').map(Number);
+  const p2 = v2.split('.').map(Number);
+  for (let i = 0; i < Math.max(p1.length, p2.length); i++) {
+    const n1 = p1[i] || 0;
+    const n2 = p2[i] || 0;
+    if (n1 > n2) return 1;
+    if (n1 < n2) return -1;
+  }
+  return 0;
+}
 
 // ============================================
 // API для администраторов
@@ -1338,13 +1476,21 @@ app.post('/api/register', (req, res) => {
     return res.status(400).json({ error: 'Все поля обязательны' });
   }
 
+  // Rate limiting: не более 3 регистраций в час с одного IP
+  const clientIp = req.ip || req.connection.remoteAddress;
+  if (!checkRateLimit(registerAttempts, clientIp, 3, 60 * 60 * 1000)) {
+    return res.status(429).json({ error: 'Слишком много попыток регистрации. Попробуйте позже.' });
+  }
+
   // Проверка совпадения паролей
   if (password !== confirmPassword) {
     return res.status(400).json({ error: 'Пароли не совпадают' });
   }
 
-  if (password.length < 6) {
-    return res.status(400).json({ error: 'Пароль должен быть не менее 6 символов' });
+  // Проверка сложности пароля
+  const passwordRegex = /^(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]).{8,}$/;
+  if (!passwordRegex.test(password)) {
+    return res.status(400).json({ error: 'Пароль должен содержать минимум 8 символов, одну заглавную букву, одну цифру и один спецсимвол' });
   }
 
   // Приводим email к нижнему регистру для сравнения
@@ -1370,7 +1516,6 @@ app.post('/api/register', (req, res) => {
       VALUES (?, ?, ?, ?, ?, 'offline', ?)
     `, [userId, username, emailLower, passwordHash, avatar, birthDate]);
 
-
     res.json({
       success: true,
       user: {
@@ -1392,6 +1537,12 @@ app.post('/api/login', (req, res) => {
 
   if (!email || !password) {
     return res.status(400).json({ error: 'Email и пароль обязательны' });
+  }
+
+  // Rate limiting: не более 10 попыток за 15 минут с одного IP
+  const clientIp = req.ip || req.connection.remoteAddress;
+  if (!checkRateLimit(loginAttempts, clientIp, 10, 15 * 60 * 1000)) {
+    return res.status(429).json({ error: 'Слишком много попыток входа. Попробуйте позже.' });
   }
 
   // Приводим email к нижнему регистру для сравнения
@@ -3094,8 +3245,10 @@ io.on('connection', (socket) => {
       id: user.id,
       username: user.username,
       avatar: user.avatar,
-      socketId: socket.id
+      socketId: socket.id,
+      status: 'online'
     });
+    userActivity.set(user.id, Date.now());
 
     // Добавляем пользователя в общий чат если еще не там
     const inGeneralChatStmt = db.prepare(`
@@ -3838,15 +3991,34 @@ io.on('connection', (socket) => {
     }
   });
 
+  // Активность пользователя (сбрасывает idle-таймер)
+  socket.on('user_activity', () => {
+    const onlineUser = onlineUsers.get(socket.id);
+    if (!onlineUser) return;
+    userActivity.set(onlineUser.id, Date.now());
+    if (onlineUser.status === 'idle') {
+      onlineUser.status = 'online';
+      onlineUsers.set(socket.id, { ...onlineUser });
+      io.emit('user_status_changed', {
+        userId: onlineUser.id,
+        username: onlineUser.username,
+        status: 'online'
+      });
+    }
+  });
+
   // Получение списка пользователей
   socket.on('get_users', () => {
     const allUsers = getAllUsers();
 
     // Обновляем статусы онлайн
-    const onlineIds = Array.from(onlineUsers.values()).map(u => u.id);
+    const onlineUserMap = {};
+    for (const [sId, u] of onlineUsers.entries()) {
+      onlineUserMap[u.id] = u.status || 'online';
+    }
     const usersWithStatus = allUsers.map(u => ({
       ...u,
-      status: onlineIds.includes(u.id) ? 'online' : 'offline'
+      status: onlineUserMap[u.id] || 'offline'
     }));
 
     socket.emit('users_list', usersWithStatus);
@@ -3920,6 +4092,7 @@ io.on('connection', (socket) => {
       });
 
       onlineUsers.delete(socket.id);
+      userActivity.delete(onlineUser.id);
       botRateLimit.delete(socket.id); // Очистка rate-limiting при отключении
       clearConversation(conversationStates, socket.id); // Очистка контекста разговора
       console.log(`${onlineUser.username} отключился`);

@@ -34,8 +34,13 @@ function App() {
   const [showLoginForm, setShowLoginForm] = useState(false); // Показывать форму входа
   const [showAuthForm, setShowAuthForm] = useState(false); // Свернуто/развернуто форма входа/регистрации
   const [appVersion, setAppVersion] = useState('1.0.8');
-  const [updateStatus, setUpdateStatus] = useState(null); // null, 'checking', 'available', 'downloading', 'ready'
+  const [updateStatus, setUpdateStatus] = useState(null); // null | 'checking' | 'available' | 'downloading' | 'ready' | 'no-update' | 'error'
   const [updateProgress, setUpdateProgress] = useState(0);
+  const [showUpdateBanner, setShowUpdateBanner] = useState(false);
+  // Electron update info (версия + нуты)
+  const [electronUpdateInfo, setElectronUpdateInfo] = useState(null); // { version, releaseNotes }
+  // Browser (GitHub API) update info
+  const [browserUpdateInfo, setBrowserUpdateInfo] = useState(null); // { latestVersion, currentVersion, releaseUrl }
 
   // Формы авторизации
   const [authMode, setAuthMode] = useState('login'); // 'login' или 'register'
@@ -57,6 +62,7 @@ function App() {
 
   // Видимость приложения (для корректного подсчёта непрочитанных)
   const [isAppVisible, setIsAppVisible] = useState(true);
+  const isAppVisibleRef = useRef(true);
 
   const [inputText, setInputText] = useState('');
   const [selectedFile, setSelectedFile] = useState(null);
@@ -242,7 +248,7 @@ function App() {
   const [userUiSettings, setUserUiSettings] = useState({
     themeColor: '#667eea',
     themeGradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-    textSizeLevel: 1, // 0 = мал., 1 = ср., 2 = бол.
+    textSizeLevel: 1, // -1 = мин., 0 = мал., 1 = ср., 2 = бол.
     chatBackground: 0  // индекс фона чата (0 = нет)
   });
 
@@ -562,14 +568,14 @@ function App() {
   // Применение настроек оформления при изменении userUiSettings
   useEffect(() => {
     document.documentElement.style.setProperty('--primary-color', userUiSettings.themeColor);
-    // Градация размера текста: 0=мал(13px), 1=ср(15px), 2=бол(18px)
-    const sizeMap = ['13px', '15px', '18px'];
-    const emojiSizeMap = ['18px', '22px', '28px'];
-    const baseSizeMap = ['13px', '15px', '18px'];
-    const level = userUiSettings.textSizeLevel || 1;
-    document.documentElement.style.setProperty('--font-size-base', baseSizeMap[level]);
-    document.documentElement.style.setProperty('--message-font-size', sizeMap[level]);
-    document.documentElement.style.setProperty('--message-emoji-size', emojiSizeMap[level]);
+    // Градация размера текста: -1=мин(11px), 0=мал(13px), 1=ср(15px), 2=бол(18px)
+    const sizeMap = { '-1': '11px', '0': '13px', '1': '15px', '2': '18px' };
+    const emojiSizeMap = { '-1': '16px', '0': '18px', '1': '22px', '2': '28px' };
+    const baseSizeMap = { '-1': '11px', '0': '13px', '1': '15px', '2': '18px' };
+    const level = userUiSettings.textSizeLevel ?? 1;
+    document.documentElement.style.setProperty('--font-size-base', baseSizeMap[level] || '15px');
+    document.documentElement.style.setProperty('--message-font-size', sizeMap[level] || '15px');
+    document.documentElement.style.setProperty('--message-emoji-size', emojiSizeMap[level] || '22px');
   }, [userUiSettings]);
 
   // Применение фона чата при изменении настроек или темы
@@ -746,6 +752,7 @@ function App() {
         if (window.electronAPI.onAppVisibility) {
           window.electronAPI.onAppVisibility((visible) => {
             setIsAppVisible(visible);
+            isAppVisibleRef.current = visible;
             console.log(`app visibility: ${visible}`);
           });
         }
@@ -757,6 +764,118 @@ function App() {
     };
 
     initApp();
+  }, []);
+
+  // ============================================
+  // Система автообновлений (Electron + Browser)
+  // ============================================
+
+  // Слушатели событий Electron autoUpdater
+  useEffect(() => {
+    if (!window.electronAPI) return;
+
+    const cleanupChecking = window.electronAPI.onUpdateChecking(() => {
+      setUpdateStatus('checking');
+    });
+
+    const cleanupAvailable = window.electronAPI.onUpdateAvailable((info) => {
+      setElectronUpdateInfo(info);
+      setBrowserUpdateInfo(null);
+      setUpdateStatus('available');
+      setShowUpdateBanner(true);
+    });
+
+    const cleanupNotAvailable = window.electronAPI.onUpdateNotAvailable(() => {
+      setUpdateStatus('no-update');
+      setShowUpdateBanner(false);
+    });
+
+    const cleanupDownloaded = window.electronAPI.onUpdateDownloaded((info) => {
+      setElectronUpdateInfo(info);
+      setUpdateStatus('ready');
+      // Автоматически показываем баннер для установки
+      setShowUpdateBanner(true);
+    });
+
+    const cleanupProgress = window.electronAPI.onDownloadProgress((progressObj) => {
+      setUpdateProgress(progressObj.percent);
+      if (updateStatus !== 'downloading') {
+        setUpdateStatus('downloading');
+      }
+    });
+
+    const cleanupError = window.electronAPI.onUpdateError((err) => {
+      console.error('Ошибка автообновления:', err);
+      setUpdateStatus('error');
+      setShowUpdateBanner(false);
+    });
+
+    return () => {
+      cleanupChecking?.();
+      cleanupAvailable?.();
+      cleanupNotAvailable?.();
+      cleanupDownloaded?.();
+      cleanupProgress?.();
+      cleanupError?.();
+    };
+  }, []);
+
+  // Проверка обновлений (единая функция для Electron и браузера)
+  const checkForUpdates = useCallback(async () => {
+    setUpdateStatus('checking');
+    setShowUpdateBanner(false);
+    setUpdateProgress(0);
+
+    if (window.electronAPI?.checkForUpdates) {
+      // Electron: используем встроенный autoUpdater
+      window.electronAPI.checkForUpdates();
+    } else {
+      // Браузер: проверяем через GitHub API
+      try {
+        const res = await fetch('/api/check-update');
+        const data = await res.json();
+        if (data.hasUpdate) {
+          setBrowserUpdateInfo(data);
+          setElectronUpdateInfo(null);
+          setUpdateStatus('available');
+          setShowUpdateBanner(true);
+        } else {
+          setUpdateStatus('no-update');
+        }
+      } catch (err) {
+        console.error('Ошибка проверки обновлений:', err);
+        setUpdateStatus('error');
+      }
+    }
+  }, []);
+
+  // Автоматическая проверка при входе (только для браузера, Electron сам проверяет)
+  useEffect(() => {
+    const savedData = localStorage.getItem(STORAGE_KEY);
+    if (savedData && !window.electronAPI) {
+      // Браузер: проверяем через API с задержкой и интервалом
+      const timer = setTimeout(() => checkForUpdates(), 5000);
+      const interval = setInterval(checkForUpdates, 60 * 60 * 1000);
+      return () => {
+        clearTimeout(timer);
+        clearInterval(interval);
+      };
+    }
+  }, [checkForUpdates]);
+
+  // Скачивание и установка обновления (Electron)
+  const startUpdateDownload = useCallback(() => {
+    if (!window.electronAPI?.downloadUpdate) return;
+    setUpdateStatus('downloading');
+    setShowUpdateBanner(false);
+    window.electronAPI.downloadUpdate();
+  }, []);
+
+  // Установка загруженного обновления и перезапуск (Electron)
+  const installUpdate = useCallback(() => {
+    if (!window.electronAPI?.quitAndInstall) return;
+    setShowUpdateBanner(false);
+    window.electronAPI.quitAndInstall();
   }, []);
 
   // Инициализация сокета
@@ -789,7 +908,7 @@ function App() {
       if (loginTimeoutRef.current) clearTimeout(loginTimeoutRef.current);
       setConnectionStatus('connected');
 
-      // При переподключении заново отправляем user_joined
+      // При каждом подключении (включая переподключение) отправляем user_joined
       const savedData = localStorage.getItem(STORAGE_KEY);
       if (savedData) {
         try {
@@ -808,19 +927,19 @@ function App() {
 
     newSocket.on('disconnect', () => {
       console.warn('⚠ Сокет отключён!');
-      // Показываем экран потери связи только если пользователь был залогинен
-      if (localStorage.getItem(STORAGE_KEY)) {
-        setConnectionStatus('disconnected');
-        setIsLoggedIn(false);
-        setCurrentUser(null);
-      }
+      setConnectionStatus('disconnected');
+      // Не сбрасываем isLoggedIn/currentUser — чтобы после переподключения
+      // автоматически восстановить сессию без показа экрана входа
     });
 
     newSocket.on('reconnect', (attemptNumber) => {
       console.log('✓ Сокет переподключён после', attemptNumber, 'попыток');
       setConnectionStatus('connected');
 
-      // После переподключения присоединяемся к активному чату
+      // Запрашиваем свежий список пользователей
+      newSocket.emit('get_users');
+
+      // Присоединяемся к активному чату
       if (activeChatIdRef.current) {
         console.log('Переподключение: присоединяемся к чату', activeChatIdRef.current);
         newSocket.emit('join_chat', activeChatIdRef.current);
@@ -870,7 +989,7 @@ function App() {
       try {
         const creds = JSON.parse(savedCredentials);
         setEmail(creds.email || '');
-        setPassword(creds.password || '');
+        setPassword(creds.password ? (creds._enc ? atob(creds.password) : creds.password) : '');
         setRememberMe(true);
       } catch (e) {
         console.error('Ошибка парсинга credentials:', e);
@@ -958,10 +1077,18 @@ function App() {
       setCanBookMeetingRoom(hasRight);
 
       if (userChats.length > 0) {
-        const firstChat = userChats[0];
-        setActiveChatId(firstChat.id);
-        activeChatIdRef.current = firstChat.id;
-        newSocket.emit('join_chat', firstChat.id);
+        // При первом входе открываем первый чат, при переподключении сохраняем текущий
+        const currentActiveId = activeChatIdRef.current;
+        if (currentActiveId && userChats.some(c => c.id === currentActiveId)) {
+          // Чат всё ещё существует — просто присоединяемся к нему
+          newSocket.emit('join_chat', currentActiveId);
+        } else {
+          // Первый вход или текущий чат удалили — открываем первый
+          const firstChat = userChats[0];
+          setActiveChatId(firstChat.id);
+          activeChatIdRef.current = firstChat.id;
+          newSocket.emit('join_chat', firstChat.id);
+        }
       }
     });
 
@@ -1101,7 +1228,7 @@ function App() {
               // - Если чат активен НО приложение скрыто/свёрнуто → пользователь не видит, увеличиваем счётчик
               // - Исходящие сообщения → всегда 0
               // - Входящие + чат не активен → увеличиваем счётчик
-              if (!isMessageFromMe && isChatActive && isAppVisible) {
+              if (!isMessageFromMe && isChatActive && isAppVisibleRef.current) {
                 newUnreadCount = 0;
               } else if (isMessageFromMe) {
                 newUnreadCount = 0;
@@ -1612,6 +1739,38 @@ function App() {
     }
   }, [socket, isLoggedIn]);
 
+  // Отслеживание активности пользователя (сброс idle-таймера)
+  useEffect(() => {
+    if (!socket || !isLoggedIn) return;
+
+    const sendActivity = () => {
+      socket.emit('user_activity');
+    };
+
+    const handleActivity = () => {
+      socket.emit('user_activity');
+    };
+
+    // Ленивые события — раз в 60 секунд
+    const intervalId = setInterval(sendActivity, 60000);
+
+    // Быстрые события — при любом действии
+    document.addEventListener('mousemove', handleActivity);
+    document.addEventListener('keydown', handleActivity);
+    document.addEventListener('click', handleActivity);
+    document.addEventListener('scroll', handleActivity, { passive: true });
+    document.addEventListener('touchstart', handleActivity, { passive: true });
+
+    return () => {
+      clearInterval(intervalId);
+      document.removeEventListener('mousemove', handleActivity);
+      document.removeEventListener('keydown', handleActivity);
+      document.removeEventListener('click', handleActivity);
+      document.removeEventListener('scroll', handleActivity);
+      document.removeEventListener('touchstart', handleActivity);
+    };
+  }, [socket, isLoggedIn]);
+
   // Загрузка настроек уведомлений и проверка дней рождения при загрузке страницы
   useEffect(() => {
     // Загружаем настройки из localStorage
@@ -1722,7 +1881,8 @@ function App() {
         if (rememberMe) {
           localStorage.setItem('chat_credentials', JSON.stringify({
             email: email,
-            password: password
+            password: btoa(password),
+            _enc: true
           }));
         } else {
           localStorage.removeItem('chat_credentials');
@@ -1754,8 +1914,15 @@ function App() {
     setAuthError('');
     setIsLoading(true);
 
-    if (password.length < 6) {
-      setAuthError('Пароль должен быть не менее 6 символов');
+    if (password.length < 8) {
+      setAuthError('Пароль должен быть не менее 8 символов');
+      setIsLoading(false);
+      return;
+    }
+
+    const passwordRegex = /^(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]).{8,}$/;
+    if (!passwordRegex.test(password)) {
+      setAuthError('Пароль должен содержать минимум 8 символов, одну заглавную букву, одну цифру и один спецсимвол');
       setIsLoading(false);
       return;
     }
@@ -2581,7 +2748,10 @@ function App() {
     if (chatId) {
       const chat = chats.find(c => c.id === chatId);
       if (chat) {
-        handleSelectChat(chat);
+        if (activeChatId !== chatId) {
+          handleSelectChat(chat);
+        }
+        handleCloseSearch();
         const retryScroll = (attempts = 20) => {
           if (attempts <= 0) return;
           const el = document.getElementById(`message-${result.id}`);
@@ -2593,7 +2763,7 @@ function App() {
             setTimeout(() => retryScroll(attempts - 1), 200);
           }
         };
-        setTimeout(() => retryScroll(), 300);
+        setTimeout(() => retryScroll(), 400);
       }
     }
   };
@@ -4066,6 +4236,22 @@ function App() {
     }
   };
 
+  const fetchUsersList = async () => {
+    try {
+      const response = await fetch(`${SOCKET_URL}/api/users`);
+      if (response.ok) {
+        const data = await response.json();
+        if (currentUser) {
+          setUsers(data.users.filter(u => u.id !== currentUser.id));
+        } else {
+          setUsers(data.users);
+        }
+      }
+    } catch (err) {
+      console.error('Ошибка загрузки пользователей:', err);
+    }
+  };
+
   const toggleUserForShare = (userId) => {
     setSelectedUsersForShare(prev =>
       prev.find(id => id === userId)
@@ -4514,6 +4700,13 @@ function App() {
     };
   }, [showImagePreview, showChatMenu, showMediaViewer, contextMenu.visible, showEmojiPicker, emojiPickerPinned]);
 
+  // Обновляем список пользователей при открытии модалки создания чата
+  useEffect(() => {
+    if (showNewChatModal) {
+      fetchUsersList();
+    }
+  }, [showNewChatModal]);
+
   const handleCreateChat = () => {
     if (newChatType === 'direct' && selectedUsers.length === 1) {
       socket.emit('create_chat', {
@@ -4715,49 +4908,6 @@ function App() {
     return chat.participantsDetails.filter(p => p.status === 'online').length;
   };
 
-  // Экран потери связи с сервером (только если пользователь был залогинен)
-  if (!isLoggedIn && connectionStatus === 'disconnected' && localStorage.getItem(STORAGE_KEY)) {
-    const videoSrc = window.location.protocol === 'file:'
-      ? 'videos/background.mp4'
-      : '/videos/background.mp4';
-
-    return (
-      <div className="login-container">
-        <video
-          className="login-video-bg"
-          autoPlay
-          loop
-          muted
-          playsInline
-        >
-          <source src={videoSrc} type="video/mp4" />
-        </video>
-        <div className="login-video-overlay"></div>
-
-        <div className="login-box auth-box">
-          <h1>⚠️ Связь с сервером потеряна</h1>
-          <p className="disconnected-message">
-            Подключение к серверу разорвано. Проверьте соединение с сетью или обратитесь к администратору.
-          </p>
-          <div className="disconnected-actions">
-            <button 
-              className="auth-btn" 
-              onClick={() => {
-                setConnectionStatus('reconnecting');
-                window.location.reload();
-              }}
-            >
-              🔄 Попробовать снова
-            </button>
-          </div>
-        </div>
-        <div className="login-footer">
-          <span>© 2026 Created By Pantyuhov DI</span>
-        </div>
-      </div>
-    );
-  }
-
   // Экран авторизации
   if (!isLoggedIn || (isLoggedIn && !currentUser)) {
     // Определяем путь к видео в зависимости от окружения
@@ -4830,7 +4980,7 @@ function App() {
                         const creds = JSON.parse(savedCredentials);
                         // Устанавливаем значения для handleLogin
                         setEmail(creds.email || '');
-                        setPassword(creds.password || '');
+                        setPassword(creds.password ? (creds._enc ? atob(creds.password) : creds.password) : '');
                         setRememberMe(true);
                         setAuthMode('login');
                         setAuthError('');
@@ -5015,11 +5165,11 @@ function App() {
                 <div className="password-input-wrapper">
                   <input
                     type={showPassword ? 'text' : 'password'}
-                    placeholder="Минимум 6 символов"
+                    placeholder="Минимум 8 символов"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     required
-                    minLength={6}
+                    minLength={8}
                   />
                   <button
                     type="button"
@@ -5051,7 +5201,7 @@ function App() {
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
                     required
-                    minLength={6}
+                    minLength={8}
                   />
                   <button
                     type="button"
@@ -5106,6 +5256,16 @@ function App() {
 
   return (
     <div className="app-container">
+      {/* Оверлей потери связи */}
+      {connectionStatus === 'disconnected' && (
+        <div className="disconnected-overlay">
+          <div className="disconnected-overlay-content">
+            <div className="disconnected-spinner"></div>
+            <p>Потеряно соединение с сервером. Переподключение...</p>
+          </div>
+        </div>
+      )}
+
       {/* Баннер уведомления о включении уведомлений */}
       {showNotificationBanner && browserNotificationPermission !== 'granted' && (
         <div className="notification-banner">
@@ -5123,6 +5283,103 @@ function App() {
             <button className="notification-banner-dismiss" onClick={dismissNotificationBanner}>
               ✕
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Баннер обновления приложения */}
+      {showUpdateBanner && (
+        <div className="update-banner">
+          <div className="update-banner-content">
+            <span className="update-banner-icon">📦</span>
+            <div className="update-banner-text">
+              {updateStatus === 'checking' && (
+                <>
+                  <strong>Проверка обновлений...</strong>
+                  <p>Подождите, идёт проверка наличия новых версий.</p>
+                </>
+              )}
+              {updateStatus === 'available' && electronUpdateInfo && (
+                <>
+                  <strong>Доступно обновление v{electronUpdateInfo.version}</strong>
+                  <p>Нажмите «Обновить» для скачивания и установки.</p>
+                </>
+              )}
+              {updateStatus === 'available' && browserUpdateInfo && (
+                <>
+                  <strong>Доступно обновление v{browserUpdateInfo.latestVersion}</strong>
+                  <p>Текущая версия: v{browserUpdateInfo.currentVersion}.</p>
+                </>
+              )}
+              {updateStatus === 'downloading' && (
+                <>
+                  <strong>Загрузка обновления...</strong>
+                  <div className="update-progress-bar-inline">
+                    <div
+                      className="update-progress-fill-inline"
+                      style={{ width: `${Math.round(updateProgress)}%` }}
+                    ></div>
+                  </div>
+                  <span className="update-progress-text-inline">{Math.round(updateProgress)}%</span>
+                </>
+              )}
+              {updateStatus === 'ready' && electronUpdateInfo && (
+                <>
+                  <strong>Обновление v{electronUpdateInfo.version} готово к установке</strong>
+                  <p>Нажмите «Установить и перезапустить» для применения.</p>
+                </>
+              )}
+              {updateStatus === 'no-update' && (
+                <>
+                  <strong>У вас последняя версия</strong>
+                  <p>Обновлений не найдено.</p>
+                </>
+              )}
+              {updateStatus === 'error' && (
+                <>
+                  <strong>Ошибка проверки обновлений</strong>
+                  <p>Не удалось проверить наличие новых версий.</p>
+                </>
+              )}
+            </div>
+          </div>
+          <div className="update-banner-actions">
+            {updateStatus === 'available' && electronUpdateInfo && (
+              <>
+                <button className="update-banner-btn" onClick={startUpdateDownload}>
+                  Обновить
+                </button>
+                <button className="update-banner-dismiss" onClick={() => setShowUpdateBanner(false)}>
+                  Отмена
+                </button>
+              </>
+            )}
+            {updateStatus === 'available' && browserUpdateInfo && (
+              <>
+                <button
+                  className="update-banner-btn"
+                  onClick={() => {
+                    window.open(browserUpdateInfo.releaseUrl, '_blank');
+                    setShowUpdateBanner(false);
+                  }}
+                >
+                  Обновить
+                </button>
+                <button className="update-banner-dismiss" onClick={() => setShowUpdateBanner(false)}>
+                  Отмена
+                </button>
+              </>
+            )}
+            {updateStatus === 'ready' && (
+              <button className="update-banner-btn" onClick={installUpdate}>
+                Установить и перезапустить
+              </button>
+            )}
+            {(updateStatus === 'checking' || updateStatus === 'downloading') && (
+              <button className="update-banner-dismiss" onClick={() => setShowUpdateBanner(false)}>
+                Отмена
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -6073,11 +6330,14 @@ function App() {
                         p => p.username !== currentUser?.username
                       );
                       return otherUser ? (
-                        <img
-                          src={otherUser.avatar || chat.avatar || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(otherUser.username)}
-                          alt={otherUser.username}
-                          className="chat-avatar"
-                        />
+                        <div className="chat-avatar-wrapper">
+                          <img
+                            src={otherUser.avatar || chat.avatar || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(otherUser.username)}
+                            alt={otherUser.username}
+                            className="chat-avatar"
+                          />
+                          <span className={`chat-status-indicator ${otherUser.status === 'online' ? 'online' : ''}`}></span>
+                        </div>
                       ) : (
                         <div className="chat-icon">{getChatIcon(chat)}</div>
                       );
@@ -6539,7 +6799,7 @@ function App() {
                   setEmojiPickerPinned(false);
                 }}
                 theme={appTheme}
-                serverUrl={window.location.protocol === 'file:' ? SOCKET_URL : ''}
+                serverUrl={SOCKET_URL}
               />
 
               {/* Inline reply preview */}
@@ -7284,6 +7544,7 @@ function App() {
                     <p className="settings-description">Выберите размер текста для сообщений</p>
                     <div className="text-size-graduation">
                       {[
+                        { level: -1, label: 'Минимальный', textSize: '11px', emojiSize: '16px' },
                         { level: 0, label: 'Мелкий', textSize: '13px', emojiSize: '18px' },
                         { level: 1, label: 'Средний', textSize: '15px', emojiSize: '22px' },
                         { level: 2, label: 'Крупный', textSize: '18px', emojiSize: '28px' },
@@ -7553,10 +7814,7 @@ function App() {
                       {updateStatus === null && (
                         <button
                           className="btn-check-update"
-                          onClick={() => {
-                            setUpdateStatus('checking');
-                            window.electronAPI?.checkForUpdates?.();
-                          }}
+                          onClick={checkForUpdates}
                         >
                           🔍 Проверить обновления
                         </button>
@@ -7569,9 +7827,24 @@ function App() {
                         </div>
                       )}
 
-                      {updateStatus === 'available' && (
+                      {updateStatus === 'available' && electronUpdateInfo && (
                         <div className="update-available">
-                          <p className="update-message">📥 Начинаем загрузку обновления...</p>
+                          <p className="update-message">📥 Доступно обновление v{electronUpdateInfo.version}</p>
+                          <button className="btn-check-update" onClick={startUpdateDownload}>
+                            Скачать и установить
+                          </button>
+                        </div>
+                      )}
+
+                      {updateStatus === 'available' && browserUpdateInfo && (
+                        <div className="update-available">
+                          <p className="update-message">📥 Доступно обновление v{browserUpdateInfo.latestVersion}</p>
+                          <button
+                            className="btn-check-update"
+                            onClick={() => window.open(browserUpdateInfo.releaseUrl, '_blank')}
+                          >
+                            Скачать с GitHub
+                          </button>
                         </div>
                       )}
 
@@ -7581,16 +7854,19 @@ function App() {
                           <div className="update-progress-bar">
                             <div
                               className="update-progress-fill"
-                              style={{ width: `${updateProgress}%` }}
+                              style={{ width: `${Math.round(updateProgress)}%` }}
                             ></div>
                           </div>
                           <span className="update-progress-text">{Math.round(updateProgress)}%</span>
                         </div>
                       )}
 
-                      {updateStatus === 'ready' && (
+                      {updateStatus === 'ready' && electronUpdateInfo && (
                         <div className="update-ready">
-                          <p className="update-ready-message">✅ Обновление загружено. Установка и перезапуск...</p>
+                          <p className="update-ready-message">✅ Обновление v{electronUpdateInfo.version} готово</p>
+                          <button className="btn-check-update" onClick={installUpdate}>
+                            Установить и перезапустить
+                          </button>
                         </div>
                       )}
 
@@ -7599,12 +7875,21 @@ function App() {
                           <p>✅ У вас установлена последняя версия</p>
                           <button
                             className="btn-check-update-secondary"
-                            onClick={() => {
-                              setUpdateStatus('checking');
-                              window.electronAPI?.checkForUpdates?.();
-                            }}
+                            onClick={checkForUpdates}
                           >
                             🔍 Проверить снова
+                          </button>
+                        </div>
+                      )}
+
+                      {updateStatus === 'error' && (
+                        <div className="update-error">
+                          <p>❌ Ошибка проверки обновлений</p>
+                          <button
+                            className="btn-check-update-secondary"
+                            onClick={checkForUpdates}
+                          >
+                            Повторить
                           </button>
                         </div>
                       )}
@@ -7650,12 +7935,6 @@ function App() {
                 </button>
               </div>
 
-              <div className="chat-type-hint">
-                {selectedUsers.length === 0 && <span>Выберите пользователя для создания чата</span>}
-                {selectedUsers.length === 1 && <span>Создаётся личный чат</span>}
-                {selectedUsers.length > 1 && <span>Создаётся групповой чат ({selectedUsers.length} участников)</span>}
-              </div>
-
               {newChatType === 'group' && (
                 <input
                   type="text"
@@ -7685,6 +7964,7 @@ function App() {
                       const username = (user.username || '').toLowerCase();
                       return fullName.includes(query) || username.includes(query);
                     })
+                    .sort((a, b) => (a.username || '').localeCompare(b.username || ''))
                     .map(user => (
                       <div
                         key={user.id}

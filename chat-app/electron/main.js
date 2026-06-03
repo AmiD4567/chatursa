@@ -92,25 +92,8 @@ autoUpdater.on('checking-for-update', () => {
 autoUpdater.on('update-available', (info) => {
   logToFile(`Доступно обновление: ${info.version}`);
   if (mainWindow) {
+    // Передаём информацию о доступном обновлении фронтенду — он покажет баннер с кнопками
     mainWindow.webContents.send('update-available', info);
-    // Спрашиваем пользователя: установить сейчас или позже?
-    dialog.showMessageBox(mainWindow, {
-      type: 'question',
-      title: 'Доступно обновление',
-      message: `Доступна новая версия приложения (${info.version}). Установить сейчас?`,
-      buttons: ['Установить сейчас', 'Позже'],
-      defaultId: 0,
-      cancelId: 1
-    }).then((result) => {
-      if (result.response === 0) {
-        // Пользователь согласился — начинаем скачивание
-        logToFile('Пользователь подтвердил установку. Начинаем загрузку...');
-        autoUpdater.downloadUpdate();
-      } else {
-        logToFile('Пользователь отложил установку обновления');
-        mainWindow.webContents.send('update-postponed', info);
-      }
-    });
   }
 });
 
@@ -122,18 +105,16 @@ autoUpdater.on('update-not-available', (info) => {
 });
 
 autoUpdater.on('download-progress', (progressObj) => {
-  logToFile(`Загрузка обновления: ${progressObj.percent}%`);
+  logToFile(`Загрузка обновления: ${Math.round(progressObj.percent)}%`);
   if (mainWindow) {
     mainWindow.webContents.send('download-progress', progressObj);
   }
 });
 
 autoUpdater.on('update-downloaded', (info) => {
-  logToFile('Обновление загружено. Устанавливаем...');
+  logToFile('Обновление загружено. Ожидаем подтверждения для установки...');
   if (mainWindow) {
     mainWindow.webContents.send('update-downloaded', info);
-    // Автоматически устанавливаем без дополнительного подтверждения
-    autoUpdater.quitAndInstall();
   }
 });
 

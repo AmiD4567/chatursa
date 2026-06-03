@@ -49,9 +49,9 @@
 
   /* Сообщения */
   --message-bg-own: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  --message-bg-other: rgba(255, 255, 255, 0.1);
+  --message-bg-other: #ffffff;
   --message-text-own: #ffffff;
-  --message-text-other: #ffffff;
+  --message-text-other: #1a1a2e;
 
   /* Границы и тени */
   --border-color: rgba(255, 255, 255, 0.1);
@@ -756,6 +756,59 @@ body::before {
   min-width: 200px;
 }
 
+/* Оверлей потери связи поверх основного интерфейса */
+.disconnected-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 99999;
+  animation: fadeIn 0.3s ease;
+}
+
+.disconnected-overlay-content {
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  padding: 40px;
+  text-align: center;
+  max-width: 400px;
+  box-shadow: var(--shadow-lg);
+}
+
+.disconnected-overlay-content p {
+  color: var(--text-secondary);
+  font-size: 16px;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.disconnected-spinner {
+  width: 48px;
+  height: 48px;
+  border: 4px solid var(--border-color);
+  border-top-color: var(--primary-color);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin: 0 auto 20px;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
 /* ========================================
    LAST USER CARD STYLES
    ======================================== */
@@ -944,10 +997,8 @@ body::before {
 .app-container {
   display: flex;
   height: 100vh;
-  max-width: 1600px;
-  margin: 0 auto;
+  width: 100%;
   background: var(--page-bg);
-  box-shadow: var(--shadow-lg);
   overflow: hidden;
 }
 
@@ -1568,6 +1619,29 @@ body::before {
   box-shadow: 0 4px 16px rgba(102, 126, 234, 0.4);
 }
 
+.chat-avatar-wrapper {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.chat-status-indicator {
+  position: absolute;
+  bottom: 2px;
+  right: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--chat-list-bg, #1a1a2e);
+  background: #747d8c;
+  transition: all var(--transition-fast);
+  pointer-events: none;
+}
+
+.chat-status-indicator.online {
+  background: #2ed573;
+  box-shadow: 0 0 8px rgba(46, 213, 115, 0.5);
+}
+
 .chat-info {
   flex: 1;
   min-width: 0;
@@ -2146,7 +2220,7 @@ body::before {
 }
 
 .message-main:not(.own) .message-text-wrapper {
-  background: #ffffff;
+  background: var(--message-bg-other);
   border: 1px solid rgba(0, 0, 0, 0.08);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08), 0 0 16px rgba(102, 126, 234, 0.25);
   padding: 12px 16px 10px;
@@ -2504,12 +2578,12 @@ body::before {
 }
 
 .message-form-main input[type="text"]:disabled {
-  background: #f5f5f5;
+  background: var(--page-card-bg);
   cursor: not-allowed;
 }
 
 .message-form-main input[type="text"]::placeholder {
-  color: #999;
+  color: var(--page-text-tertiary);
 }
 
 /* Стили для contentEditable div */
@@ -3174,7 +3248,7 @@ body::before {
 }
 
 .users-select-list {
-  max-height: 200px;
+  max-height: 400px;
   overflow-y: auto;
   border: 1px solid var(--page-card-border);
   border-radius: var(--radius-md);
@@ -3286,12 +3360,12 @@ body::before {
   font-size: 15px;
   font-weight: 500;
   transition: all var(--transition-fast);
-  color: #666;
+  color: var(--page-text-secondary);
 }
 
 .cancel-btn:hover {
-  border-color: #999;
-  background: #f5f5f5;
+  border-color: var(--page-text-tertiary);
+  background: var(--hover-bg);
   transform: translateY(-2px);
 }
 
@@ -3447,7 +3521,7 @@ body::before {
 .form-actions .cancel-btn {
   border: 1px solid var(--page-card-border);
   background: var(--page-card-bg);
-  color: #666;
+  color: var(--page-text-secondary);
 }
 
 .form-actions .cancel-btn:hover {
@@ -3476,10 +3550,11 @@ body::before {
 }
 
 .share-task-preview {
-  background: #f5f5f5;
+  background: var(--page-card-bg);
   padding: 16px;
   border-radius: 8px;
   margin-bottom: 16px;
+  border: 1px solid var(--page-card-border);
   border-left: 4px solid #667eea;
 }
 
@@ -3492,18 +3567,18 @@ body::before {
 
 .share-task-description {
   font-size: 13px;
-  color: #666;
+  color: var(--page-text-secondary);
   margin-bottom: 8px;
 }
 
 .share-task-date {
   font-size: 12px;
-  color: #999;
+  color: var(--page-text-tertiary);
 }
 
 .share-select-title {
   font-size: 14px;
-  color: #666;
+  color: var(--page-text-secondary);
   margin-bottom: 12px;
 }
 
@@ -3526,12 +3601,12 @@ body::before {
 }
 
 .share-user-item:hover {
-  background: #f5f5ff;
+  background: var(--hover-bg);
 }
 
 .share-user-item.selected {
-  background: #f0f0ff;
-  border: 1px solid #667eea;
+  background: var(--active-bg);
+  border: 1px solid var(--primary-color);
 }
 
 .share-user-avatar {
@@ -3556,19 +3631,19 @@ body::before {
 .refresh-tasks-btn {
   width: 100%;
   padding: 10px;
-  background: #f0f0ff;
-  border: none;
+  background: var(--hover-bg);
+  border: 1px solid var(--page-card-border);
   border-radius: 8px;
   cursor: pointer;
   font-size: 14px;
-  color: #667eea;
+  color: var(--primary-color);
   font-weight: 500;
   margin-bottom: 12px;
   transition: background 0.2s;
 }
 
 .refresh-tasks-btn:hover {
-  background: #e0e0ff;
+  background: var(--active-bg);
 }
 
 .shared-tasks-list {
@@ -3581,15 +3656,16 @@ body::before {
 
 .no-shared-tasks {
   text-align: center;
-  color: #999;
+  color: var(--page-text-tertiary);
   padding: 40px 20px;
 }
 
 .shared-task-item {
   padding: 12px;
-  background: #f9f9f9;
+  background: var(--page-card-bg);
+  border: 1px solid var(--page-card-border);
   border-radius: 8px;
-  border-left: 4px solid #667eea;
+  border-left: 4px solid var(--primary-color);
 }
 
 .shared-task-item.disabled {
@@ -3791,7 +3867,7 @@ body::before {
 
 .view-profile-fullname {
   font-size: 16px;
-  color: #666;
+  color: var(--page-text-secondary);
   margin: 0;
 }
 
@@ -3807,13 +3883,14 @@ body::before {
   flex-direction: column;
   gap: 4px;
   padding: 12px 16px;
-  background: #f5f5f5;
+  background: var(--page-card-bg);
+  border: 1px solid var(--page-card-border);
   border-radius: 8px;
 }
 
 .profile-detail-row .detail-label {
   font-size: 13px;
-  color: #888;
+  color: var(--page-text-secondary);
   font-weight: 500;
 }
 
@@ -3840,12 +3917,13 @@ body::before {
   padding: 12px;
   border-radius: 8px;
   margin-bottom: 8px;
-  background: #f8f9fa;
+  background: var(--page-card-bg);
+  border: 1px solid var(--page-card-border);
   transition: background 0.2s;
 }
 
 .document-item:hover {
-  background: #f0f0f0;
+  background: var(--hover-bg);
 }
 
 .document-icon {
@@ -3926,8 +4004,8 @@ body::before {
 }
 
 .calendar-day:hover {
-  border-color: #667eea;
-  background: #f5f5ff;
+  border-color: var(--primary-color);
+  background: var(--hover-bg);
 }
 
 .calendar-day.empty {
@@ -3937,8 +4015,8 @@ body::before {
 }
 
 .calendar-day.today {
-  border-color: #667eea;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-color: var(--primary-color);
+  background: var(--primary-gradient);
   color: white;
 }
 
@@ -5293,6 +5371,123 @@ body::before {
 
 .notification-banner-dismiss:hover {
   opacity: 1;
+}
+
+/* Баннер обновления приложения */
+.update-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+  padding: 16px 24px;
+  border-radius: 12px;
+  margin: 16px;
+  box-shadow: 0 4px 20px rgba(102, 126, 234, 0.4);
+  animation: slideDown 0.3s ease-out;
+}
+
+.update-banner-content {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex: 1;
+}
+
+.update-banner-icon {
+  font-size: 32px;
+}
+
+.update-banner-text {
+  color: white;
+}
+
+.update-banner-text strong {
+  display: block;
+  font-size: 16px;
+  margin-bottom: 4px;
+}
+
+.update-banner-text p {
+  font-size: 14px;
+  opacity: 0.9;
+  margin: 0;
+}
+
+.update-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.update-banner-btn {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  padding: 10px 24px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.update-banner-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.5);
+}
+
+.update-banner-dismiss {
+  background: rgba(255, 255, 255, 0.15);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: white;
+  padding: 9px 20px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.update-banner-dismiss:hover {
+  background: rgba(255, 255, 255, 0.25);
+  transform: translateY(-2px);
+}
+
+/* Прогресс-бар внутри баннера */
+.update-progress-bar-inline {
+  width: 100%;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
+  margin-top: 8px;
+  overflow: hidden;
+}
+
+.update-progress-fill-inline {
+  height: 100%;
+  background: linear-gradient(90deg, #667eea, #764ba2);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.update-progress-text-inline {
+  display: block;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.7);
+  margin-top: 4px;
+}
+
+/* Секция ошибки в О приложении */
+.update-error {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 8px;
+  padding: 16px;
+  color: #fca5a5;
+}
+
+.update-error p {
+  margin: 0 0 12px 0;
 }
 
 /* Кнопка включения уведомлений в настройках */
@@ -9276,6 +9471,10 @@ body,
 }
 
 [data-theme="light"] .chat-item.active .chat-time {
+  color: rgba(44, 62, 80, 0.7);
+}
+
+[data-theme="light"] .chat-item.active .chat-preview {
   color: rgba(44, 62, 80, 0.7);
 }
 
