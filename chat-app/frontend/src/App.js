@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import io from 'socket.io-client';
 import EmojiInlinePicker from './EmojiInlinePicker';
+import LinkPreviewCard from './LinkPreviewCard';
 import { SAFE_EMOJIS } from './safe-emojis';
+import { splitTextByUrls, detectUrls } from './urlUtils';
 import { useReactionParticles } from './ReactionParticlesManager';
 import emojiData from './emojiData.json';
 
@@ -687,10 +689,11 @@ function App() {
   // Закрытие панели смайлов при клике вне
   // Inline picker обрабатывает закрытие по клику вне самостоятельно
 
-  // Отслеживание размера окна для адаптивного поведения
+  // Отслеживание размера окна для адаптивного поведения и клавиатуры
   useEffect(() => {
     const handleResize = () => {
       setWindowWidth(window.innerWidth);
+      document.documentElement.style.setProperty('--app-height', `${window.innerHeight}px`);
     };
 
     window.addEventListener('resize', handleResize);
@@ -3229,30 +3232,78 @@ function App() {
   const renderMessageContent = (text) => {
     if (!text) return text;
     const marker = '\x00STICKER\x00';
-    if (!text.includes(marker)) return wrapEmojisInText(text);
-    const parts = text.split(marker);
-    const result = [];
+
+    // Handle sticker messages
+    if (text.includes(marker)) {
+      const parts = text.split(marker);
+      const result = [];
+      let key = 0;
+      for (let i = 0; i < parts.length; i++) {
+        if (i % 2 === 1) {
+          const stickerFile = parts[i];
+          result.push(
+            <img key={`stk-${key++}`} className="sticker-inline" data-sticker="true"
+                 src={stickerUrl(stickerFile)} alt=""
+                 style={{ width: 'var(--message-emoji-size, 28px)', height: 'var(--message-emoji-size, 28px)',
+                          objectFit: 'contain', verticalAlign: 'middle' }}
+                 onError={(e) => { e.target.style.display = 'none'; }} />
+          );
+        } else if (parts[i]) {
+          const wrapped = wrapEmojisInText(parts[i]);
+          if (typeof wrapped === 'string') {
+            result.push(wrapped);
+          } else {
+            wrapped.forEach(w => result.push(w));
+          }
+        }
+      }
+      return result;
+    }
+
+    // Regular text: split by URLs, render text parts normally and URLs as clickable links
+    const urlParts = splitTextByUrls(text);
+    const elements = [];
     let key = 0;
-    for (let i = 0; i < parts.length; i++) {
-      if (i % 2 === 1) {
-        const stickerFile = parts[i];
-        result.push(
-          <img key={`stk-${key++}`} className="sticker-inline" data-sticker="true"
-               src={stickerUrl(stickerFile)} alt=""
-               style={{ width: 'var(--message-emoji-size, 28px)', height: 'var(--message-emoji-size, 28px)',
-                        objectFit: 'contain', verticalAlign: 'middle' }}
-               onError={(e) => { e.target.style.display = 'none'; }} />
+
+    for (const part of urlParts) {
+      if (part.type === 'url') {
+        elements.push(
+          <a key={`link-${key++}`} href={part.content} target="_blank" rel="noopener noreferrer" className="message-link-inline">
+            {part.content}
+          </a>
         );
-      } else if (parts[i]) {
-        const wrapped = wrapEmojisInText(parts[i]);
+      } else {
+        const wrapped = wrapEmojisInText(part.content);
         if (typeof wrapped === 'string') {
-          result.push(wrapped);
+          elements.push(wrapped);
         } else {
-          wrapped.forEach(w => result.push(w));
+          wrapped.forEach(w => elements.push(w));
         }
       }
     }
-    return result;
+
+    return elements.length > 0 ? elements : text;
+  };
+
+  const renderLinkPreviews = (text) => {
+    if (!text) return null;
+    const marker = '\x00STICKER\x00';
+    // Don't render previews for sticker-only messages
+    if (text.startsWith(marker) && text.endsWith(marker)) return null;
+
+    // Strip sticker markers for URL detection in mixed messages
+    const cleanText = text.split(marker).filter((_, i) => i % 2 === 0).join('');
+    const urls = detectUrls(cleanText);
+    if (urls.length === 0) return null;
+
+    const uniqueUrls = [...new Set(urls.map(u => u.url.startsWith('http') ? u.url : `https://${u.url}`))];
+    return (
+      <div className="message-link-preview-wrapper">
+        {uniqueUrls.map((url, i) => (
+          <LinkPreviewCard key={`prev-${i}`} url={url} socketUrl={SOCKET_URL} />
+        ))}
+      </div>
+    );
   };
 
   const handleAddEmoji = (emojiObject) => {
@@ -6690,6 +6741,7 @@ function App() {
                             <p className={`message-text-main${isStickerOnlyMessage(message.text) ? ' sticker-message' : ''}`} onContextMenu={(e) => handleContextMenu(e, message.id, message.text, message.chatId, message.senderId, message.senderName)}>
                               {isBotMessage(message) ? formatBotText(message.text) : renderMessageContent(message.text)}
                             </p>
+                            {!isBotMessage(message) && renderLinkPreviews(message.text)}
                             <div className="message-time-inline">
                               <span className="message-time-main">{formatTime(message.timestamp)}</span>
                               {message.edited && <span className="message-edited-indicator" title="Отредактировано">ред.</span>}
@@ -8762,116 +8814,178 @@ function App() {
             </div>
 
             <div className="modal-body">
-              <div className="status-picker-full">
-                <button
-                  className={`status-btn-full ${!statusEmoji && !statusDescription ? 'active' : ''}`}
-                  onClick={async () => {
-                    setStatusEmoji('');
-                    setStatusDescription('');
-                    const newStatus = '';
-                    setProfileData(prev => ({ ...prev, statusText: newStatus }));
-                    setCurrentUser(prev => ({ ...prev, status_text: newStatus }));
-
-                    // Сохраняем на сервере
-                    try {
-                      await fetch(`${SOCKET_URL}/api/profile`, {
-                        method: 'PUT',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                          userId: currentUserRef.current?.id,
-                          statusText: newStatus
-                        })
-                      });
-                    } catch (err) {
-                      console.error('Ошибка сохранения статуса:', err);
-                    }
-                  }}
-                >
-                  Без статуса
-                </button>
-                
-                <div className="status-divider-full">
-                  <span>и описание статуса</span>
-                </div>
-
-                <div className="status-input-wrapper">
-                  <input
-                    type="text"
-                    className="status-input-full"
-                    placeholder="Введите описание статуса..."
-                    value={statusDescription}
-                    onChange={async (e) => {
-                      const value = e.target.value;
-                      setStatusDescription(value);
-                      const newStatus = (statusEmoji ? statusEmoji + ' ' : '') + value;
-                      setProfileData(prev => ({ ...prev, statusText: newStatus }));
-                      setCurrentUser(prev => {
-                        const updated = { ...prev, status_text: newStatus };
-                        return updated;
-                      });
-
-                      // Сохраняем на сервере
-                      try {
-                        await fetch(`${SOCKET_URL}/api/profile`, {
-                          method: 'PUT',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({
-                            userId: currentUser.id,
-                            statusText: newStatus
-                          })
-                        });
-                      } catch (err) {
-                        console.error('Ошибка сохранения статуса:', err);
-                      }
-                    }}
-                    maxLength={100}
-                  />
-                  <button
-                    className="status-emoji-btn-inline"
-                    onClick={() => setShowStatusEmojiPicker(!showStatusEmojiPicker)}
-                    title="Выбрать emoji"
-                  >
-                    {statusEmoji ? renderEmoji(statusEmoji, '', 20) : '😀'}
-                  </button>
-
-                  {showStatusEmojiPicker && (
-                    <div className="status-emoji-picker-popup-inline">
-                      <div className="status-emoji-grid">
-                        {SAFE_EMOJIS.filter(Boolean).map(emoji => (
-                          <button
-                            key={emoji}
-                            className="status-emoji-option"
-                            onClick={() => {
-                              setStatusEmoji(emoji);
-                              const newStatus = emoji + (statusDescription ? ' ' + statusDescription : '');
-                              setProfileData(prev => ({
-                                ...prev,
-                                statusText: newStatus
-                              }));
-                              setCurrentUser(prev => {
-                                const updated = { ...prev, status_text: newStatus };
-                                return updated;
-                              });
-                              setShowStatusEmojiPicker(false);
-                              
-                              fetch(`${SOCKET_URL}/api/profile`, {
-                                method: 'PUT',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({
-                                  userId: currentUserRef.current?.id,
-                                  statusText: newStatus
-                                })
-                              }).catch(err => console.error('Ошибка сохранения статуса:', err));
-                            }}
-                          >
-                            {renderEmoji(emoji, '', 24)}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
+              <div className="status-preview-card">
+                <div className={`status-preview-content ${!statusEmoji && !statusDescription ? 'status-preview-empty' : ''}`}>
+                  <span className="status-preview-emoji">{statusEmoji ? renderEmoji(statusEmoji, '', 36) : '😶'}</span>
+                  <span className="status-preview-text">{statusDescription || 'Нет статуса'}</span>
                 </div>
               </div>
+
+              <div className="status-presets-section">
+                <div className="status-section-label">Быстрые статусы</div>
+                <div className="status-presets-grid">
+                  {[
+                    { emoji: '💼', text: 'На работе' },
+                    { emoji: '🏠', text: 'В отпуске' },
+                    { emoji: '📞', text: 'Недоступен' },
+                    { emoji: '🤒', text: 'Болею' },
+                    { emoji: '🍴', text: 'Обед' },
+                    { emoji: '🚗', text: 'В пути' },
+                    { emoji: '💤', text: 'Отдыхаю' },
+                    { emoji: '🎯', text: 'Занят' },
+                  ].map(preset => (
+                    <button
+                      key={preset.text}
+                      className={`status-preset-btn ${statusDescription === preset.text && statusEmoji === preset.emoji ? 'active' : ''}`}
+                      onClick={() => {
+                        setStatusEmoji(preset.emoji);
+                        setStatusDescription(preset.text);
+                        const newStatus = `${preset.emoji} ${preset.text}`;
+                        setProfileData(prev => ({ ...prev, statusText: newStatus }));
+                        setCurrentUser(prev => ({ ...prev, status_text: newStatus }));
+                        fetch(`${SOCKET_URL}/api/profile`, {
+                          method: 'PUT',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ userId: currentUserRef.current?.id, statusText: newStatus })
+                        }).catch(err => console.error('Ошибка сохранения статуса:', err));
+                      }}
+                    >
+                      <span className="status-preset-emoji">{renderEmoji(preset.emoji, '', 24)}</span>
+                      <span className="status-preset-text">{preset.text}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="status-custom-section">
+                <div className="status-section-label">Свой статус</div>
+                <div className="status-custom-row">
+                  <div className="status-input-wrap">
+                    <input
+                      type="text"
+                      className="status-input-custom"
+                      placeholder="Введите текст статуса..."
+                      value={statusDescription}
+                      onChange={async (e) => {
+                        const value = e.target.value;
+                        setStatusDescription(value);
+                        const newStatus = (statusEmoji ? statusEmoji + ' ' : '') + value;
+                        setProfileData(prev => ({ ...prev, statusText: newStatus }));
+                        setCurrentUser(prev => {
+                          const updated = { ...prev, status_text: newStatus };
+                          return updated;
+                        });
+                        try {
+                          await fetch(`${SOCKET_URL}/api/profile`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                              userId: currentUser.id,
+                              statusText: newStatus
+                            })
+                          });
+                        } catch (err) {
+                          console.error('Ошибка сохранения статуса:', err);
+                        }
+                      }}
+                      maxLength={100}
+                    />
+                    <button
+                      className="status-emoji-btn-inline"
+                      onClick={() => setShowStatusEmojiPicker(true)}
+                      title="Выбрать emoji"
+                    >
+                      {statusEmoji ? renderEmoji(statusEmoji, '', 20) : '😀'}
+                    </button>
+                  </div>
+                  <div className="status-quick-emoji-row">
+                    {['😀','😂','😊','❤️','🔥','👍','🎉','💯'].map(emoji => (
+                      <button
+                        key={emoji}
+                        className={`status-quick-emoji ${statusEmoji === emoji ? 'active' : ''}`}
+                        onClick={() => {
+                          setStatusEmoji(emoji);
+                          const newStatus = emoji + (statusDescription ? ' ' + statusDescription : '');
+                          setProfileData(prev => ({ ...prev, statusText: newStatus }));
+                          setCurrentUser(prev => ({ ...prev, status_text: newStatus }));
+                          fetch(`${SOCKET_URL}/api/profile`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ userId: currentUserRef.current?.id, statusText: newStatus })
+                          }).catch(err => console.error('Ошибка сохранения статуса:', err));
+                        }}
+                      >
+                        {renderEmoji(emoji, '', 22)}
+                      </button>
+                    ))}
+                    <button
+                      className="status-more-emoji-btn"
+                      onClick={() => setShowStatusEmojiPicker(true)}
+                      title="Больше emoji"
+                    >
+                      ...
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <button
+                className={`status-clear-btn ${!statusEmoji && !statusDescription ? 'active' : ''}`}
+                onClick={async () => {
+                  setStatusEmoji('');
+                  setStatusDescription('');
+                  const newStatus = '';
+                  setProfileData(prev => ({ ...prev, statusText: newStatus }));
+                  setCurrentUser(prev => ({ ...prev, status_text: newStatus }));
+                  try {
+                    await fetch(`${SOCKET_URL}/api/profile`, {
+                      method: 'PUT',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        userId: currentUserRef.current?.id,
+                        statusText: newStatus
+                      })
+                    });
+                  } catch (err) {
+                    console.error('Ошибка сохранения статуса:', err);
+                  }
+                }}
+              >
+                {!statusEmoji && !statusDescription ? '✓ Статус не установлен' : '✕ Сбросить статус'}
+              </button>
+
+              {showStatusEmojiPicker && (
+                <div className="status-emoji-picker-overlay" onClick={() => setShowStatusEmojiPicker(false)}>
+                  <div className="status-emoji-picker-popup" onClick={e => e.stopPropagation()}>
+                    <div className="status-emoji-picker-header">
+                      <span>Выберите emoji</span>
+                      <button className="status-emoji-close-btn" onClick={() => setShowStatusEmojiPicker(false)}>✕</button>
+                    </div>
+                    <div className="status-emoji-grid">
+                      {SAFE_EMOJIS.filter(Boolean).map(emoji => (
+                        <button
+                          key={emoji}
+                          className={`status-emoji-option ${statusEmoji === emoji ? 'active' : ''}`}
+                          onClick={() => {
+                            setStatusEmoji(emoji);
+                            const newStatus = emoji + (statusDescription ? ' ' + statusDescription : '');
+                            setProfileData(prev => ({ ...prev, statusText: newStatus }));
+                            setCurrentUser(prev => ({ ...prev, status_text: newStatus }));
+                            setShowStatusEmojiPicker(false);
+                            fetch(`${SOCKET_URL}/api/profile`, {
+                              method: 'PUT',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ userId: currentUserRef.current?.id, statusText: newStatus })
+                            }).catch(err => console.error('Ошибка сохранения статуса:', err));
+                          }}
+                        >
+                          {renderEmoji(emoji, '', 28)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="modal-footer">

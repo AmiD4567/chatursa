@@ -3,16 +3,35 @@ const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
 const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcryptjs');
-const initSqlJs = require('sql.js');
+const Database = require('better-sqlite3');
 const crypto = require('crypto');
+const webPush = require('web-push');
+const speakeasy = require('speakeasy');
+const QRCode = require('qrcode');
+const cookieParser = require('cookie-parser');
+
+// Загрузка .env файла
+try { require('dotenv').config({ path: path.join(__dirname, '.env') }); } catch (e) {}
+
+// VAPID keys for Web Push
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || 'BHOqP4mk3F0J_T0HPrs3KfZINBiqgj--SKHK6axuY8YqMsA6_qOZnD01DS7Ou2KchkUOY51Oz5Fpwk5_oPG9yco';
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || 'y4O_8-8mDdYR4Cw6sUJLKYB9SO2nMxOquGpfyFOqxY0';
+webPush.setVapidDetails('mailto:admin@chatursa.local', VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+
 // Настройки шифрования для конфиденциальности сообщений
-const ENCRYPTION_KEY = process.env.CHAT_ENCRYPTION_KEY || 'my-super-secret-key-2026';
-console.log('Ключ шифрования:', ENCRYPTION_KEY);
+const ENCRYPTION_KEY = process.env.CHAT_ENCRYPTION_KEY;
+if (!ENCRYPTION_KEY) {
+  console.error('⚠️  CHAT_ENCRYPTION_KEY не задан в .env! Используется insecure default!');
+  console.error('⚠️  Создайте .env файл с CHAT_ENCRYPTION_KEY=<ваш-ключ>');
+}
+const FALLBACK_KEY = ENCRYPTION_KEY || 'my-super-secret-key-2026';
 const IV_LENGTH = 16;
 
 // Проверка: строка уже зашифрована? (формат: hexIV:hexCiphertext)
@@ -35,7 +54,7 @@ function encryptText(text) {
   if (isEncrypted(text)) return text;
 
   const iv = crypto.randomBytes(IV_LENGTH);
-  const cipher = crypto.createCipheriv('aes-256-cbc', crypto.createHash('sha256').update(ENCRYPTION_KEY).digest(), iv);
+  const cipher = crypto.createCipheriv('aes-256-cbc', crypto.createHash('sha256').update(FALLBACK_KEY).digest(), iv);
   let encrypted = cipher.update(text, 'utf8', 'hex');
   encrypted += cipher.final('hex');
 
@@ -65,7 +84,7 @@ function decryptText(encryptedText) {
       return encryptedText;
     }
     
-    const decipher = crypto.createDecipheriv('aes-256-cbc', crypto.createHash('sha256').update(ENCRYPTION_KEY).digest(), iv);
+    const decipher = crypto.createDecipheriv('aes-256-cbc', crypto.createHash('sha256').update(FALLBACK_KEY).digest(), iv);
     let decrypted = decipher.update(encryptedHex, 'hex', 'utf8');
     decrypted += decipher.final('utf8');
     return decrypted;
@@ -85,6 +104,8 @@ function decryptText(encryptedText) {
 const LOG_FILE = path.join(__dirname, 'server-runtime.log');
 const LOG_FLUSH_INTERVAL = 3000; // flush каждые 3 сек (было 2с)
 const LOG_MAX_BATCH_SIZE = 100;  // макс. строк в одном write (было 50)
+const LOG_MAX_SIZE = 50 * 1024 * 1024; // ротация при 50MB
+const LOG_MAX_FILES = 5;               // хранить до 5 старых логов
 
 const logQueue = [];             // очередь сообщений
 let logFlushTimer = null;        // таймер периодического сброса
@@ -128,6 +149,30 @@ function logEnqueue(level, ...args) {
 }
 
 /**
+ * rotateLogFile — ротация лог-файла при превышении LOG_MAX_SIZE.
+ * server-runtime.log → server-runtime.1.log → ... → server-runtime.N.log
+ */
+function rotateLogFile() {
+  try {
+    const stat = fs.statSync(LOG_FILE);
+    if (stat.size < LOG_MAX_SIZE) return;
+    // Удаляем самый старый файл
+    const oldest = path.join(__dirname, `server-runtime.${LOG_MAX_FILES}.log`);
+    if (fs.existsSync(oldest)) fs.unlinkSync(oldest);
+    // Сдвигаем: N → N+1, ... , 1 → 2
+    for (let i = LOG_MAX_FILES - 1; i >= 1; i--) {
+      const oldName = path.join(__dirname, `server-runtime.${i}.log`);
+      const newName = path.join(__dirname, `server-runtime.${i + 1}.log`);
+      if (fs.existsSync(oldName)) fs.renameSync(oldName, newName);
+    }
+    // Текущий → .1
+    fs.renameSync(LOG_FILE, path.join(__dirname, 'server-runtime.1.log'));
+  } catch (err) {
+    origConsoleError(`[logger] Ошибка ротации лога: ${err.message}`);
+  }
+}
+
+/**
  * flushLogs — записать накопленные логи в файл И вывести в консоль.
  * Вызывается по таймеру или при переполнении буфера.
  */
@@ -149,12 +194,11 @@ async function flushLogs() {
   const data = batch.join('');
 
   try {
+    rotateLogFile(); // проверяем размер перед записью
     await fs.promises.appendFile(LOG_FILE, data);
   } catch (err) {
     // Если файл-лог недоступен — выводим в консоль как ошибку
-    setImmediate(() => {
-      process.stderr.write(`[logger] Ошибка записи в лог-файл: ${err.message}\n`);
-    });
+      origConsoleError(`[logger] Ошибка записи в лог-файл: ${err.message}`);
   }
 
   isFlushing = false;
@@ -181,36 +225,55 @@ function flushLogsSync() {
   logQueue.length = 0;
 }
 
+// Сохраняем оригинальный console.log для sql.js (WASM конфликтует с setImmediate)
+const origConsoleLog = console.log.bind(console);
+const origConsoleWarn = console.warn.bind(console);
+const origConsoleError = console.error.bind(console);
+
 // Переопределяем console.log / console.warn → полностью асинхронный логгер
 console.log = (...args) => {
-  setImmediate(() => {
-    process.stdout.write(args.join(' ') + '\n');
-  });
+  origConsoleLog(...args);
   logEnqueue('INFO', ...args);
 };
 
 console.warn = (...args) => {
-  setImmediate(() => {
-    process.stderr.write(args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ') + '\n');
-  });
+  origConsoleWarn(...args);
   logEnqueue('WARN', ...args);
 };
 
 // console.error тоже полностью асинхронный
 console.error = (...args) => {
-  setImmediate(() => {
-    process.stderr.write(args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ') + '\n');
-  });
+  origConsoleError(...args);
   logEnqueue('ERROR', ...args);
 };
 
-// Глобальный обработчик unhandledRejection → асинхронный лог
+// Глобальный обработчик unhandledRejection → асинхронный лог + graceful shutdown
 process.on('unhandledRejection', (reason, promise) => {
   const reasonStr = reason?.stack || reason;
-  setImmediate(() => {
-    process.stderr.write(`[unhandledRejection] ${reasonStr}\n`);
-  });
+  origConsoleError('[unhandledRejection]', reasonStr);
   logEnqueue('ERROR', '[unhandledRejection]', reasonStr);
+});
+
+// Глобальный обработчик uncaughtException — синхронное исключение, процесс умирает.
+// Сохраняем БД + логи, потом выходим.
+process.on('uncaughtException', (err) => {
+  const errStr = err?.stack || err;
+  origConsoleError('[uncaughtException]', errStr);
+  logEnqueue('ERROR', '[uncaughtException]', errStr);
+  flushLogsSync();
+  if (db) {
+    try {
+      saveDatabaseSync();
+    } catch (e) {
+      origConsoleError('[uncaughtException] Ошибка сохранения БД:', e);
+    }
+    try {
+      db.close();
+    } catch (e) {
+      // игнорируем
+    }
+  }
+  process.exit(1);
 });
 
 // Запускаем первый flush-таймер при старте
@@ -282,9 +345,8 @@ let db = null;
 // Вспомогательная функция для проверки прав админа
 function checkAdmin(userId) {
   try {
-    const result = db.exec(`SELECT is_admin FROM users WHERE id = '${userId.replace(/'/g, "''")}'`);
-    if (!result[0] || result[0].values.length === 0) return false;
-    return result[0].values[0][0] === 1;
+    const row = db.prepare('SELECT is_admin FROM users WHERE id = ?').get(userId);
+    return row ? row.is_admin === 1 : false;
   } catch (e) {
     console.error('Ошибка проверки прав админа:', e.message);
     return false;
@@ -292,27 +354,24 @@ function checkAdmin(userId) {
 }
 
 // Инициализация базы данных
-async function initDatabase() {
-  const SQL = await initSqlJs();
+function initDatabase() {
+  db = new Database(DB_PATH);
+  db.pragma('journal_mode = WAL');
+  db.pragma('foreign_keys = ON');
 
-  // Загружаем или создаем базу
-  try {
-    const fileBuffer = fs.readFileSync(DB_PATH);
-    db = new SQL.Database(fileBuffer);
-    console.log('База данных загружена из файла');
-    console.log(`Путь к БД: ${DB_PATH}`);
-    // Проверка is_admin для Root сразу после загрузки
-    const rootCheck = db.exec("SELECT is_admin FROM users WHERE username = 'Root'");
-    console.log('is_admin для Root после загрузки:', rootCheck[0]?.values[0][0]);
-  } catch (err) {
-    db = new SQL.Database();
-    console.log('Создана новая база данных');
-    console.log(`Путь к БД: ${DB_PATH}`);
-  }
+  // Обёртка совместимости: db.run(sql, params) → db.prepare(sql).run(...params)
+  db.run = function(sql, params) {
+    if (params) {
+      return db.prepare(sql).run(...params);
+    }
+    return db.prepare(sql).run();
+  };
+
+  console.log('База данных загружена (better-sqlite3, WAL mode)');
+  console.log(`Путь к БД: ${DB_PATH}`);
 
   // Создание таблиц
-  db.run(`
-    -- Таблица пользователей
+  db.exec(`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       username TEXT UNIQUE NOT NULL,
@@ -334,122 +393,52 @@ async function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_users_birth_date ON users(birth_date);
   `);
 
-  // Добавление новых колонок если они не существуют (миграция)
-  try {
-    db.run('ALTER TABLE users ADD COLUMN mobile_phone TEXT');
-  } catch (e) {
-    // Колонка уже существует
-  }
-  try {
-    db.run('ALTER TABLE users ADD COLUMN work_phone TEXT');
-  } catch (e) {
-    // Колонка уже существует
-  }
-  try {
-    db.run('ALTER TABLE users ADD COLUMN status_text TEXT');
-  } catch (e) {
-    // Колонка уже существует
-  }
-
-  // Миграция для добавления task_time
-  try {
-    db.run('ALTER TABLE calendar_tasks ADD COLUMN task_time TEXT');
-  } catch (e) {
-    // Колонка уже существует
-  }
-
-  // Миграция для добавления task_end_time
-  try {
-    db.run('ALTER TABLE calendar_tasks ADD COLUMN task_end_time TEXT');
-  } catch (e) {
-    // Колонка уже существует
-  }
-
-  // Миграция для добавления read_at в сообщения
-  try {
-    db.run('ALTER TABLE messages ADD COLUMN read_at TEXT');
-  } catch (e) {
-    // Колонка уже существует
-  }
-
-  // Миграция для добавления status_text
-  try {
-    db.run('ALTER TABLE users ADD COLUMN status_text TEXT');
-  } catch (e) {
-    // Колонка уже существует
-  }
-
-  // Миграция для добавления is_admin
-  try {
-    db.run('ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0');
-  } catch (e) {
-    // Колонка уже существует
-  }
-
-  // Миграция для добавления has_seen_welcome
-  try {
-    db.run('ALTER TABLE users ADD COLUMN has_seen_welcome INTEGER DEFAULT 0');
-  } catch (e) {
-    // Колонка уже существует
-  }
-
-  // Установим админа для первого пользователя (Root)
-  try {
-    const rootCheck = db.exec("SELECT id FROM users WHERE username = 'Root'");
-    if (rootCheck && rootCheck.length > 0 && rootCheck[0].values.length > 0) {
-      db.run("UPDATE users SET is_admin = 1 WHERE username = 'Root'");
-
-    }
-  } catch (e) {
-    // Пользователь ещё не создан или ошибка при установке админа
-    console.log('Ошибка установки admin для Root:', e.message);
-  }
-
-  // Миграция для добавления task_time
-  try {
-    db.run('ALTER TABLE calendar_tasks ADD COLUMN task_time TEXT');
-  } catch (e) {
-    // Колонка уже существует
-  }
-
-  // Миграция для добавления task_end_time
-  try {
-    db.run('ALTER TABLE calendar_tasks ADD COLUMN task_end_time TEXT');
-  } catch (e) {
-    // Колонка уже существует
-  }
-
-  // Миграции для добавления колонок (убраны дубликаты)
+  // Миграции для добавления колонок
   const migrations = [
     { table: 'users', column: 'mobile_phone', type: 'TEXT' },
     { table: 'users', column: 'work_phone', type: 'TEXT' },
     { table: 'users', column: 'status_text', type: 'TEXT' },
-    { table: 'calendar_tasks', column: 'task_time', type: 'TEXT' },
-    { table: 'calendar_tasks', column: 'task_end_time', type: 'TEXT' },
-    { table: 'messages', column: 'read_at', type: 'TEXT' },
     { table: 'users', column: 'is_admin', type: 'INTEGER DEFAULT 0' },
     { table: 'users', column: 'has_seen_welcome', type: 'INTEGER DEFAULT 0' },
-    { table: 'messages', column: 'forwarded_from', type: 'TEXT' },
     { table: 'users', column: 'can_book_meeting_room', type: 'INTEGER DEFAULT 0' },
+    { table: 'users', column: 'upload_quota', type: 'INTEGER DEFAULT 524288000' },
+    { table: 'users', column: 'totp_secret', type: 'TEXT' },
+    { table: 'users', column: 'totp_enabled', type: 'INTEGER DEFAULT 0' },
+    { table: 'messages', column: 'read_at', type: 'TEXT' },
+    { table: 'messages', column: 'forwarded_from', type: 'TEXT' },
     { table: 'messages', column: 'reply_to', type: 'TEXT' },
     { table: 'messages', column: 'is_pinned', type: 'INTEGER DEFAULT 0' },
     { table: 'messages', column: 'pinned_by', type: 'TEXT' },
-    { table: 'messages', column: 'pinned_at', type: 'TEXT' }
+    { table: 'messages', column: 'pinned_at', type: 'TEXT' },
+    { table: 'messages', column: 'edited', type: 'INTEGER DEFAULT 0' },
+    { table: 'messages', column: 'edited_at', type: 'TEXT' },
+    { table: 'calendar_tasks', column: 'task_time', type: 'TEXT' },
+    { table: 'calendar_tasks', column: 'task_end_time', type: 'TEXT' },
+    { table: 'calendar_tasks', column: 'reminder_time', type: 'TEXT' },
+    { table: 'chats', column: 'avatar', type: 'TEXT' },
+    { table: 'user_sessions', column: 'last_seen', type: 'TEXT DEFAULT CURRENT_TIMESTAMP' }
   ];
 
-  // Выполняем миграции
   migrations.forEach(({ table, column, type }) => {
     try {
-      db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
     } catch (e) {
       // Колонка уже существует
     }
   });
 
-  // Проверка и создание общего чата
+  // Таблица сессий для восстановления после рестарта
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS user_sessions (
+      user_id TEXT PRIMARY KEY,
+      socket_ids TEXT NOT NULL DEFAULT '[]',
+      last_seen TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    );
+  `);
 
   // Таблица бронирования переговорной
-  db.run(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS meeting_room_bookings (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       title TEXT NOT NULL,
@@ -466,7 +455,7 @@ async function initDatabase() {
   `);
 
   // Таблица общих задач
-  db.run(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS task_shares (
       id TEXT PRIMARY KEY,
       task_id TEXT NOT NULL,
@@ -480,7 +469,7 @@ async function initDatabase() {
   `);
 
   // Таблица задач календаря
-  db.run(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS calendar_tasks (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
@@ -490,14 +479,14 @@ async function initDatabase() {
       task_time TEXT,
       task_end_time TEXT,
       color TEXT DEFAULT '#667eea',
+      reminder_time TEXT,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
     CREATE INDEX IF NOT EXISTS idx_calendar_tasks_user ON calendar_tasks(user_id);
     CREATE INDEX IF NOT EXISTS idx_calendar_tasks_date ON calendar_tasks(task_date);
   `);
 
-  db.run(`
-    -- Таблица чатов
+  db.exec(`
     CREATE TABLE IF NOT EXISTS chats (
       id TEXT PRIMARY KEY,
       type TEXT NOT NULL CHECK(type IN ('general', 'direct', 'group')),
@@ -506,7 +495,6 @@ async function initDatabase() {
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
 
-    -- Таблица участников чата
     CREATE TABLE IF NOT EXISTS chat_participants (
       chat_id TEXT NOT NULL,
       user_id TEXT NOT NULL,
@@ -514,7 +502,6 @@ async function initDatabase() {
       PRIMARY KEY (chat_id, user_id)
     );
 
-    -- Таблица сообщений
     CREATE TABLE IF NOT EXISTS messages (
       id TEXT PRIMARY KEY,
       chat_id TEXT NOT NULL,
@@ -526,7 +513,6 @@ async function initDatabase() {
       read_at TEXT
     );
 
-    -- Таблица реакций на сообщения
     CREATE TABLE IF NOT EXISTS message_reactions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       message_id TEXT NOT NULL,
@@ -538,7 +524,6 @@ async function initDatabase() {
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
 
-    -- Таблица непрочитанных сообщений
     CREATE TABLE IF NOT EXISTS unread_messages (
       user_id TEXT NOT NULL,
       message_id TEXT NOT NULL,
@@ -547,7 +532,6 @@ async function initDatabase() {
       PRIMARY KEY (user_id, message_id)
     );
 
-    -- Таблица сессий пользователей
     CREATE TABLE IF NOT EXISTS user_sessions (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
@@ -558,7 +542,6 @@ async function initDatabase() {
       last_activity TEXT DEFAULT CURRENT_TIMESTAMP
     );
 
-    -- Таблица логов безопасности
     CREATE TABLE IF NOT EXISTS security_logs (
       id TEXT PRIMARY KEY,
       event_type TEXT NOT NULL,
@@ -570,13 +553,22 @@ async function initDatabase() {
       timestamp TEXT DEFAULT CURRENT_TIMESTAMP
     );
 
-    -- Таблица настроек интерфейса
     CREATE TABLE IF NOT EXISTS ui_settings (
       key TEXT PRIMARY KEY,
       value TEXT
     );
 
-    -- Индексы для ускорения поиска
+    CREATE TABLE IF NOT EXISTS push_subscriptions (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      endpoint TEXT NOT NULL,
+      p256dh TEXT NOT NULL,
+      auth TEXT NOT NULL,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_push_user ON push_subscriptions(user_id);
+
     CREATE INDEX IF NOT EXISTS idx_messages_chat_id ON messages(chat_id);
     CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
     CREATE INDEX IF NOT EXISTS idx_chat_participants_user ON chat_participants(user_id);
@@ -587,117 +579,62 @@ async function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON security_logs(timestamp);
   `);
 
-  // Миграция: добавление колонок edited и edited_at в messages
-  try {
-    db.run('ALTER TABLE messages ADD COLUMN edited INTEGER DEFAULT 0');
-  } catch (e) {
-    // Колонка уже существует
-  }
-  try {
-    db.run('ALTER TABLE messages ADD COLUMN edited_at TEXT');
-  } catch (e) {
-    // Колонка уже существует
-  }
-
   // Проверка и создание общего чата
-  const generalChat = db.exec("SELECT * FROM chats WHERE id = 'general'");
-  if (generalChat.length === 0 || generalChat[0].values.length === 0) {
-    db.run(`
-      INSERT INTO chats (id, type, name, created_by)
-      VALUES ('general', 'general', 'Общий чат', 'system')
-    `);
-
+  const generalChat = db.prepare("SELECT id FROM chats WHERE id = ?").get('general');
+  if (!generalChat) {
+    db.prepare("INSERT INTO chats (id, type, name, created_by) VALUES (?, 'general', 'Общий чат', 'system')").run('general');
   }
 
   // Создание помощника если не существует
-  const botCheck = db.exec("SELECT * FROM users WHERE username = 'Помощник'");
-  if (botCheck.length === 0 || botCheck[0].values.length === 0) {
+  const botCheck = db.prepare("SELECT id FROM users WHERE username = ?").get('Помощник');
+  if (!botCheck) {
     const botId = 'helper-bot-' + uuidv4().substring(0, 8);
-    db.run(`
-      INSERT INTO users (id, username, avatar, status, is_admin)
-      VALUES (?, ?, ?, 'online', 0)
-    `, [botId, 'Помощник', `${SERVER_URL}/uploads/ursa.jpg`]);
-
+    db.prepare("INSERT INTO users (id, username, avatar, status, is_admin) VALUES (?, ?, ?, 'online', 0)").run(botId, 'Помощник', `${SERVER_URL}/uploads/ursa.jpg`);
     console.log('Создан помощник');
   }
 
-  // Миграция: очищаем пустые номера телефонов
+  // Установим админа для Root
   try {
-    db.run("UPDATE users SET mobile_phone = NULL WHERE TRIM(mobile_phone) = '' OR mobile_phone = ' '");
-    db.run("UPDATE users SET work_phone = NULL WHERE TRIM(work_phone) = '' OR work_phone = ' '");
-
-    console.log('Миграция телефонов выполнена');
+    db.prepare("UPDATE users SET is_admin = 1 WHERE username = ?").run('Root');
   } catch (e) {
-    // Игнорируем ошибки миграции
+    // Пользователь ещё не создан
   }
 
-  // Миграция: убираем эмодзи из имени помощника
+  // Миграции данных
   try {
-    db.run("UPDATE chats SET name = 'Помощник' WHERE name = '🤖 Помощник'");
+    db.exec("UPDATE users SET mobile_phone = NULL WHERE TRIM(mobile_phone) = '' OR mobile_phone = ' '");
+    db.exec("UPDATE users SET work_phone = NULL WHERE TRIM(work_phone) = '' OR work_phone = ' '");
+    console.log('Миграция телефонов выполнена');
+  } catch (e) { /* игнорируем */ }
 
+  try {
+    db.exec("UPDATE chats SET name = 'Помощник' WHERE name = '🤖 Помощник'");
     console.log('Миграция имени помощника выполнена');
+  } catch (e) { /* игнорируем */ }
+
+  // Миграция: добавляем socket_ids если колонка отсутствует (обратная совместимость)
+  try {
+    db.exec('ALTER TABLE user_sessions ADD COLUMN socket_ids TEXT NOT NULL DEFAULT \'[]\'');
   } catch (e) {
-    // Игнорируем ошибки миграции
+    // Колонка уже существует
   }
 
   console.log('База данных инициализирована');
-  return Promise.resolve();
 }
 
-// Сохранение базы данных на диск (асинхронное, неблокирующее)
-let saveDatabaseTimer = null;
-let lastDbActivity = 0;          // timestamp последней активности БД
-const AUTO_SAVE_DELAY = 60000;   // автосохранение через 60с после последней активности (было 30с фиксировано)
-const MIN_AUTO_SAVE_INTERVAL = 15000; // минимальный интервал между сохранениями — 15с
-
-function startAutoSave() {
-  // Автосохранение: ждём 60с после последней активности БД
-  scheduleAutoSave();
-}
-
-function scheduleAutoSave() {
-  if (saveDatabaseTimer) clearTimeout(saveDatabaseTimer);
-  saveDatabaseTimer = setTimeout(() => {
-    const now = Date.now();
-    // Не сохраняем чаще чем раз в MIN_AUTO_SAVE_INTERVAL
-    if (now - lastDbActivity < MIN_AUTO_SAVE_INTERVAL) return;
-    performAutoSave();
-  }, AUTO_SAVE_DELAY);
-}
-
-function performAutoSave() {
-  if (!db) return;
-  try {
-    const data = db.export();
-    const buffer = Buffer.from(data);
-    fs.writeFile(DB_PATH, buffer, (err) => {
-      if (err) console.error('Ошибка автосохранения БД:', err.message);
-    });
-  } catch (err) {
-    console.error('Ошибка экспорта БД при автосохранении:', err.message);
-  }
-}
-
-// Вызывать из критических путей после изменения БД
+// Сохранение базы данных (better-sqlite3 в WAL mode сохраняет автоматически)
 function markDbActivity() {
-  lastDbActivity = Date.now();
-  scheduleAutoSave(); // перезапускаем таймер
+  // better-sqlite3 в WAL mode не нуждается в ручном сохранении
 }
 
 function saveDatabaseSync() {
-  // Синхронное сохранение — только при shutdown или критических операциях
+  // better-sqlite3 синхронизирует данные через WAL, но для гарантии вызываем checkpoint
   if (db) {
-    const data = db.export();
-    const buffer = Buffer.from(data);
-    fs.writeFileSync(DB_PATH, buffer);
-  }
-}
-
-// Остановка автосохранения
-function stopAutoSave() {
-  if (saveDatabaseTimer) {
-    clearInterval(saveDatabaseTimer);
-    saveDatabaseTimer = null;
+    try {
+      db.pragma('wal_checkpoint(TRUNCATE)');
+    } catch (e) {
+      // игнорируем
+    }
   }
 }
 
@@ -717,7 +654,7 @@ function startIdleChecker() {
           username: user.username,
           status: 'idle'
         });
-        console.log(`${user.username} переведён в idle (неактивен >10мин)`);
+        console.log(`${user.username} переведён в idle`);
       }
     }
   }, 30000);
@@ -726,8 +663,15 @@ function startIdleChecker() {
 // Хранилище онлайн пользователей в памяти
 const onlineUsers = new Map(); // socketId -> { id, username, socketId, status }
 
+// Обратный индекс: userId -> Set<socketId> (один пользователь на нескольких вкладках/устройствах)
+const userSocketMap = new Map(); // userId -> Set<socketId>
+
 // Время последней активности каждого пользователя (userId -> timestamp)
 const userActivity = new Map();
+
+// Общий объём загруженных файлов на пользователя (userId -> bytes)
+const userTotalUploadSize = new Map(); // загружается из БД при старте
+const DEFAULT_UPLOAD_QUOTA = 500 * 1024 * 1024; // 500MB
 
 // Rate-limiting для бота-помощника: 2 секунды между командами на один сокет
 const botRateLimit = new Map(); // socketId -> timestamp последнего запроса
@@ -793,18 +737,61 @@ const upload = multer({
   limits: { fileSize: config.uploads?.maxFileSize || 50 * 1024 * 1024 } // 50MB лимит
 });
 
-console.log('HELMET_CHECK: helmet middleware NOT applied');
-app.use(cors());
+// Helmet с настройками, совместимыми с WebSocket и стикерами
+const CSP_ORIGINS = process.env.CHAT_APP_SERVER_URL || `http://localhost:${PORT}`;
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      imgSrc: ["'self'", 'data:', 'https://ui-avatars.com', 'https://cdn.jsdelivr.net', CSP_ORIGINS],
+      connectSrc: ["'self'", 'ws:', 'wss:', 'https://api.github.com', CSP_ORIGINS, 'capacitor://localhost', 'http://localhost'],
+      fontSrc: ["'self'", 'data:', 'https://fonts.gstatic.com'],
+      styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+      scriptSrc: ["'self'", "'unsafe-inline'"],
+      mediaSrc: ["'self'", CSP_ORIGINS],
+      workerSrc: ["'self'"],
+    }
+  },
+  crossOriginEmbedderPolicy: false,
+  crossOriginResourcePolicy: { policy: 'cross-origin' }
+}));
 
-// Явно разрешаем cross-origin загрузку ресурсов (CORP)
-app.use((req, res, next) => {
-  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
-  next();
+// CORS — разрешаем только наш фронтенд
+const ALLOWED_ORIGINS = [CSP_ORIGINS, 'http://localhost:3000', 'http://localhost:3001', 'capacitor://localhost', 'http://localhost']; 
+app.use(cors({
+  origin: (origin, cb) => {
+    if (!origin || ALLOWED_ORIGINS.includes(origin) || origin.startsWith('http://192.168.') || origin.startsWith('capacitor://')) return cb(null, true);
+    cb(null, true); // в локальной сети разрешаем все
+  },
+  credentials: true
+}));
+
+// Cookie parser для CSRF
+app.use(cookieParser());
+
+// CSRF защита: генерация токена (опционально для SPA с токеновой аутентификацией)
+const csrfTokens = new Set();
+app.get('/api/csrf-token', (req, res) => {
+  const token = uuidv4();
+  csrfTokens.add(token);
+  if (csrfTokens.size > 1000) csrfTokens.clear();
+  res.cookie('X-CSRF-Token', token, { httpOnly: true, sameSite: 'strict', maxAge: 3600000 });
+  res.json({ csrfToken: token });
 });
+
+// Общий rate-limiter для всех API-эндпоинтов: 100 запросов/мин на IP
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Слишком много запросов, попробуйте позже' }
+});
+app.use('/api/', apiLimiter);
 
 // Регистрируем MIME-тип для .avif (стикеры)
 express.static.mime.define({ 'image/avif': ['avif'] });
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
 app.use('/uploads', express.static(UPLOADS_PATH));
 app.use('/stickers', express.static(path.join(__dirname, '../frontend/build/stickers')));
 app.use(express.static(path.join(__dirname, '../frontend/build')));
@@ -899,9 +886,9 @@ app.get('/api/admin/stats', (req, res) => {
     return res.status(403).json({ error: 'Доступ запрещён' });
   }
   
-  const totalUsers = db.exec('SELECT COUNT(*) as count FROM users')[0]?.values[0][0] || 0;
-  const totalMessages = db.exec('SELECT COUNT(*) as count FROM messages')[0]?.values[0][0] || 0;
-  const totalFiles = db.exec('SELECT COUNT(*) as count FROM messages WHERE file_data IS NOT NULL')[0]?.values[0][0] || 0;
+  const totalUsers = db.prepare('SELECT COUNT(*) as count FROM users').get()?.count || 0;
+  const totalMessages = db.prepare('SELECT COUNT(*) as count FROM messages').get()?.count || 0;
+  const totalFiles = db.prepare('SELECT COUNT(*) as count FROM messages WHERE file_data IS NOT NULL').get()?.count || 0;
   const onlineUsersCount = Array.from(onlineUsers).length;
   
   // Размер папки uploads
@@ -934,20 +921,19 @@ app.get('/api/admin/users', (req, res) => {
     return res.status(403).json({ error: 'Доступ запрещён' });
   }
 
-  const users = db.exec('SELECT id, username, email, full_name, status, is_admin, created_at, last_seen, host, ip_address, can_book_meeting_room FROM users ORDER BY username');
-  const userList = users[0]?.values.map(row => ({
-    id: row[0],
-    username: row[1],
-    email: row[2],
-    full_name: row[3],
-    status: row[4],
-    is_admin: row[5],
-    created_at: row[6],
-    last_seen: row[7],
-    host: row[8] || 'unknown',
-    ip_address: row[9] || 'unknown',
-    can_book_meeting_room: row[10] || 0
-  })) || [];
+  const userList = db.prepare('SELECT id, username, email, full_name, status, is_admin, created_at, last_seen, host, ip_address, can_book_meeting_room FROM users ORDER BY username').all().map(row => ({
+    id: row.id,
+    username: row.username,
+    email: row.email,
+    full_name: row.full_name,
+    status: row.status,
+    is_admin: row.is_admin,
+    created_at: row.created_at,
+    last_seen: row.last_seen,
+    host: row.host || 'unknown',
+    ip_address: row.ip_address || 'unknown',
+    can_book_meeting_room: row.can_book_meeting_room || 0
+  }));
 
   res.json({ users: userList });
 });
@@ -1015,8 +1001,8 @@ app.post('/api/admin/users', (req, res) => {
   const emailLower = email.toLowerCase();
 
   // Проверка существующего пользователя
-  const existingUser = db.exec(`SELECT * FROM users WHERE username = '${username.replace(/'/g, "''")}' OR email = '${emailLower}'`);
-  if (existingUser.length > 0 && existingUser[0].values.length > 0) {
+  const existingUser = db.prepare('SELECT * FROM users WHERE username = ? OR email = ?').get(username, emailLower);
+  if (existingUser) {
     return res.status(400).json({ error: 'Пользователь с таким именем или email уже существует' });
   }
 
@@ -1080,8 +1066,8 @@ app.put('/api/admin/users/:userId/meeting-room-rights', (req, res) => {
   }
 
   // Root всегда имеет право на бронирование
-  const userCheck = db.exec(`SELECT username FROM users WHERE id = '${userId.replace(/'/g, "''")}'`);
-  if (userCheck[0] && userCheck[0].values.length > 0 && userCheck[0].values[0][0] === 'Root') {
+  const userCheck = db.prepare('SELECT username FROM users WHERE id = ?').get(userId);
+  if (userCheck && userCheck.username === 'Root') {
     return res.status(400).json({ error: 'Нельзя изменить права Root' });
   }
 
@@ -1117,8 +1103,8 @@ app.put('/api/admin/users/:userId/reset-password', (req, res) => {
 
     // Логируем событие
     const logId = uuidv4();
-    const adminUser = db.exec(`SELECT username FROM users WHERE id = '${adminId}'`);
-    const adminName = adminUser[0]?.values[0][0] || 'Admin';
+    const adminUser = db.prepare('SELECT username FROM users WHERE id = ?').get(adminId);
+    const adminName = adminUser?.username || 'Admin';
     db.run(`INSERT INTO security_logs (id, event_type, event, user_id, username, status) VALUES (?, ?, ?, ?, ?, ?)`,
       [logId, 'password_reset', `Пароль сброшен администратором ${adminName}`, userId, null, 'success']);
 
@@ -1127,6 +1113,67 @@ app.put('/api/admin/users/:userId/reset-password', (req, res) => {
   } catch (err) {
     console.error('Ошибка сброса пароля:', err);
     res.status(500).json({ error: 'Ошибка при сбросе пароля' });
+  }
+});
+
+// ============================================
+// 2FA (TOTP) для администраторов
+// ============================================
+
+// Генерация TOTP секрета и QR-кода
+app.post('/api/admin/2fa/generate', (req, res) => {
+  const { userId } = req.body;
+  if (!checkAdmin(userId)) return res.status(403).json({ error: 'Доступ запрещён' });
+
+  try {
+    const user = db.prepare('SELECT username FROM users WHERE id = ?').get(userId);
+    if (!user) return res.status(404).json({ error: 'Пользователь не найден' });
+
+    const secret = speakeasy.generateSecret({ name: `Чат УРСА (${user.username})` });
+    // Сохраняем секрет временно (до верификации)
+    db.run('UPDATE users SET totp_secret = ? WHERE id = ?', [secret.base32, userId]);
+
+    QRCode.toDataURL(secret.otpauth_url, (err, qrUrl) => {
+      if (err) return res.status(500).json({ error: 'Ошибка генерации QR' });
+      res.json({ secret: secret.base32, qrCode: qrUrl });
+    });
+  } catch (err) {
+    console.error('Ошибка генерации 2FA:', err);
+    res.status(500).json({ error: 'Ошибка генерации 2FA' });
+  }
+});
+
+// Верификация TOTP и включение 2FA
+app.post('/api/admin/2fa/verify', (req, res) => {
+  const { userId, token } = req.body;
+  if (!checkAdmin(userId)) return res.status(403).json({ error: 'Доступ запрещён' });
+
+  try {
+    const user = db.prepare('SELECT totp_secret FROM users WHERE id = ?').get(userId);
+    if (!user || !user.totp_secret) return res.status(400).json({ error: 'Секрет не найден. Сгенерируйте ключ сначала.' });
+
+    const verified = speakeasy.totp.verify({ secret: user.totp_secret, encoding: 'base32', token });
+    if (!verified) return res.status(400).json({ error: 'Неверный код. Попробуйте снова.' });
+
+    db.run('UPDATE users SET totp_enabled = 1 WHERE id = ?', [userId]);
+    res.json({ success: true, message: '2FA включена' });
+  } catch (err) {
+    console.error('Ошибка верификации 2FA:', err);
+    res.status(500).json({ error: 'Ошибка верификации 2FA' });
+  }
+});
+
+// Отключение 2FA
+app.post('/api/admin/2fa/disable', (req, res) => {
+  const { userId } = req.body;
+  if (!checkAdmin(userId)) return res.status(403).json({ error: 'Доступ запрещён' });
+
+  try {
+    db.run('UPDATE users SET totp_secret = NULL, totp_enabled = 0 WHERE id = ?', [userId]);
+    res.json({ success: true, message: '2FA отключена' });
+  } catch (err) {
+    console.error('Ошибка отключения 2FA:', err);
+    res.status(500).json({ error: 'Ошибка отключения 2FA' });
   }
 });
 
@@ -1139,24 +1186,22 @@ app.get('/api/admin/sessions', (req, res) => {
   }
 
   try {
-    const sessions = db.exec(`
+    const sessionsList = db.prepare(`
       SELECT s.id, s.user_id, s.ip_address, s.browser, s.login_time, s.last_activity,
              u.username, u.avatar
       FROM user_sessions s
       LEFT JOIN users u ON s.user_id = u.id
       ORDER BY s.last_activity DESC
-    `);
-
-    const sessionsList = sessions[0]?.values.map(row => ({
-      id: row[0],
-      user_id: row[1],
-      ip: row[2],
-      browser: row[3],
-      loginTime: row[4],
-      lastActivity: row[5],
-      username: row[6],
-      avatar: row[7]
-    })) || [];
+    `).all().map(row => ({
+      id: row.id,
+      user_id: row.user_id,
+      ip: row.ip_address,
+      browser: row.browser,
+      loginTime: row.login_time,
+      lastActivity: row.last_activity,
+      username: row.username,
+      avatar: row.avatar
+    }));
 
     res.json({ sessions: sessionsList });
   } catch (err) {
@@ -1200,24 +1245,22 @@ app.get('/api/admin/files', (req, res) => {
   }
 
   try {
-    const messages = db.exec(`
+    const filesList = db.prepare(`
       SELECT id, file_data, timestamp
       FROM messages
       WHERE file_data IS NOT NULL
       ORDER BY timestamp DESC
-    `);
-
-    const filesList = messages[0]?.values.map(row => {
-      const fileData = JSON.parse(row[1]);
+    `).all().map(row => {
+      const fileData = JSON.parse(row.file_data);
       return {
-        id: row[0],
+        id: row.id,
         name: fileData.name || 'Без имени',
         url: fileData.url || '',
         size: fileData.size || 0,
         mime_type: fileData.mimetype || '',
-        created_at: row[2]
+        created_at: row.timestamp
       };
-    }) || [];
+    });
 
     res.json({ files: filesList });
   } catch (err) {
@@ -1237,8 +1280,8 @@ app.delete('/api/admin/files/:fileId', (req, res) => {
 
   try {
     // Получаем информацию о файле перед удалением
-    const fileData = db.exec(`SELECT file_data FROM messages WHERE id = '${fileId}'`);
-    const fileUrl = fileData[0]?.values[0][0];
+    const fileData = db.prepare('SELECT file_data FROM messages WHERE id = ?').get(fileId);
+    const fileUrl = fileData?.file_data;
     
     if (fileUrl) {
       const parsedFileData = JSON.parse(fileUrl);
@@ -1271,23 +1314,21 @@ app.get('/api/admin/security-logs', (req, res) => {
   }
 
   try {
-    const logs = db.exec(`
+    const logsList = db.prepare(`
       SELECT id, event_type, event, user_id, username, ip_address, status, timestamp
       FROM security_logs
       ORDER BY timestamp DESC
       LIMIT 100
-    `);
-
-    const logsList = logs[0]?.values.map(row => ({
-      id: row[0],
-      event_type: row[1],
-      event: row[2],
-      user_id: row[3],
-      username: row[4],
-      ip_address: row[5],
-      status: row[6],
-      timestamp: row[7]
-    })) || [];
+    `).all().map(row => ({
+      id: row.id,
+      event_type: row.event_type,
+      event: row.event,
+      user_id: row.user_id,
+      username: row.username,
+      ip_address: row.ip_address,
+      status: row.status,
+      timestamp: row.timestamp
+    }));
 
     res.json({ logs: logsList });
   } catch (err) {
@@ -1299,10 +1340,10 @@ app.get('/api/admin/security-logs', (req, res) => {
 // API для получения настроек интерфейса
 app.get('/api/admin/ui-settings', (req, res) => {
   try {
-    const settings = db.exec('SELECT key, value FROM ui_settings');
+    const settingsRows = db.prepare('SELECT key, value FROM ui_settings').all();
     const settingsObj = {};
-    settings[0]?.values.forEach(row => {
-      settingsObj[row[0]] = row[1];
+    settingsRows.forEach(row => {
+      settingsObj[row.key] = row.value;
     });
 
     res.json({ 
@@ -1364,13 +1405,7 @@ app.delete('/api/admin/messages/:messageId', (req, res) => {
   }
 
   // Проверяем существование пользователя
-  const userStmt = db.prepare('SELECT id, is_admin FROM users WHERE id = ?');
-  userStmt.bind([userIdToCheck]);
-  let userData = null;
-  if (userStmt.step()) {
-    userData = userStmt.getAsObject();
-  }
-  userStmt.free();
+  const userData = db.prepare('SELECT id, is_admin FROM users WHERE id = ?').get(userIdToCheck);
 
   if (!userData) {
     return res.status(403).json({ error: 'Пользователь не найден' });
@@ -1382,24 +1417,23 @@ app.delete('/api/admin/messages/:messageId', (req, res) => {
 
   try {
     // Получаем информацию о сообщении для проверки
-    const messageData = db.exec(`
+    const messageData = db.prepare(`
       SELECT m.id, m.chat_id, m.sender_id, m.text as text, m.file_data, m.timestamp,
              u.username as sender_username
       FROM messages m
       JOIN users u ON m.sender_id = u.id
-      WHERE m.id = '${messageId.replace(/'/g, "''")}'
-    `);
+      WHERE m.id = ?
+    `).get(messageId);
 
-    if (!messageData[0] || messageData[0].values.length === 0) {
+    if (!messageData) {
       return res.status(404).json({ error: 'Сообщение не найдено' });
     }
 
-    const row = messageData[0].values[0];
-    const chatId = row[1];
-    const senderId = row[2];
-    const text = decryptText(row[3] || '') || '';
-    const fileData = row[4];
-    const senderUsername = row[6];
+    const chatId = messageData.chat_id;
+    const senderId = messageData.sender_id;
+    const text = decryptText(messageData.text || '') || '';
+    const fileData = messageData.file_data;
+    const senderUsername = messageData.sender_username;
 
     // Проверяем права на удаление
     // В общем чате (chatId = 'general') могут удалять только администраторы или автор сообщения
@@ -1430,13 +1464,8 @@ app.delete('/api/admin/messages/:messageId', (req, res) => {
 
     // Логируем событие удаления
     const logId = uuidv4();
-    const userStmt = db.prepare('SELECT username FROM users WHERE id = ?');
-    userStmt.bind([userIdToCheck]);
-    let userName = 'User';
-    if (userStmt.step()) {
-      userName = userStmt.getAsObject().username || 'User';
-    }
-    userStmt.free();
+    const userNameRow = db.prepare('SELECT username FROM users WHERE id = ?').get(userIdToCheck);
+    const userName = userNameRow?.username || 'User';
     
     db.run(`INSERT INTO security_logs (id, event_type, event, user_id, username, status) VALUES (?, ?, ?, ?, ?, ?)`,
       [logId, 'message_deleted', `Сообщение от ${senderUsername} удалено пользователем ${userName}`, senderId, senderUsername, 'warning']);
@@ -1497,13 +1526,10 @@ app.post('/api/register', (req, res) => {
   const emailLower = email.toLowerCase();
 
   // Проверка существующего пользователя
-  const existingUser = db.prepare('SELECT * FROM users WHERE username = ? OR LOWER(email) = ?');
-  existingUser.bind([username, emailLower]);
-  if (existingUser.step()) {
-    existingUser.free();
+  const existingUser = db.prepare('SELECT * FROM users WHERE username = ? OR LOWER(email) = ?').get(username, emailLower);
+  if (existingUser) {
     return res.status(400).json({ error: 'Пользователь с таким именем или email уже существует' });
   }
-  existingUser.free();
 
   // Хеширование пароля
   const passwordHash = bcrypt.hashSync(password, 10);
@@ -1548,18 +1574,26 @@ app.post('/api/login', (req, res) => {
   // Приводим email к нижнему регистру для сравнения
   const emailLower = email.toLowerCase();
 
-  const userStmt = db.prepare('SELECT * FROM users WHERE LOWER(email) = ?');
-  userStmt.bind([emailLower]);
-  if (!userStmt.step()) {
-    userStmt.free();
+  const user = db.prepare('SELECT * FROM users WHERE LOWER(email) = ?').get(emailLower);
+  if (!user) {
     return res.status(401).json({ error: 'Неверный email или пароль' });
   }
-  const user = userStmt.getAsObject();
-  userStmt.free();
   
   const isValid = bcrypt.compareSync(password, user.password_hash);
   if (!isValid) {
     return res.status(401).json({ error: 'Неверный email или пароль' });
+  }
+
+  // Проверка 2FA (TOTP) для админов
+  if (user.totp_enabled) {
+    const { totpCode } = req.body;
+    if (!totpCode) {
+      return res.json({ success: true, require2FA: true, userId: user.id, message: 'Введите код из аутентификатора' });
+    }
+    const verified = speakeasy.totp.verify({ secret: user.totp_secret, encoding: 'base32', token: totpCode, window: 1 });
+    if (!verified) {
+      return res.status(401).json({ error: 'Неверный код аутентификатора' });
+    }
   }
   
   res.json({
@@ -1575,14 +1609,10 @@ app.post('/api/login', (req, res) => {
 
 // API для получения профиля пользователя
 app.get('/api/profile/:userId', (req, res) => {
-  const userStmt = db.prepare('SELECT id, username, email, avatar, full_name, birth_date, about, mobile_phone, work_phone, status_text, is_admin FROM users WHERE id = ?');
-  userStmt.bind([req.params.userId]);
-  if (!userStmt.step()) {
-    userStmt.free();
+  const user = db.prepare('SELECT id, username, email, avatar, full_name, birth_date, about, mobile_phone, work_phone, status_text, is_admin FROM users WHERE id = ?').get(req.params.userId);
+  if (!user) {
     return res.status(404).json({ error: 'Пользователь не найден' });
   }
-  const user = userStmt.getAsObject();
-  userStmt.free();
 
   // Декодируем статус из JSON (если это JSON)
   let decodedStatusText = '';
@@ -1632,14 +1662,10 @@ app.put('/api/profile', (req, res) => {
   const safeWorkPhone = workPhone === undefined ? undefined : (workPhone === '' ? null : workPhone);
 
   // Проверка существования пользователя
-  const userStmt = db.prepare('SELECT * FROM users WHERE id = ?');
-  userStmt.bind([userId]);
-  if (!userStmt.step()) {
-    userStmt.free();
+  const existingUser = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+  if (!existingUser) {
     return res.status(404).json({ error: 'Пользователь не найден' });
   }
-  const existingUser = userStmt.getAsObject();
-  userStmt.free();
 
   try {
     // Получаем текущие номера из БД, если они не были переданы
@@ -1647,23 +1673,17 @@ app.put('/api/profile', (req, res) => {
     let finalWorkPhone = safeWorkPhone;
     
     if (safeMobilePhone === undefined) {
-      // Номер не передан, оставляем текущий
-      const currentStmt = db.prepare('SELECT mobile_phone FROM users WHERE id = ?');
-      currentStmt.bind([userId]);
-      if (currentStmt.step()) {
-        finalMobilePhone = currentStmt.getAsObject().mobile_phone;
+      const currentRow = db.prepare('SELECT mobile_phone FROM users WHERE id = ?').get(userId);
+      if (currentRow) {
+        finalMobilePhone = currentRow.mobile_phone;
       }
-      currentStmt.free();
     }
     
     if (safeWorkPhone === undefined) {
-      // Номер не передан, оставляем текущий
-      const currentStmt = db.prepare('SELECT work_phone FROM users WHERE id = ?');
-      currentStmt.bind([userId]);
-      if (currentStmt.step()) {
-        finalWorkPhone = currentStmt.getAsObject().work_phone;
+      const currentRow = db.prepare('SELECT work_phone FROM users WHERE id = ?').get(userId);
+      if (currentRow) {
+        finalWorkPhone = currentRow.work_phone;
       }
-      currentStmt.free();
     }
     
     // Очищаем пустые значения
@@ -1683,10 +1703,7 @@ app.put('/api/profile', (req, res) => {
     `, [safeUsername, safeFullName, safeBirthDate, safeAbout, mobilePhoneValue, workPhoneValue, safeStatusText, userId]);
 
 
-    const userStmt = db.prepare('SELECT id, username, email, avatar, full_name, birth_date, about, mobile_phone, work_phone, status_text FROM users WHERE id = ?');
-    userStmt.bind([userId]);
-    const updatedUser = userStmt.step() ? userStmt.getAsObject() : null;
-    userStmt.free();
+    const updatedUser = db.prepare('SELECT id, username, email, avatar, full_name, birth_date, about, mobile_phone, work_phone, status_text FROM users WHERE id = ?').get(userId);
 
     if (!updatedUser) {
       return res.status(500).json({ error: 'Ошибка при обновлении профиля' });
@@ -1788,14 +1805,8 @@ app.post('/api/upload-helper-avatar', upload.single('avatar'), (req, res) => {
   }
 
   // Проверяем, является ли пользователь администратором
-  const userStmt = db.prepare('SELECT is_admin FROM users WHERE id = ?');
-  userStmt.bind([userId]);
-  let isAdmin = false;
-  if (userStmt.step()) {
-    const row = userStmt.getAsObject();
-    isAdmin = row['is_admin'] === 1;
-  }
-  userStmt.free();
+  const userRow = db.prepare('SELECT is_admin FROM users WHERE id = ?').get(userId);
+  const isAdmin = userRow ? userRow.is_admin === 1 : false;
 
   if (!isAdmin) {
     return res.status(403).json({ error: 'Только администраторы могут менять аватар помощника' });
@@ -1830,14 +1841,8 @@ app.post('/api/upload-general-chat-avatar', upload.single('avatar'), (req, res) 
   }
 
   // Проверяем, является ли пользователь администратором
-  const userStmt = db.prepare('SELECT is_admin FROM users WHERE id = ?');
-  userStmt.bind([userId]);
-  let isAdmin = false;
-  if (userStmt.step()) {
-    const row = userStmt.getAsObject();
-    isAdmin = row['is_admin'] === 1;
-  }
-  userStmt.free();
+  const userRow = db.prepare('SELECT is_admin FROM users WHERE id = ?').get(userId);
+  const isAdmin = userRow ? userRow.is_admin === 1 : false;
 
   if (!isAdmin) {
     return res.status(403).json({ error: 'Только администраторы могут менять аватар общего чата' });
@@ -1869,10 +1874,48 @@ app.post('/api/upload-general-chat-avatar', upload.single('avatar'), (req, res) 
   }
 });
 
+// Белый список MIME-типов для загрузки
+const ALLOWED_MIME_TYPES = [
+  'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/avif', 'image/svg+xml',
+  'video/mp4', 'video/webm',
+  'audio/mpeg', 'audio/ogg', 'audio/wav',
+  'application/pdf', 'application/zip', 'application/x-rar-compressed',
+  'text/plain', 'text/csv',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // .xlsx
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // .docx
+  'application/json'
+];
+
+// Минимальное свободное место на диске для загрузок (500MB)
+const MIN_DISK_SPACE = 500 * 1024 * 1024;
+
+function checkDiskSpace() {
+  try {
+    const stats = fs.statfsSync(UPLOADS_PATH);
+    return stats.bfree * stats.bsize >= MIN_DISK_SPACE;
+  } catch {
+    // Если не удалось проверить — пропускаем проверку
+    return true;
+  }
+}
+
 // API для загрузки файлов
 app.post('/upload', upload.single('file'), (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'Файл не загружен' });
+  }
+
+  // Проверка MIME-типа
+  if (!ALLOWED_MIME_TYPES.includes(req.file.mimetype)) {
+    // Удаляем загруженный файл
+    fs.unlink(req.file.path, () => {});
+    return res.status(415).json({ error: `Недопустимый тип файла: ${req.file.mimetype}` });
+  }
+
+  // Проверка свободного места
+  if (!checkDiskSpace()) {
+    fs.unlink(req.file.path, () => {});
+    return res.status(507).json({ error: 'Недостаточно места на диске' });
   }
 
   const fileUrl = `${SERVER_URL}/uploads/${req.file.filename}`;
@@ -1888,32 +1931,39 @@ app.post('/upload', upload.single('file'), (req, res) => {
 // Скачивание файлов с оригинальным именем (UTF-8)
 // ========================================
 
-// Кэш поиска оригинальных имён файлов по UUID
+// Кэш поиска оригинальных имён файлов по UUID (макс. 1000 записей)
 const filenameCache = new Map(); // uuid -> originalFilename
+const FILENAME_CACHE_MAX = 1000;
+
+function trimFilenameCache() {
+  if (filenameCache.size >= FILENAME_CACHE_MAX) {
+    // Удаляем половину старых записей
+    const keysToDelete = [...filenameCache.keys()].slice(0, FILENAME_CACHE_MAX / 2);
+    for (const key of keysToDelete) filenameCache.delete(key);
+  }
+}
 
 function findOriginalFilenameByUuid(uuid) {
   // Проверяем кэш
   if (filenameCache.has(uuid)) return filenameCache.get(uuid);
 
   try {
-    const fileDataResult = db.exec(`SELECT file_data FROM messages WHERE file_data IS NOT NULL`);
-    if (fileDataResult.length > 0) {
-      const rows = fileDataResult[0].values;
-      for (const row of rows) {
-        const fd = row[0];
-        if (fd && typeof fd === 'string') {
-          try {
-            const parsed = JSON.parse(fd);
-            if (parsed && parsed.url) {
-              const urlFilename = parsed.url.split('/').pop();
-              if (urlFilename === uuid) {
-                filenameCache.set(uuid, parsed.filename);
-                return parsed.filename;
-              }
+    const fileDataRows = db.prepare('SELECT file_data FROM messages WHERE file_data IS NOT NULL').all();
+    for (const row of fileDataRows) {
+      const fd = row.file_data;
+      if (fd && typeof fd === 'string') {
+        try {
+          const parsed = JSON.parse(fd);
+          if (parsed && parsed.url) {
+            const urlFilename = parsed.url.split('/').pop();
+            if (urlFilename === uuid) {
+              trimFilenameCache();
+              filenameCache.set(uuid, parsed.filename);
+              return parsed.filename;
             }
-          } catch (e) {
-            // skip invalid JSON
           }
+        } catch (e) {
+          // skip invalid JSON
         }
       }
     }
@@ -1921,6 +1971,7 @@ function findOriginalFilenameByUuid(uuid) {
     console.error('Ошибка поиска оригинального имени файла:', err);
   }
 
+  trimFilenameCache();
   filenameCache.set(uuid, null);
   return null;
 }
@@ -1974,13 +2025,7 @@ app.get('/api/calendar/tasks', (req, res) => {
 
   query += ' ORDER BY task_date ASC';
 
-  const stmt = db.prepare(query);
-  stmt.bind(params);
-  const tasks = [];
-  while (stmt.step()) {
-    tasks.push(stmt.getAsObject());
-  }
-  stmt.free();
+  const tasks = db.prepare(query).all(params);
 
   res.json({ tasks });
 });
@@ -2006,13 +2051,7 @@ app.get('/api/meeting-room/bookings', (req, res) => {
 
   query += ' ORDER BY meeting_date ASC, start_time ASC';
 
-  const stmt = db.prepare(query);
-  stmt.bind(params);
-  const bookings = [];
-  while (stmt.step()) {
-    bookings.push(stmt.getAsObject());
-  }
-  stmt.free();
+  const bookings = db.prepare(query).all(params);
 
   res.json({ bookings });
 });
@@ -2026,53 +2065,49 @@ app.post('/api/meeting-room/bookings', (req, res) => {
   }
 
   // Проверка права на бронирование
-  const userCheck = db.exec(`SELECT can_book_meeting_room, username FROM users WHERE id = '${organizerId.replace(/'/g, "''")}'`);
-  if (!userCheck[0] || userCheck[0].values.length === 0) {
+  const userCheck = db.prepare('SELECT can_book_meeting_room, username FROM users WHERE id = ?').get(organizerId);
+  if (!userCheck) {
     return res.status(404).json({ error: 'Пользователь не найден' });
   }
 
-  const canBook = userCheck[0].values[0][0] === 1 || userCheck[0].values[0][1] === 'Root';
+  const canBook = userCheck.can_book_meeting_room === 1 || userCheck.username === 'Root';
   if (!canBook) {
     return res.status(403).json({ error: 'Нет права на бронирование переговорной' });
   }
 
   // Проверка пересечений по времени
-  const overlapCheck = db.exec(`
+  const overlapCheck = db.prepare(`
     SELECT id FROM meeting_room_bookings 
-    WHERE meeting_date = '${meetingDate}'
-    AND (
-      (start_time < '${endTime}' AND end_time > '${startTime}')
+    WHERE meeting_date = ? AND (
+      (start_time < ? AND end_time > ?)
     )
-  `);
+  `).get(meetingDate, endTime, startTime);
   
-  if (overlapCheck[0] && overlapCheck[0].values.length > 0) {
+  if (overlapCheck) {
     return res.status(409).json({ error: 'Это время уже забронировано' });
   }
 
   try {
-    db.run(`
+    const insertResult = db.run(`
       INSERT INTO meeting_room_bookings (organizer_id, organizer_name, title, description, meeting_date, start_time, end_time)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `, [organizerId, organizerName || 'Аноним', title, description || null, meetingDate, startTime, endTime]);
     
-
+    const newId = insertResult.lastInsertRowid;
     
-    const lastBooking = db.exec('SELECT last_insert_rowid() as id');
-    const newId = lastBooking[0].values[0][0];
-    
-    const newBooking = db.exec(`SELECT * FROM meeting_room_bookings WHERE id = ${newId}`);
+    const newBooking = db.prepare('SELECT * FROM meeting_room_bookings WHERE id = ?').get(newId);
     
     res.json({ 
       success: true, 
-      booking: newBooking[0] ? {
-        id: newBooking[0].values[0][0],
-        title: newBooking[0].values[0][1],
-        description: newBooking[0].values[0][2],
-        meeting_date: newBooking[0].values[0][3],
-        start_time: newBooking[0].values[0][4],
-        end_time: newBooking[0].values[0][5],
-        organizer_id: newBooking[0].values[0][6],
-        organizer_name: newBooking[0].values[0][7]
+      booking: newBooking ? {
+        id: newBooking.id,
+        title: newBooking.title,
+        description: newBooking.description,
+        meeting_date: newBooking.meeting_date,
+        start_time: newBooking.start_time,
+        end_time: newBooking.end_time,
+        organizer_id: newBooking.organizer_id,
+        organizer_name: newBooking.organizer_name
       } : null
     });
   } catch (err) {
@@ -2112,28 +2147,26 @@ app.put('/api/meeting-room/bookings/:id', (req, res) => {
 
   // Проверка права на бронирование
   if (organizerId) {
-    const userCheck = db.exec(`SELECT can_book_meeting_room, username FROM users WHERE id = '${organizerId.replace(/'/g, "''")}'`);
-    if (!userCheck[0] || userCheck[0].values.length === 0) {
+    const userCheck = db.prepare('SELECT can_book_meeting_room, username FROM users WHERE id = ?').get(organizerId);
+    if (!userCheck) {
       return res.status(404).json({ error: 'Пользователь не найден' });
     }
 
-    const canBook = userCheck[0].values[0][0] === 1 || userCheck[0].values[0][1] === 'Root';
+    const canBook = userCheck.can_book_meeting_room === 1 || userCheck.username === 'Root';
     if (!canBook) {
       return res.status(403).json({ error: 'Нет права на бронирование переговорной' });
     }
   }
 
   // Проверка пересечений по времени (исключая текущее бронирование)
-  const overlapCheck = db.exec(`
+  const overlapCheck = db.prepare(`
     SELECT id FROM meeting_room_bookings 
-    WHERE meeting_date = '${meetingDate}'
-    AND id != ${id}
-    AND (
-      (start_time < '${endTime}' AND end_time > '${startTime}')
+    WHERE meeting_date = ? AND id != ? AND (
+      (start_time < ? AND end_time > ?)
     )
-  `);
+  `).get(meetingDate, id, endTime, startTime);
   
-  if (overlapCheck[0] && overlapCheck[0].values.length > 0) {
+  if (overlapCheck) {
     return res.status(409).json({ error: 'Это время уже забронировано' });
   }
 
@@ -2144,21 +2177,19 @@ app.put('/api/meeting-room/bookings/:id', (req, res) => {
       WHERE id = ?
     `, [title, description || null, meetingDate, startTime, endTime, id]);
     
-
-    
-    const updatedBooking = db.exec(`SELECT * FROM meeting_room_bookings WHERE id = ${id}`);
+    const updatedBooking = db.prepare('SELECT * FROM meeting_room_bookings WHERE id = ?').get(id);
     
     res.json({ 
       success: true, 
-      booking: updatedBooking[0] ? {
-        id: updatedBooking[0].values[0][0],
-        title: updatedBooking[0].values[0][1],
-        description: updatedBooking[0].values[0][2],
-        meeting_date: updatedBooking[0].values[0][3],
-        start_time: updatedBooking[0].values[0][4],
-        end_time: updatedBooking[0].values[0][5],
-        organizer_id: updatedBooking[0].values[0][6],
-        organizer_name: updatedBooking[0].values[0][7]
+      booking: updatedBooking ? {
+        id: updatedBooking.id,
+        title: updatedBooking.title,
+        description: updatedBooking.description,
+        meeting_date: updatedBooking.meeting_date,
+        start_time: updatedBooking.start_time,
+        end_time: updatedBooking.end_time,
+        organizer_id: updatedBooking.organizer_id,
+        organizer_name: updatedBooking.organizer_name
       } : null
     });
   } catch (err) {
@@ -2169,7 +2200,7 @@ app.put('/api/meeting-room/bookings/:id', (req, res) => {
 
 // API для создания задачи
 app.post('/api/calendar/tasks', (req, res) => {
-  const { userId, title, description, taskDate, taskTime, taskEndTime, color } = req.body;
+  const { userId, title, description, taskDate, taskTime, taskEndTime, color, reminderType } = req.body;
 
   if (!userId || !title || !taskDate) {
     return res.status(400).json({ error: 'userId, title и taskDate обязательны' });
@@ -2178,10 +2209,34 @@ app.post('/api/calendar/tasks', (req, res) => {
   const taskId = uuidv4();
 
   try {
+    // Рассчитываем время напоминания если выбран reminderType
+    let reminderTime = null;
+    if (reminderType && reminderType !== 'none') {
+      const baseDate = new Date(`${taskDate}${taskTime ? 'T' + taskTime : 'T09:00'}`);
+
+      // Получаем имя пользователя для логирования
+      const user = getUserById(userId);
+
+      if (reminderType === '1h') {
+        reminderTime = new Date(baseDate.getTime() - 60 * 60 * 1000).toISOString().slice(0, 19);
+      } else if (reminderType === '3h') {
+        reminderTime = new Date(baseDate.getTime() - 3 * 60 * 60 * 1000).toISOString().slice(0, 19);
+      } else if (reminderType === '6h') {
+        reminderTime = new Date(baseDate.getTime() - 6 * 60 * 60 * 1000).toISOString().slice(0, 19);
+      } else if (reminderType === 'custom' && req.body.reminderCustomTime) {
+        // reminderCustomTime — строка времени HH:MM
+        reminderTime = `${taskDate}T${req.body.reminderCustomTime}:00`;
+      }
+
+      if (reminderTime && user) {
+        scheduleTaskReminder(taskId, userId, user.username, title, taskDate, taskTime || null, reminderTime);
+      }
+    }
+
     db.run(`
-      INSERT INTO calendar_tasks (id, user_id, title, description, task_date, task_time, task_end_time, color, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-    `, [taskId, userId, title, description || null, taskDate, taskTime || null, taskEndTime || null, color || '#667eea']);
+      INSERT INTO calendar_tasks (id, user_id, title, description, task_date, task_time, task_end_time, color, reminder_time, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    `, [taskId, userId, title, description || null, taskDate, taskTime || null, taskEndTime || null, color || '#667eea', reminderTime]);
 
 
     const task = db.prepare('SELECT * FROM calendar_tasks WHERE id = ?').get(taskId);
@@ -2199,18 +2254,44 @@ app.post('/api/calendar/tasks', (req, res) => {
 // API для обновления задачи
 app.put('/api/calendar/tasks/:taskId', (req, res) => {
   const { taskId } = req.params;
-  const { title, description, taskDate, taskTime, taskEndTime, color } = req.body;
+  const { title, description, taskDate, taskTime, taskEndTime, color, reminderType, reminderCustomTime } = req.body;
 
   if (!title || !taskDate) {
     return res.status(400).json({ error: 'title и taskDate обязательны' });
   }
 
   try {
+    // Получаем текущую задачу для расчёта напоминания
+    const existingTask = db.prepare('SELECT * FROM calendar_tasks WHERE id = ?').get(taskId);
+    let reminderTime = null;
+
+    if (reminderType && reminderType !== 'none' && existingTask) {
+      const baseDate = new Date(`${taskDate}${taskTime ? 'T' + taskTime : 'T09:00'}`);
+      const user = getUserById(existingTask.user_id);
+
+      if (reminderType === '1h') {
+        reminderTime = new Date(baseDate.getTime() - 60 * 60 * 1000).toISOString().slice(0, 19);
+      } else if (reminderType === '3h') {
+        reminderTime = new Date(baseDate.getTime() - 3 * 60 * 60 * 1000).toISOString().slice(0, 19);
+      } else if (reminderType === '6h') {
+        reminderTime = new Date(baseDate.getTime() - 6 * 60 * 60 * 1000).toISOString().slice(0, 19);
+      } else if (reminderType === 'custom' && reminderCustomTime) {
+        reminderTime = `${taskDate}T${reminderCustomTime}:00`;
+      }
+
+      if (reminderTime && user) {
+        scheduleTaskReminder(taskId, existingTask.user_id, user.username, title, taskDate, taskTime || null, reminderTime);
+      }
+    } else if (reminderType === 'none') {
+      // Убираем напоминание
+      pendingReminders.delete(taskId);
+    }
+
     db.run(`
       UPDATE calendar_tasks
-      SET title = ?, description = ?, task_date = ?, task_time = ?, task_end_time = ?, color = ?
+      SET title = ?, description = ?, task_date = ?, task_time = ?, task_end_time = ?, color = ?, reminder_time = ?
       WHERE id = ?
-    `, [title, description || null, taskDate, taskTime || null, taskEndTime || null, color || '#667eea', taskId]);
+    `, [title, description || null, taskDate, taskTime || null, taskEndTime || null, color || '#667eea', reminderTime, taskId]);
 
 
     const task = db.prepare('SELECT * FROM calendar_tasks WHERE id = ?').get(taskId);
@@ -2242,7 +2323,14 @@ app.delete('/api/calendar/tasks/:taskId', (req, res) => {
     // Удаляем задачу
     db.run('DELETE FROM calendar_tasks WHERE id = ?', [taskId]);
 
-    
+    // Отменяем запланированное напоминание если есть
+    const oldTimeout = pendingReminders.get(taskId);
+    if (oldTimeout) {
+      clearTimeout(oldTimeout);
+      pendingReminders.delete(taskId);
+    }
+
+
     // Уведомляем все подключенные клиенты об удалении задачи
     io.emit('task_deleted', { taskId, userId: task.user_id });
     
@@ -2256,17 +2344,50 @@ app.delete('/api/calendar/tasks/:taskId', (req, res) => {
 // API для получения списка пользователей
 app.get('/api/users', (req, res) => {
   try {
-    const stmt = db.prepare('SELECT id, username, avatar FROM users');
-    const users = [];
-    stmt.bind([]);
-    while (stmt.step()) {
-      users.push(stmt.getAsObject());
-    }
-    stmt.free();
+    const users = db.prepare('SELECT id, username, avatar FROM users').all();
     res.json({ users });
   } catch (err) {
     console.error('Ошибка получения пользователей:', err);
     res.status(500).json({ error: 'Ошибка при получении пользователей' });
+  }
+});
+
+// ============================================
+// Web Push API для push-уведомлений
+// ============================================
+
+// Получение VAPID public key
+app.get('/api/push/vapid-key', (req, res) => {
+  res.json({ publicKey: VAPID_PUBLIC_KEY });
+});
+
+// Сохранение подписки на push-уведомления
+app.post('/api/push/subscribe', (req, res) => {
+  const { userId, subscription } = req.body;
+  if (!userId || !subscription || !subscription.endpoint) {
+    return res.status(400).json({ error: 'userId и subscription обязательны' });
+  }
+  try {
+    const id = uuidv4();
+    db.run('INSERT OR REPLACE INTO push_subscriptions (id, user_id, endpoint, p256dh, auth, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+      [id, userId, subscription.endpoint, subscription.keys.p256dh, subscription.keys.auth, new Date().toISOString()]);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Ошибка сохранения push-подписки:', err);
+    res.status(500).json({ error: 'Ошибка сохранения подписки' });
+  }
+});
+
+// Удаление подписки на push-уведомления
+app.delete('/api/push/subscribe', (req, res) => {
+  const { endpoint } = req.body;
+  if (!endpoint) return res.status(400).json({ error: 'endpoint обязателен' });
+  try {
+    db.run('DELETE FROM push_subscriptions WHERE endpoint = ?', [endpoint]);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Ошибка удаления push-подписки:', err);
+    res.status(500).json({ error: 'Ошибка удаления подписки' });
   }
 });
 
@@ -2293,6 +2414,20 @@ app.post('/api/calendar/tasks/:taskId/share', (req, res) => {
         VALUES (?, ?, ?, ?, 'pending')
       `, [shareId, taskId, fromUserId, toUserId]);
       shareIds.push(shareId);
+
+      // Уведомляем получателя о новой общей задаче через WebSocket
+      const recipientEntry = Array.from(onlineUsers.entries()).find(([sid, u]) => u.id === toUserId);
+      if (recipientEntry) {
+        io.to(recipientEntry[0]).emit('shared_task_received', {
+          shareId,
+          task_id: taskId,
+          from_user_id: fromUserId,
+          to_user_id: toUserId,
+          task_date: task.task_date,
+          task_time: task.task_time,
+          color: task.color || '#667eea'
+        });
+      }
     });
 
 
@@ -2312,7 +2447,7 @@ app.get('/api/calendar/tasks/shared/received', (req, res) => {
   }
 
   try {
-    const stmt = db.prepare(`
+    const rows = db.prepare(`
       SELECT ts.*, ct.title, ct.description, ct.task_date, ct.task_time, ct.color,
              u.username as from_username, u.avatar as from_avatar
       FROM task_shares ts
@@ -2320,32 +2455,26 @@ app.get('/api/calendar/tasks/shared/received', (req, res) => {
       JOIN users u ON ts.from_user_id = u.id
       WHERE ts.to_user_id = ?
       ORDER BY ts.created_at DESC
-    `);
-    stmt.bind([userId]);
+    `).all(userId);
 
-    const shares = [];
-    while (stmt.step()) {
-      const row = stmt.getAsObject();
-      shares.push({
-        id: row.id,
-        task_id: row.task_id,
-        from_user_id: row.from_user_id,
-        from_username: row.from_username,
-        from_avatar: row.from_avatar,
-        to_user_id: row.to_user_id,
-        status: row.status,
-        created_at: row.created_at,
-        task: {
-          id: row.task_id,
-          title: row.title,
-          description: row.description,
-          task_date: row.task_date,
-          task_time: row.task_time,
-          color: row.color
-        }
-      });
-    }
-    stmt.free();
+    const shares = rows.map(row => ({
+      id: row.id,
+      task_id: row.task_id,
+      from_user_id: row.from_user_id,
+      from_username: row.from_username,
+      from_avatar: row.from_avatar,
+      to_user_id: row.to_user_id,
+      status: row.status,
+      created_at: row.created_at,
+      task: {
+        id: row.task_id,
+        title: row.title,
+        description: row.description,
+        task_date: row.task_date,
+        task_time: row.task_time,
+        color: row.color
+      }
+    }));
 
     res.json({ shares });
   } catch (err) {
@@ -2363,7 +2492,7 @@ app.get('/api/calendar/tasks/shared/sent', (req, res) => {
   }
 
   try {
-    const stmt = db.prepare(`
+    const rows = db.prepare(`
       SELECT ts.*, ct.title, ct.task_date,
              u.username as to_username, u.avatar as to_avatar
       FROM task_shares ts
@@ -2371,28 +2500,22 @@ app.get('/api/calendar/tasks/shared/sent', (req, res) => {
       JOIN users u ON ts.to_user_id = u.id
       WHERE ts.from_user_id = ?
       ORDER BY ts.created_at DESC
-    `);
-    stmt.bind([userId]);
+    `).all(userId);
 
-    const shares = [];
-    while (stmt.step()) {
-      const row = stmt.getAsObject();
-      shares.push({
-        id: row.id,
-        task_id: row.task_id,
-        to_user_id: row.to_user_id,
-        to_username: row.to_username,
-        to_avatar: row.to_avatar,
-        status: row.status,
-        created_at: row.created_at,
-        task: {
-          id: row.task_id,
-          title: row.title,
-          task_date: row.task_date
-        }
-      });
-    }
-    stmt.free();
+    const shares = rows.map(row => ({
+      id: row.id,
+      task_id: row.task_id,
+      to_user_id: row.to_user_id,
+      to_username: row.to_username,
+      to_avatar: row.to_avatar,
+      status: row.status,
+      created_at: row.created_at,
+      task: {
+        id: row.task_id,
+        title: row.title,
+        task_date: row.task_date
+      }
+    }));
 
     res.json({ shares });
   } catch (err) {
@@ -2406,50 +2529,28 @@ app.post('/api/calendar/tasks/shared/:shareId/accept', (req, res) => {
   const { shareId } = req.params;
   const { userId } = req.body;
 
-  console.log('Принятие задачи:', { shareId, userId });
-
   if (!shareId || !userId) {
-    console.log('Ошибка: нет shareId или userId');
     return res.status(400).json({ error: 'shareId и userId обязательны' });
   }
 
   try {
     // Используем прямой запрос вместо prepared statement
-    const shareStmt = db.prepare('SELECT * FROM task_shares WHERE id = ?');
-    shareStmt.bind([shareId]);
+    const share = db.prepare('SELECT * FROM task_shares WHERE id = ?').get(shareId);
     
-    if (!shareStmt.step()) {
-      console.log('Запись не найдена в БД:', shareId);
-      shareStmt.free();
+    if (!share) {
       return res.status(404).json({ error: 'Запись не найдена' });
     }
-    
-    const share = shareStmt.getAsObject();
-    shareStmt.free();
-    
-    console.log('Найдена запись:', share);
 
     if (share.to_user_id !== userId) {
-      console.log('Нет доступа:', { to: share.to_user_id, user: userId });
       return res.status(403).json({ error: 'Нет доступа' });
     }
 
-    const originalTaskStmt = db.prepare('SELECT * FROM calendar_tasks WHERE id = ?');
-    originalTaskStmt.bind([share.task_id]);
+    const originalTask = db.prepare('SELECT * FROM calendar_tasks WHERE id = ?').get(share.task_id);
     
-    if (!originalTaskStmt.step()) {
-      console.log('Задача не найдена в БД:', share.task_id);
-      originalTaskStmt.free();
+    if (!originalTask) {
       return res.status(404).json({ error: 'Задача не найдена' });
     }
-    
-    const originalTask = originalTaskStmt.getAsObject();
-    originalTaskStmt.free();
-    
-    console.log('Найдена задача:', originalTask);
 
-    console.log('Создаю копию задачи для пользователя:', userId);
-    
     const newTaskId = uuidv4();
     const values = [
       newTaskId, 
@@ -2460,7 +2561,6 @@ app.post('/api/calendar/tasks/shared/:shareId/accept', (req, res) => {
       originalTask.task_time !== undefined && originalTask.task_time !== null ? originalTask.task_time : null, 
       originalTask.color !== undefined && originalTask.color !== null ? originalTask.color : '#667eea'
     ];
-    console.log('Values для вставки:', values);
     
     db.run(`
       INSERT INTO calendar_tasks (id, user_id, title, description, task_date, task_time, color)
@@ -2468,11 +2568,12 @@ app.post('/api/calendar/tasks/shared/:shareId/accept', (req, res) => {
     `, values);
 
 
-    console.log('Обновляю статус шаринга:', shareId);
     db.run('UPDATE task_shares SET status = ? WHERE id = ?', ['accepted', shareId]);
 
 
-    console.log('Задача принята успешно');
+    // Уведомляем о принятии задачи (отправителю и получателю)
+    io.emit('shared_task_accepted', { shareId, user_id: userId, new_task_id: newTaskId });
+
     res.json({ success: true, taskId: newTaskId });
   } catch (err) {
     console.error('Ошибка принятия задачи:', err);
@@ -2501,6 +2602,9 @@ app.post('/api/calendar/tasks/shared/:shareId/decline', (req, res) => {
 
     db.run('UPDATE task_shares SET status = ? WHERE id = ?', ['declined', shareId]);
 
+
+    // Уведомляем об отклонении задачи
+    io.emit('shared_task_declined', { shareId, user_id: userId });
 
     res.json({ success: true });
   } catch (err) {
@@ -2544,44 +2648,175 @@ app.get('/api/messages/:chatId', (req, res) => {
   }
 
   try {
-    const safeChatId = chatId.replace(/'/g, "''");
-    const result = db.exec(`
+    const rows = db.prepare(`
       SELECT m.id, m.chat_id, m.sender_id, m.text, m.file_data, m.reply_to, m.timestamp, m.read_at,
              u.username as senderName, u.avatar as senderAvatar
       FROM messages m
       LEFT JOIN users u ON m.sender_id = u.id
-      WHERE m.chat_id = '${safeChatId}'
+      WHERE m.chat_id = ?
       ORDER BY m.timestamp ASC
-    `);
+    `).all(chatId);
 
-    const rows = result[0]?.values || [];
     const messages = rows.map(row => {
       let file = null;
-      if (row[4]) {
+      if (row.file_data) {
         try {
-          file = JSON.parse(row[4]);
+          file = JSON.parse(row.file_data);
         } catch (e) {
           file = null;
         }
       }
 
       return {
-        id: row[0],
-        chatId: row[1],
-        senderId: row[2],
-        text: decryptText(row[3]),
+        id: row.id,
+        chatId: row.chat_id,
+        senderId: row.sender_id,
+        text: decryptText(row.text),
         file: file,
-        timestamp: row[6],
-        read_at: row[7] || null,
-        senderName: row[8],
-        senderAvatar: row[9]
+        reply_to: row.reply_to ? JSON.parse(row.reply_to) : null,
+        timestamp: row.timestamp,
+        read_at: row.read_at || null,
+        senderName: row.senderName,
+        senderAvatar: row.senderAvatar
       };
     });
+
+    const replyCounts = {};
+    for (const msg of messages) {
+      if (msg.reply_to && msg.reply_to.messageId) {
+        replyCounts[msg.reply_to.messageId] = (replyCounts[msg.reply_to.messageId] || 0) + 1;
+      }
+    }
+    for (const msg of messages) {
+      msg.replyCount = replyCounts[msg.id] || 0;
+    }
 
     res.json({ messages });
   } catch (err) {
     console.error('Ошибка загрузки сообщений:', err);
     res.status(500).json({ error: 'Ошибка при загрузке сообщений' });
+  }
+});
+
+// API для отправки сообщения (через REST, для тредов)
+app.post('/api/messages', (req, res) => {
+  const { chatId, senderId, text, replyTo } = req.body;
+  if (!chatId || !senderId || !text) {
+    return res.status(400).json({ error: 'chatId, senderId и text обязательны' });
+  }
+
+  const messageId = uuidv4();
+  const timestamp = new Date().toISOString();
+  const replyToStr = replyTo ? JSON.stringify(replyTo) : null;
+
+  try {
+    db.prepare(`
+      INSERT INTO messages (id, chat_id, sender_id, text, reply_to, timestamp)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(messageId, chatId, senderId, text, replyToStr, timestamp);
+
+    const messageRow = db.prepare(`
+      SELECT m.*, u.username as senderName, u.avatar as senderAvatar
+      FROM messages m
+      JOIN users u ON m.sender_id = u.id
+      WHERE m.id = ?
+    `).get(messageId);
+
+    const newMessage = {
+      id: messageRow.id,
+      chatId: messageRow.chat_id,
+      senderId: messageRow.sender_id,
+      senderName: messageRow.senderName,
+      senderAvatar: messageRow.senderAvatar,
+      text: messageRow.text || '',
+      file: null,
+      reply_to: messageRow.reply_to ? JSON.parse(messageRow.reply_to) : null,
+      replyCount: 0,
+      timestamp: messageRow.timestamp,
+      read_at: null,
+      readBy: [],
+      edited: false,
+      reactions: undefined
+    };
+
+    io.to(chatId).emit('new_message', {
+      message: newMessage,
+      chat: { id: chatId, unreadCount: 0 }
+    });
+
+    res.json({ success: true, message: newMessage });
+  } catch (err) {
+    console.error('Ошибка отправки сообщения:', err);
+    res.status(500).json({ error: 'Ошибка отправки сообщения' });
+  }
+});
+
+// API для получения сообщений треда (все ответы на конкретное сообщение)
+app.get('/api/thread/:messageId', (req, res) => {
+  const { messageId } = req.params;
+  const { userId } = req.query;
+
+  if (!messageId || !userId) {
+    return res.status(400).json({ error: 'messageId и userId обязательны' });
+  }
+
+  try {
+    const original = db.prepare(`
+      SELECT m.*, u.username as senderName, u.avatar as senderAvatar
+      FROM messages m
+      JOIN users u ON m.sender_id = u.id
+      WHERE m.id = ?
+    `).get(messageId);
+
+    if (!original) {
+      return res.status(404).json({ error: 'Сообщение не найдено' });
+    }
+
+    const replies = db.prepare(`
+      SELECT m.*, u.username as senderName, u.avatar as senderAvatar
+      FROM messages m
+      JOIN users u ON m.sender_id = u.id
+      WHERE m.chat_id = ? AND m.reply_to IS NOT NULL AND m.id != ?
+      ORDER BY m.timestamp ASC
+    `).all(original.chat_id, messageId);
+
+    const threadReplies = replies.filter(r => {
+      try {
+        const rt = JSON.parse(r.reply_to);
+        return rt.messageId === messageId;
+      } catch { return false; }
+    }).map(row => ({
+      id: row.id,
+      chatId: row.chat_id,
+      senderId: row.sender_id,
+      senderName: row.senderName,
+      senderAvatar: row.senderAvatar,
+      text: decryptText(row.text) || '',
+      file: row.file_data ? (() => { try { return JSON.parse(row.file_data); } catch { return null; } })() : null,
+      timestamp: row.timestamp,
+      reply_to: row.reply_to ? JSON.parse(row.reply_to) : null,
+      edited: row.edited === 1 || row.edited === true,
+      editedAt: row.edited_at || null
+    }));
+
+    res.json({
+      original: {
+        id: original.id,
+        chatId: original.chat_id,
+        senderId: original.sender_id,
+        senderName: original.senderName,
+        senderAvatar: original.senderAvatar,
+        text: decryptText(original.text) || '',
+        file: original.file_data ? (() => { try { return JSON.parse(original.file_data); } catch { return null; } })() : null,
+        timestamp: original.timestamp,
+        edited: original.edited === 1 || original.edited === true,
+        editedAt: original.edited_at || null
+      },
+      replies: threadReplies
+    });
+  } catch (err) {
+    console.error('Ошибка загрузки треда:', err);
+    res.status(500).json({ error: 'Ошибка при загрузке треда' });
   }
 });
 
@@ -2596,21 +2831,16 @@ app.post('/api/messages/:messageId/forward', (req, res) => {
 
   try {
     // Получаем оригинальное сообщение
-    const originalMsgStmt = db.prepare(`
+    const originalMsg = db.prepare(`
       SELECT m.*, u.username as senderName, u.avatar as senderAvatar
       FROM messages m
       JOIN users u ON m.sender_id = u.id
       WHERE m.id = ?
-    `);
-    originalMsgStmt.bind([messageId]);
+    `).get(messageId);
     
-    if (!originalMsgStmt.step()) {
-      originalMsgStmt.free();
+    if (!originalMsg) {
       return res.status(404).json({ error: 'Сообщение не найдено' });
     }
-    
-    const originalMsg = originalMsgStmt.getAsObject();
-    originalMsgStmt.free();
 
     // Создаём новое сообщение с пометкой о пересылке
     const newMessageId = uuidv4();
@@ -2669,6 +2899,205 @@ app.post('/api/messages/:messageId/forward', (req, res) => {
 });
 
 // ============================================
+// API для извлечения превью ссылок (Open Graph)
+// ============================================
+
+const https = require('https');
+
+/**
+ * Извлекает Open Graph метаданные из HTML страницы.
+ * Использует regex-парсинг вместо тяжёлых библиотек для минимальных зависимостей.
+ */
+function extractOpenGraph(html, url) {
+  const result = {};
+
+  // og:title
+  const titleMatch = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i);
+  if (titleMatch) result.title = titleMatch[1];
+
+  // og:description
+  const descMatch = html.match(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i);
+  if (descMatch) result.description = descMatch[1];
+
+  // og:image
+  const imageMatch = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i);
+  if (imageMatch) result.image = imageMatch[1];
+
+  // og:url
+  const urlMatch = html.match(/<meta[^>]+property=["']og:url["'][^>]+content=["']([^"']+)["']/i);
+  if (urlMatch) result.ogUrl = urlMatch[1];
+
+  // twitter:card
+  const cardMatch = html.match(/<meta[^>]+name=["']twitter:card["'][^>]+content=["']([^"']+)["']/i);
+  if (cardMatch) result.cardType = cardMatch[1];
+
+  // twitter:title (fallback)
+  if (!result.title) {
+    const twTitle = html.match(/<meta[^>]+name=["']twitter:title["'][^>]+content=["']([^"']+)["']/i);
+    if (twTitle) result.title = twTitle[1];
+  }
+
+  // twitter:description (fallback)
+  if (!result.description) {
+    const twDesc = html.match(/<meta[^>]+name=["']twitter:description["'][^>]+content=["']([^"']+)["']/i);
+    if (twDesc) result.description = twDesc[1];
+  }
+
+  // twitter:image (fallback)
+  if (!result.image) {
+    const twImage = html.match(/<meta[^>]+name=["']twitter:image["'][^>]+content=["']([^"']+)["']/i);
+    if (twImage) result.image = twImage[1];
+  }
+
+  // <title> tag as last fallback for title
+  if (!result.title) {
+    const titleTag = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+    if (titleTag) result.title = titleTag[1].trim();
+  }
+
+  // Extract domain and build favicon URL
+  try {
+    const parsedUrl = new URL(url);
+    result.domain = parsedUrl.hostname;
+    result.favicon = `${parsedUrl.protocol}//${parsedUrl.hostname}/favicon.ico`;
+  } catch {
+    result.domain = url;
+  }
+
+  return result;
+}
+
+/**
+ * Fetches HTML from a URL using http/https with timeout.
+ */
+function fetchHtml(url, timeoutMs = 5000) {
+  return new Promise((resolve, reject) => {
+    const client = url.startsWith('https') ? https : http;
+    const request = client.get(url, { timeout: timeoutMs }, (res) => {
+      // Follow redirects manually up to 3 times
+      if ([301, 302, 307, 308].includes(res.statusCode) && res.headers.location) {
+        let redirectCount = 0;
+        const followRedirect = (redirectUrl) => {
+          redirectCount++;
+          if (redirectCount > 3) return reject(new Error('Too many redirects'));
+          fetchHtml(redirectUrl, timeoutMs).then(resolve).catch(reject);
+        };
+
+        // Handle relative redirects
+        let location = res.headers.location;
+        if (!location.startsWith('http')) {
+          try {
+            location = new URL(location, url).href;
+          } catch {
+            return reject(new Error('Invalid redirect URL'));
+          }
+        }
+        followRedirect(location);
+        return;
+      }
+
+      if (res.statusCode !== 200) return reject(new Error(`HTTP ${res.statusCode}`));
+
+      let html = '';
+      res.setEncoding('utf8');
+      res.on('data', (chunk) => { html += chunk; });
+      res.on('end', () => resolve(html));
+      res.on('error', reject);
+    });
+
+    request.on('timeout', () => {
+      request.destroy();
+      reject(new Error('Request timeout'));
+    });
+    request.on('error', reject);
+  });
+}
+
+// GET /api/link-preview?url=...
+const linkPreviewCache = new Map();
+const LINK_PREVIEW_CACHE_TTL = 60 * 60 * 1000; // 1 час
+
+app.get('/api/link-preview', async (req, res) => {
+  const rawUrl = (req.query.url || '').trim();
+
+  if (!rawUrl) {
+    return res.status(400).json({ error: 'Missing url parameter' });
+  }
+
+  // Validate URL format
+  let url;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return res.status(400).json({ error: 'Invalid URL format' });
+  }
+
+  // Only allow http/https
+  if (!['http:', 'https:'].includes(url.protocol)) {
+    return res.status(400).json({ error: 'Only http and https protocols allowed' });
+  }
+
+  // Проверка кэша
+  const cacheKey = rawUrl.toLowerCase();
+  if (linkPreviewCache.has(cacheKey)) {
+    const cached = linkPreviewCache.get(cacheKey);
+    if (Date.now() - cached.ts < LINK_PREVIEW_CACHE_TTL) {
+      return res.json(cached.data);
+    }
+    linkPreviewCache.delete(cacheKey);
+  }
+
+  try {
+    const html = await fetchHtml(rawUrl, 5000);
+    const preview = extractOpenGraph(html, rawUrl);
+
+    // Normalize image URL (handle relative URLs)
+    if (preview.image && !preview.image.startsWith('http')) {
+      try {
+        preview.image = new URL(preview.image, url).href;
+      } catch { /* keep as-is */ }
+    }
+
+    const responseData = { success: true, ...preview };
+    linkPreviewCache.set(cacheKey, { ts: Date.now(), data: responseData });
+    res.json(responseData);
+  } catch (err) {
+    console.warn(`Link preview failed for ${rawUrl}:`, err.message);
+    // Return minimal preview from the URL itself
+    let domain = '';
+    try { domain = new URL(rawUrl).hostname; } catch {}
+    res.json({ success: false, title: domain || rawUrl, url: rawUrl });
+  }
+});
+
+// ============================================
+// Health check endpoint
+// ============================================
+
+const startTime = Date.now();
+
+app.get('/api/health', (req, res) => {
+  const mem = process.memoryUsage();
+  let dbSize = 0;
+  try {
+    if (fs.existsSync(DB_PATH)) dbSize = fs.statSync(DB_PATH).size;
+  } catch {}
+  res.json({
+    status: 'ok',
+    uptime: Math.floor((Date.now() - startTime) / 1000),
+    version: '2.0.0',
+    usersOnline: onlineUsers.size,
+    memory: {
+      rss: mem.rss,
+      heapUsed: mem.heapUsed,
+      heapTotal: mem.heapTotal
+    },
+    dbSize,
+    timestamp: new Date().toISOString()
+  });
+});
+
+// ============================================
 // API для бота-помощника
 // ============================================
 
@@ -2678,20 +3107,20 @@ app.get('/api/bot/stats/:userId', (req, res) => {
 
   try {
     // Количество сообщений
-    const messagesCount = db.exec(`SELECT COUNT(*) as count FROM messages WHERE sender_id = '${userId}'`);
-    const totalMessages = messagesCount[0]?.values[0][0] || 0;
+    const messagesCount = db.prepare('SELECT COUNT(*) as count FROM messages WHERE sender_id = ?').get(userId);
+    const totalMessages = messagesCount?.count || 0;
 
     // Количество файлов
-    const filesCount = db.exec(`SELECT COUNT(*) as count FROM messages WHERE sender_id = '${userId}' AND file_data IS NOT NULL`);
-    const totalFiles = filesCount[0]?.values[0][0] || 0;
+    const filesCount = db.prepare('SELECT COUNT(*) as count FROM messages WHERE sender_id = ? AND file_data IS NOT NULL').get(userId);
+    const totalFiles = filesCount?.count || 0;
 
     // Количество задач
-    const tasksCount = db.exec(`SELECT COUNT(*) as count FROM calendar_tasks WHERE user_id = '${userId}'`);
-    const totalTasks = tasksCount[0]?.values[0][0] || 0;
+    const tasksCount = db.prepare('SELECT COUNT(*) as count FROM calendar_tasks WHERE user_id = ?').get(userId);
+    const totalTasks = tasksCount?.count || 0;
 
     // Дата регистрации
-    const userDate = db.exec(`SELECT created_at FROM users WHERE id = '${userId}'`);
-    const createdAt = userDate[0]?.values[0][0] || new Date().toISOString();
+    const userDate = db.prepare('SELECT created_at FROM users WHERE id = ?').get(userId);
+    const createdAt = userDate?.created_at || new Date().toISOString();
 
     // Дней в чате
     const daysInChat = Math.floor((new Date() - new Date(createdAt)) / (1000 * 60 * 60 * 24));
@@ -2715,7 +3144,7 @@ app.get('/api/bot/stats/:userId', (req, res) => {
 // Контакты пользователей
 app.get('/api/bot/contacts', (req, res) => {
   try {
-    const users = db.exec(`
+    const rows = db.prepare(`
       SELECT id, username, email, full_name, mobile_phone, work_phone, avatar, status
       FROM users
       WHERE username != 'Помощник'
@@ -2725,18 +3154,18 @@ app.get('/api/bot/contacts', (req, res) => {
           (work_phone IS NOT NULL AND TRIM(work_phone) != '')
         )
       ORDER BY username
-    `);
+    `).all();
 
-    const contacts = users[0]?.values.map(row => ({
-      id: row[0],
-      username: row[1],
-      email: row[2],
-      full_name: row[3],
-      mobile_phone: row[4],
-      work_phone: row[5],
-      avatar: row[6],
-      status: row[7]
-    })) || [];
+    const contacts = rows.map(row => ({
+      id: row.id,
+      username: row.username,
+      email: row.email,
+      full_name: row.full_name,
+      mobile_phone: row.mobile_phone,
+      work_phone: row.work_phone,
+      avatar: row.avatar,
+      status: row.status
+    }));
 
     res.json({ success: true, contacts });
   } catch (err) {
@@ -2754,58 +3183,58 @@ app.get('/api/bot/today/:userId', (req, res) => {
     const todayStr = today.toISOString().split('T')[0];
 
     // Задачи на сегодня
-    const tasksToday = db.exec(`
+    const tasksRows = db.prepare(`
       SELECT id, title, description, task_date, task_time, color
       FROM calendar_tasks
-      WHERE user_id = '${userId}' AND task_date LIKE '${todayStr}%'
-    `);
+      WHERE user_id = ? AND task_date LIKE ?
+    `).all(userId, `${todayStr}%`);
 
-    const tasks = tasksToday[0]?.values.map(row => ({
-      id: row[0],
-      title: row[1],
-      description: row[2],
-      task_date: row[3],
-      task_time: row[4],
-      color: row[5]
-    })) || [];
+    const tasks = tasksRows.map(row => ({
+      id: row.id,
+      title: row.title,
+      description: row.description,
+      task_date: row.task_date,
+      task_time: row.task_time,
+      color: row.color
+    }));
 
     // Дни рождения сегодня
     const todayDay = today.getDate();
     const todayMonth = today.getMonth() + 1;
 
-    const birthdays = db.exec(`
+    const birthdaysRows = db.prepare(`
       SELECT id, username, avatar, birth_date
       FROM users
       WHERE birth_date IS NOT NULL
-    `);
+    `).all();
 
-    const birthdaysToday = birthdays[0]?.values
+    const birthdaysToday = birthdaysRows
       .filter(row => {
-        const birthDate = new Date(row[3]);
+        const birthDate = new Date(row.birth_date);
         return birthDate.getDate() === todayDay && (birthDate.getMonth() + 1) === todayMonth;
       })
       .map(row => ({
-        id: row[0],
-        username: row[1],
-        avatar: row[2],
-        birth_date: row[3]
-      })) || [];
+        id: row.id,
+        username: row.username,
+        avatar: row.avatar,
+        birth_date: row.birth_date
+      }));
 
     // Встречи сегодня
-    const meetingsToday = db.exec(`
+    const meetingsRows = db.prepare(`
       SELECT id, title, description, meeting_date, start_time, end_time
       FROM meeting_room_bookings
-      WHERE meeting_date LIKE '${todayStr}%'
-    `);
+      WHERE meeting_date LIKE ?
+    `).all(`${todayStr}%`);
 
-    const meetings = meetingsToday[0]?.values.map(row => ({
-      id: row[0],
-      title: row[1],
-      description: row[2],
-      meeting_date: row[3],
-      start_time: row[4],
-      end_time: row[5]
-    })) || [];
+    const meetings = meetingsRows.map(row => ({
+      id: row.id,
+      title: row.title,
+      description: row.description,
+      meeting_date: row.meeting_date,
+      start_time: row.start_time,
+      end_time: row.end_time
+    }));
 
     res.json({
       success: true,
@@ -2846,21 +3275,17 @@ function generateUserId(ip, userAgent) {
 // Получение пользователя по ID
 function getUserById(id) {
   try {
-    const stmt = db.prepare('SELECT id, username, email, avatar, status, status_text FROM users WHERE id = ?');
-    stmt.bind([id]);
-    if (stmt.step()) {
-      const row = stmt.getAsObject();
-      stmt.free();
+    const row = db.prepare('SELECT id, username, email, avatar, status, status_text FROM users WHERE id = ?').get(id);
+    if (row) {
       return {
-        id: String(row['id'] || ''),
-        username: String(row['username'] || ''),
-        email: String(row['email'] || ''),
-        avatar: String(row['avatar'] || ''),
-        status: String(row['status'] || 'offline'),
-        status_text: row['status_text'] || ''
+        id: String(row.id || ''),
+        username: String(row.username || ''),
+        email: String(row.email || ''),
+        avatar: String(row.avatar || ''),
+        status: String(row.status || 'offline'),
+        status_text: row.status_text || ''
       };
     }
-    stmt.free();
     return null;
   } catch (e) {
     console.error('Ошибка получения пользователя по ID:', e.message);
@@ -2869,48 +3294,30 @@ function getUserById(id) {
 }
 
 function getUserByUsername(username) {
-  const stmt = db.prepare('SELECT * FROM users WHERE username = ?');
-  stmt.bind([username]);
-  if (stmt.step()) {
-    const row = stmt.getAsObject();
-    stmt.free();
-    return row;
-  }
-  stmt.free();
-  return null;
+  const row = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
+  return row || null;
 }
 
 function getChatById(chatId) {
-  const stmt = db.prepare('SELECT * FROM chats WHERE id = ?');
-  stmt.bind([chatId]);
-  if (stmt.step()) {
-    const row = stmt.getAsObject();
-    stmt.free();
-    return row;
-  }
-  stmt.free();
-  return null;
+  const row = db.prepare('SELECT * FROM chats WHERE id = ?').get(chatId);
+  return row || null;
 }
 
 // Получение чата между двумя пользователями
 function getDirectChatBetweenUsers(userId1, userId2) {
-  const stmt = db.prepare(`
+  const row = db.prepare(`
     SELECT c.id, c.type FROM chats c
     JOIN chat_participants cp1 ON c.id = cp1.chat_id
     JOIN chat_participants cp2 ON c.id = cp2.chat_id
     WHERE c.type = 'direct'
       AND cp1.user_id = ? AND cp2.user_id = ?
-  `);
-  stmt.bind([userId1, userId2]);
-  if (stmt.step()) {
-    const row = stmt.getAsObject();
-    stmt.free();
+  `).get(userId1, userId2);
+  if (row) {
     return { 
       id: String(row.id || ''), 
       type: String(row.type || 'direct') 
     };
   }
-  stmt.free();
   return null;
 }
 
@@ -2919,61 +3326,47 @@ function getChatWithDetails(chatId, userId = null) {
   if (!chat) return null;
 
   // Получаем участников с полными данными
-  const participantsStmt = db.prepare(`
+  const participantsRows = db.prepare(`
     SELECT u.id, u.username, u.avatar, u.status, u.status_text
     FROM users u
     JOIN chat_participants cp ON u.id = cp.user_id
     WHERE cp.chat_id = ?
-  `);
-  participantsStmt.bind([chatId]);
-  const participants = [];
-  while (participantsStmt.step()) {
-    const row = participantsStmt.getAsObject();
-    participants.push({
-      id: String(row['id'] || ''),
-      username: String(row['username'] || ''),
-      avatar: String(row['avatar'] || ''),
-      status: String(row['status'] || 'offline'),
-      status_text: row['status_text'] || ''
-    });
-  }
-  participantsStmt.free();
+  `).all(chatId);
+  const participants = participantsRows.map(row => ({
+    id: String(row.id || ''),
+    username: String(row.username || ''),
+    avatar: String(row.avatar || ''),
+    status: String(row.status || 'offline'),
+    status_text: row.status_text || ''
+  }));
 
   // Получаем непрочитанные
   let unreadCount = 0;
   if (userId) {
-    const unreadStmt = db.prepare(`
-      SELECT COUNT(*) as count FROM unread_messages WHERE user_id = ? AND chat_id = ?
-    `);
-    unreadStmt.bind([userId, chatId]);
-    if (unreadStmt.step()) {
-      const row = unreadStmt.getAsObject();
-      unreadCount = Number(row['count'] || 0);
+    const unreadRow = db.prepare('SELECT COUNT(*) as count FROM unread_messages WHERE user_id = ? AND chat_id = ?').get(userId, chatId);
+    if (unreadRow) {
+      unreadCount = Number(unreadRow.count || 0);
     }
-    unreadStmt.free();
   }
 
   // Получаем последнее сообщение с аватаром
-  const lastMsgStmt = db.prepare(`
+  const msg = db.prepare(`
     SELECT m.*, u.username as senderName, u.avatar as senderAvatar
     FROM messages m
     JOIN users u ON m.sender_id = u.id
     WHERE m.chat_id = ?
     ORDER BY m.timestamp DESC
     LIMIT 1
-  `);
-  lastMsgStmt.bind([chatId]);
+  `).get(chatId);
   let lastMessage = null;
-  if (lastMsgStmt.step()) {
-    const msg = lastMsgStmt.getAsObject();
+  if (msg) {
     lastMessage = {
-      text: String(msg['text'] || (msg['file_data'] ? '📎 Файл' : '')),
-      timestamp: String(msg['timestamp'] || ''),
-      senderName: String(msg['senderName'] || ''),
-      senderAvatar: String(msg['senderAvatar'] || '')
+      text: String(msg.text || (msg.file_data ? '📎 Файл' : '')),
+      timestamp: String(msg.timestamp || ''),
+      senderName: String(msg.senderName || ''),
+      senderAvatar: String(msg.senderAvatar || '')
     };
   }
-  lastMsgStmt.free();
 
   return {
     id: String(chat.id || ''),
@@ -2987,7 +3380,7 @@ function getChatWithDetails(chatId, userId = null) {
 }
 
 function getUserChats(userId) {
-  const chatsStmt = db.prepare(`
+  const chats = db.prepare(`
     SELECT c.*,
            (SELECT COUNT(*) FROM unread_messages WHERE chat_id = c.id AND user_id = ?) as unreadCount,
            (SELECT MAX(timestamp) FROM messages WHERE chat_id = c.id) as last_msg_time
@@ -2995,42 +3388,28 @@ function getUserChats(userId) {
     JOIN chat_participants cp ON c.id = cp.chat_id
     WHERE cp.user_id = ?
     ORDER BY last_msg_time DESC, c.created_at DESC
-  `);
-  chatsStmt.bind([userId, userId]);
-  const chats = [];
-  while (chatsStmt.step()) {
-    chats.push(chatsStmt.getAsObject());
-  }
-  chatsStmt.free();
+  `).all(userId, userId);
   
   return chats.map(chat => {
     // Получаем участников с полными данными
-    const participantsStmt = db.prepare(`
+    const participants = db.prepare(`
       SELECT u.id, u.username, u.avatar, u.status, u.status_text, u.full_name, u.birth_date, u.position
       FROM users u
       JOIN chat_participants cp ON u.id = cp.user_id
       WHERE cp.chat_id = ?
-    `);
-    participantsStmt.bind([chat.id]);
-    const participants = [];
-    while (participantsStmt.step()) {
-      participants.push(participantsStmt.getAsObject());
-    }
-    participantsStmt.free();
+    `).all(chat.id);
 
     // Получаем последнее сообщение с аватаром отправителя
-    const lastMsgStmt = db.prepare(`
+    const msg = db.prepare(`
       SELECT m.*, u.username as senderName, u.avatar as senderAvatar
       FROM messages m
       JOIN users u ON m.sender_id = u.id
       WHERE m.chat_id = ?
       ORDER BY m.timestamp DESC
       LIMIT 1
-    `);
-    lastMsgStmt.bind([chat.id]);
+    `).get(chat.id);
     let lastMessage = null;
-    if (lastMsgStmt.step()) {
-      const msg = lastMsgStmt.getAsObject();
+    if (msg) {
       lastMessage = {
         text: decryptText(msg.text) || (msg.file_data ? '📎 Файл' : ''),
         timestamp: msg.timestamp,
@@ -3038,7 +3417,6 @@ function getUserChats(userId) {
         senderAvatar: msg.senderAvatar
       };
     }
-    lastMsgStmt.free();
 
     return {
       ...chat,
@@ -3052,20 +3430,14 @@ function getUserChats(userId) {
 function getChatMessages(chatId, limit = 100) {
   try {
     // Сначала получаем последние N сообщений в обратном порядке (новые первые)
-    const stmt = db.prepare(`
+    const messagesReversed = db.prepare(`
       SELECT m.*, u.username as senderName, u.avatar as senderAvatar
       FROM messages m
       JOIN users u ON m.sender_id = u.id
       WHERE m.chat_id = ?
       ORDER BY m.timestamp DESC
       LIMIT ?
-    `);
-    stmt.bind([chatId, limit]);
-    const messagesReversed = [];
-    while (stmt.step()) {
-      messagesReversed.push(stmt.getAsObject());
-    }
-    stmt.free();
+    `).all(chatId, limit);
 
     // Переворачиваем чтобы получить в правильном порядке (старые первые)
     const messages = [];
@@ -3093,16 +3465,14 @@ function getChatMessages(chatId, limit = 100) {
       }
 
       // Загружаем реакции для сообщения
-      const reactionsStmt = db.prepare(`
+      const reactionRows = db.prepare(`
         SELECT mr.emoji, mr.user_id, u.username, u.avatar
         FROM message_reactions mr
         JOIN users u ON mr.user_id = u.id
         WHERE mr.message_id = ?
-      `);
-      reactionsStmt.bind([row.id]);
+      `).all(row.id);
       const reactions = {};
-      while (reactionsStmt.step()) {
-        const reactionRow = reactionsStmt.getAsObject();
+      for (const reactionRow of reactionRows) {
         const emoji = reactionRow.emoji;
         if (!reactions[emoji]) {
           reactions[emoji] = [];
@@ -3113,7 +3483,6 @@ function getChatMessages(chatId, limit = 100) {
           avatar: reactionRow.avatar
         });
       }
-      reactionsStmt.free();
 
       messages.push({
         id: row.id,
@@ -3135,6 +3504,15 @@ function getChatMessages(chatId, limit = 100) {
         reactions: Object.keys(reactions).length > 0 ? reactions : undefined
       });
     }
+    const replyCounts = {};
+    for (const msg of messages) {
+      if (msg.reply_to && msg.reply_to.messageId) {
+        replyCounts[msg.reply_to.messageId] = (replyCounts[msg.reply_to.messageId] || 0) + 1;
+      }
+    }
+    for (const msg of messages) {
+      msg.replyCount = replyCounts[msg.id] || 0;
+    }
     return messages;
   } catch (e) {
     console.error('Ошибка получения сообщений чата:', e.message);
@@ -3143,13 +3521,7 @@ function getChatMessages(chatId, limit = 100) {
 }
 
 function getAllUsers() {
-  const stmt = db.prepare('SELECT id, username, avatar, status, full_name, birth_date, work_phone, mobile_phone, status_text, about FROM users');
-  const users = [];
-  while (stmt.step()) {
-    users.push(stmt.getAsObject());
-  }
-  stmt.free();
-  return users;
+  return db.prepare('SELECT id, username, avatar, status, full_name, birth_date, work_phone, mobile_phone, status_text, about FROM users').all();
 }
 
 // ============================================
@@ -3178,6 +3550,43 @@ function sendBotMessage(socket, chatId, text, buttons = []) {
   }
   bot.sendBotMessage(socket, chatId, text, buttons);
 }
+// Отправка push-уведомления пользователю
+function sendPushNotification(userId, title, body, icon, data) {
+  try {
+    const subs = db.prepare('SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = ?').all(userId);
+    for (const sub of subs) {
+      const pushSub = { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } };
+      webPush.sendNotification(pushSub, JSON.stringify({ title, body, icon, data, tag: 'chat-message' }))
+        .catch(err => {
+          if (err.statusCode === 410 || err.statusCode === 404) {
+            db.run('DELETE FROM push_subscriptions WHERE endpoint = ?', [sub.endpoint]);
+          }
+        });
+    }
+  } catch (err) {
+    console.error('Ошибка отправки push-уведомления:', err.message);
+  }
+}
+
+// WebSocket rate-limiter: не более N событий в секунду на сокет
+const WS_RATE_LIMIT = 30; // макс. событий в секунду
+const wsRateMap = new Map(); // socketId -> { count, resetAt }
+
+function checkWsRateLimit(socketId) {
+  const now = Date.now();
+  let entry = wsRateMap.get(socketId);
+  if (!entry || now > entry.resetAt) {
+    entry = { count: 1, resetAt: now + 1000 };
+    wsRateMap.set(socketId, entry);
+    return true;
+  }
+  entry.count++;
+  if (entry.count > WS_RATE_LIMIT) {
+    return false;
+  }
+  return true;
+}
+
 // Socket.IO подключение
 io.on('connection', (socket) => {
   const clientIp = socket.handshake?.address?.replace(/^::ffff:/, '') || 'unknown';
@@ -3197,11 +3606,137 @@ io.on('connection', (socket) => {
     });
   }
 
-  // Пользователь присоединяется
+  // Пользователь присоединяется (первичное подключение с данными из localStorage)
+  // Сервер ищет пользователя в БД по userId и добавляет в onlineUsers.
+  // socket.id используется как ключ в onlineUsers Map.
+  // Поддерживается несколько сокетов на одного пользователя (несколько вкладок).
+  socket.on('user_joined', (data) => {
+    const { userId, email, username } = data || {};
+
+    if (!userId && !email && !username) {
+      console.error('user_joined: нет userId/email/username');
+      return;
+    }
+
+    // Ищем пользователя в БД
+    try {
+      let user = null;
+
+      // Пытаемся найти пользователя по userId
+      if (userId) {
+        const row = db.prepare('SELECT id, username, avatar, email, status_text FROM users WHERE id = ?').get(userId);
+        if (row) {
+          user = { id: String(row.id), username: String(row.username), avatar: String(row.avatar || ''), email: String(row.email || ''), statusText: String(row.status_text || '') };
+        }
+      }
+
+      // Если не нашли по userId, ищем по email
+      if (!user && email) {
+        const row = db.prepare('SELECT id, username, avatar, email, status_text FROM users WHERE email = ?').get(email);
+        if (row) {
+          user = { id: String(row.id), username: String(row.username), avatar: String(row.avatar || ''), email: String(row.email || ''), statusText: String(row.status_text || '') };
+        }
+      }
+
+      // Если не нашли, ищем по username
+      if (!user && username) {
+        const row = db.prepare('SELECT id, username, avatar, email, status_text FROM users WHERE username = ?').get(username);
+        if (row) {
+          user = { id: String(row.id), username: String(row.username), avatar: String(row.avatar || ''), email: String(row.email || ''), statusText: String(row.status_text || '') };
+        }
+      }
+
+      if (!user) {
+        console.error('user_joined: пользователь не найден в БД', { userId, email, username });
+        return;
+      }
+
+      // Добавляем сокет в onlineUsers (не удаляем старые — поддерживаем несколько вкладок)
+      onlineUsers.set(socket.id, {
+        id: user.id,
+        username: user.username,
+        avatar: user.avatar,
+        socketId: socket.id,
+        status: 'online'
+      });
+
+      // Добавляем в userSocketMap
+      if (!userSocketMap.has(user.id)) {
+        userSocketMap.set(user.id, new Set());
+      }
+      userSocketMap.get(user.id).add(socket.id);
+
+      // Сохраняем сессию в БД
+      try {
+        const existingRow = db.prepare('SELECT socket_ids FROM user_sessions WHERE user_id = ?').get(user.id);
+        let sockets = [];
+        if (existingRow) {
+          try { sockets = JSON.parse(existingRow.socket_ids); } catch {}
+        }
+        if (!sockets.includes(socket.id)) sockets.push(socket.id);
+        db.run('INSERT OR REPLACE INTO user_sessions (user_id, socket_ids, last_seen) VALUES (?, ?, ?)',
+          [user.id, JSON.stringify(sockets), new Date().toISOString()]);
+      } catch (e) {
+        console.error('Ошибка сохранения сессии:', e.message);
+      }
+
+      // Обновляем статус в БД
+      db.run('UPDATE users SET status = ? WHERE id = ?', ['online', user.id]);
+      markDbActivity();
+
+      // Отправляем пользователю его чаты
+      let userChats = getUserChats(user.id);
+
+      // Создаём чат с помощником если не существует
+      const botRow = db.prepare("SELECT id FROM users WHERE username = 'Помощник'").get();
+      const botId = botRow ? botRow.id : null;
+      const botChatId = `bot-chat-${user.id}`;
+      const botChatCheck = db.prepare('SELECT * FROM chats WHERE id = ?').get(botChatId);
+      if (!botChatCheck) {
+        db.run(`INSERT INTO chats (id, type, name, created_by, created_at) VALUES (?, 'direct', 'Помощник', ?, CURRENT_TIMESTAMP)`, [botChatId, user.id]);
+        db.run(`INSERT OR IGNORE INTO chat_participants (chat_id, user_id) VALUES (?, ?)`, [botChatId, user.id]);
+        if (botId) {
+          db.run(`INSERT OR IGNORE INTO chat_participants (chat_id, user_id) VALUES (?, ?)`, [botChatId, botId]);
+        }
+        markDbActivity();
+        userChats = getUserChats(user.id);
+      }
+
+      socket.emit('user_joined_success', {
+        user: { id: user.id, username: user.username, avatar: user.avatar, userId: user.id },
+        chats: userChats
+      });
+
+      // Уведомляем остальных
+      socket.broadcast.emit('user_status_changed', {
+        userId: user.id,
+        username: user.username,
+        status: 'online'
+      });
+    } catch (err) {
+      console.error('user_joined error:', err);
+    }
+  });
+
+  // Пользователь присоединяется (альтернативный путь: через /api/login → join)
   socket.on('join', (data) => {
     const { username, userId: existingUserId } = data;
 
     let user = null;
+
+    // Проверяем, есть ли уже пользователь в onlineUsers (от user_joined) — если да, не перезаписываем
+    const existingEntry = onlineUsers.get(socket.id);
+    if (!existingEntry || existingEntry.id === 'pending' || !userActivity.has(existingEntry.id)) {
+      // Нет записи или временная — добавляем temp-запись ЧТОБЫ НЕ ПОТЕРЯТЬ пользователя при быстрых запросах
+      const tempAvatar = `https://ui-avatars.com/api/?name=${encodeURIComponent(username)}&background=random`;
+      onlineUsers.set(socket.id, {
+        id: existingUserId || 'pending',
+        username: username,
+        avatar: tempAvatar,
+        socketId: socket.id,
+        status: 'online'
+      });
+    }
 
     // Проверяем, есть ли существующий пользователь с таким ID
     if (existingUserId) {
@@ -3240,23 +3775,20 @@ io.on('connection', (socket) => {
       }
     }
 
-    // Добавляем пользователя в онлайн
-    onlineUsers.set(socket.id, {
-      id: user.id,
-      username: user.username,
-      avatar: user.avatar,
-      socketId: socket.id,
-      status: 'online'
-    });
-    userActivity.set(user.id, Date.now());
+    // Обновляем данные в onlineUsers (теперь с реальным ID из БД)
+    if (user) {
+      onlineUsers.set(socket.id, {
+        id: user.id,
+        username: user.username,
+        avatar: user.avatar,
+        socketId: socket.id,
+        status: 'online'
+      });
+      userActivity.set(user.id, Date.now());
+    }
 
     // Добавляем пользователя в общий чат если еще не там
-    const inGeneralChatStmt = db.prepare(`
-      SELECT * FROM chat_participants WHERE chat_id = 'general' AND user_id = ?
-    `);
-    inGeneralChatStmt.bind([user.id]);
-    const inGeneralChat = inGeneralChatStmt.step();
-    inGeneralChatStmt.free();
+    const inGeneralChat = db.prepare("SELECT * FROM chat_participants WHERE chat_id = 'general' AND user_id = ?").get(user.id);
 
     if (!inGeneralChat) {
       db.run('INSERT INTO chat_participants (chat_id, user_id) VALUES (?, ?)', ['general', user.id]);
@@ -3269,11 +3801,11 @@ io.on('connection', (socket) => {
     let userChats = getUserChats(user.id);
 
     // Создаём чат с помощником если не существует
-    const botResult = db.exec("SELECT id FROM users WHERE username = 'Помощник'");
-    const botId = botResult && botResult.length > 0 && botResult[0].values.length > 0 ? botResult[0].values[0][0] : null;
+    const botRow = db.prepare("SELECT id FROM users WHERE username = 'Помощник'").get();
+    const botId = botRow ? botRow.id : null;
     const botChatId = `bot-chat-${user.id}`;
-    const botChatCheck = db.exec(`SELECT * FROM chats WHERE id = '${botChatId}'`);
-    if (botChatCheck.length === 0 || botChatCheck[0].values.length === 0) {
+    const botChatCheck = db.prepare('SELECT * FROM chats WHERE id = ?').get(botChatId);
+    if (!botChatCheck) {
       db.run(`
         INSERT INTO chats (id, type, name, created_by, created_at)
         VALUES (?, 'direct', 'Помощник', ?, CURRENT_TIMESTAMP)
@@ -3298,8 +3830,8 @@ io.on('connection', (socket) => {
     });
 
     // Проверяем, первый ли это вход пользователя (по полю has_seen_welcome)
-    const userWelcomeCheck = db.exec(`SELECT has_seen_welcome FROM users WHERE id = '${user.id}'`);
-    const hasSeenWelcome = userWelcomeCheck && userWelcomeCheck.length > 0 && userWelcomeCheck[0].values.length > 0 && userWelcomeCheck[0].values[0][0] === 1;
+    const userWelcomeCheck = db.prepare('SELECT has_seen_welcome FROM users WHERE id = ?').get(user.id);
+    const hasSeenWelcome = userWelcomeCheck && userWelcomeCheck.has_seen_welcome === 1;
     const isFirstJoin = !hasSeenWelcome;
 
     // Отправляем приветственное сообщение от бота при первом входе
@@ -3337,9 +3869,9 @@ io.on('connection', (socket) => {
 Рады видеть вас в нашей команде! 🎉`;
 
         // Отправляем сообщение в общий чат от имени помощника
-        const botResult = db.exec("SELECT id FROM users WHERE username = 'Помощник'");
-        if (botResult && botResult.length > 0) {
-          const botId = botResult[0].values[0][0];
+        const botResult = db.prepare("SELECT id FROM users WHERE username = 'Помощник'").get();
+        if (botResult) {
+          const botId = botResult.id;
           const messageId = uuidv4();
           const encryptedText = encryptText(welcomeText || '');
 
@@ -3363,7 +3895,6 @@ io.on('connection', (socket) => {
             chat: { id: 'general' }
           });
 
-          console.log(`Помощник приветствовал ${user.username} в общем чате`);
         }
       }, 2000);
     }
@@ -3383,19 +3914,13 @@ io.on('connection', (socket) => {
       if (!targetUser) return;
 
       // Проверяем, существует ли уже чат
-      const existingStmt = db.prepare(`
+      chat = db.prepare(`
         SELECT c.* FROM chats c
         JOIN chat_participants cp1 ON c.id = cp1.chat_id
         JOIN chat_participants cp2 ON c.id = cp2.chat_id
         WHERE c.type = 'direct'
         AND cp1.user_id = ? AND cp2.user_id = ?
-      `);
-      existingStmt.bind([onlineUser.id, targetUser.id]);
-      if (existingStmt.step()) {
-        const row = existingStmt.getAsObject();
-        chat = row;
-      }
-      existingStmt.free();
+      `).get(onlineUser.id, targetUser.id);
 
       if (!chat) {
         const chatId = uuidv4();
@@ -3455,12 +3980,7 @@ io.on('connection', (socket) => {
     socket.join(chatId);
     
     // Проверяем, является ли пользователь участником
-    const isParticipantStmt = db.prepare(`
-      SELECT * FROM chat_participants WHERE chat_id = ? AND user_id = ?
-    `);
-    isParticipantStmt.bind([chatId, onlineUser.id]);
-    const isParticipant = isParticipantStmt.step();
-    isParticipantStmt.free();
+    const isParticipant = db.prepare('SELECT * FROM chat_participants WHERE chat_id = ? AND user_id = ?').get(chatId, onlineUser.id);
     
     if (!isParticipant) {
       db.run('INSERT INTO chat_participants (chat_id, user_id) VALUES (?, ?)', [chatId, onlineUser.id]);
@@ -3483,13 +4003,31 @@ io.on('connection', (socket) => {
     });
   });
 
+  // Возвращает отображаемое имя чата (для direct — имя собеседника)
+  function getChatDisplayName(chat) {
+    if (!chat) return 'Чат';
+    if (chat.type !== 'direct' && chat.name) return chat.name;
+    if (chat.participantsDetails && chat.participantsDetails.length > 0) {
+      return chat.participantsDetails[0].username || 'Чат';
+    }
+    if (chat.participants && chat.participants.length > 0) {
+      return chat.participants[0] || 'Чат';
+    }
+    return chat.name || 'Чат';
+  }
+
   // Отправка сообщения
   socket.on('send_message', (data) => {
+    if (!checkWsRateLimit(socket.id)) {
+      socket.emit('error', { message: 'Слишком много запросов. Подождите.' });
+      return;
+    }
     const { chatId, text, file, forwardedFrom, replyTo } = data;
-    const onlineUser = onlineUsers.get(socket.id);
+    let onlineUser = onlineUsers.get(socket.id);
 
     if (!onlineUser) {
       console.error('[send_message] нет пользователя (onlineUser не найден), socket:', socket.id);
+      // Пытаемся восстановить из localStorage данных сокета
       return;
     }
 
@@ -3502,6 +4040,17 @@ io.on('connection', (socket) => {
     if (!chat) {
       console.error('[send_message] чат не найден:', chatId, 'от', onlineUser.username);
       return;
+    }
+
+    // Проверка квоты загрузок
+    if (file && file.size) {
+      const currentTotal = userTotalUploadSize.get(onlineUser.id) || 0;
+      const quota = DEFAULT_UPLOAD_QUOTA;
+      if (currentTotal + Number(file.size) > quota) {
+        console.warn(`[send_message] Квота превышена для ${onlineUser.username}: ${currentTotal}/${quota}`);
+        socket.emit('upload_error', { error: 'Превышена квота загрузок (500MB)', code: 'QUOTA_EXCEEDED' });
+        return;
+      }
     }
 
     const messageId = uuidv4();
@@ -3524,31 +4073,28 @@ io.on('connection', (socket) => {
       markDbActivity();
 
       // Получаем информацию о сообщении
-      const msgStmt = db.prepare(`
+      const msgRow = db.prepare(`
         SELECT m.id, m.chat_id, m.sender_id, m.text, m.file_data, m.reply_to, m.timestamp, m.forwarded_from,
                u.username as senderName, u.avatar as senderAvatar
         FROM messages m
         JOIN users u ON m.sender_id = u.id
         WHERE m.id = ?
-      `);
-      msgStmt.bind([messageId]);
+      `).get(messageId);
       let messageRow = null;
-      if (msgStmt.step()) {
-        const row = msgStmt.getAsObject();
+      if (msgRow) {
         messageRow = {
-          id: String(row['id'] || ''),
-          chat_id: String(row['chat_id'] || ''),
-          sender_id: String(row['sender_id'] || ''),
-          text: decryptText(String(row['text'] || '')),
-          file_data: String(row['file_data'] || ''),
-          reply_to: row['reply_to'],
-          timestamp: String(row['timestamp'] || ''),
-          forwarded_from: row['forwarded_from'],
-          senderName: String(row['senderName'] || row['username'] || ''),
-          senderAvatar: String(row['senderAvatar'] || row['avatar'] || '')
+          id: String(msgRow.id || ''),
+          chat_id: String(msgRow.chat_id || ''),
+          sender_id: String(msgRow.sender_id || ''),
+          text: decryptText(String(msgRow.text || '')),
+          file_data: String(msgRow.file_data || ''),
+          reply_to: msgRow.reply_to,
+          timestamp: String(msgRow.timestamp || ''),
+          forwarded_from: msgRow.forwarded_from,
+          senderName: String(msgRow.senderName || msgRow.username || ''),
+          senderAvatar: String(msgRow.senderAvatar || msgRow.avatar || '')
         };
       }
-      msgStmt.free();
 
       if (!messageRow) {
         console.error('[send_message] не удалось получить сообщение после вставки, messageId:', messageId);
@@ -3556,14 +4102,8 @@ io.on('connection', (socket) => {
       }
 
       // Получаем участников чата
-      const partStmt = db.prepare(`SELECT user_id FROM chat_participants WHERE chat_id = ?`);
-      partStmt.bind([chatId]);
-      const participants = [];
-      while (partStmt.step()) {
-        const row = partStmt.getAsObject();
-        participants.push(String(row['user_id'] || ''));
-      }
-      partStmt.free();
+      const partRows = db.prepare('SELECT user_id FROM chat_participants WHERE chat_id = ?').all(chatId);
+      const participants = partRows.map(row => String(row.user_id || ''));
 
       // Автоматически присоединяем всех онлайн-участников к комнате чата
       participants.forEach((pUserId) => {
@@ -3579,9 +4119,7 @@ io.on('connection', (socket) => {
       // Добавляем непрочитанные для всех кроме отправителя
       participants.forEach((pUserId) => {
         if (pUserId !== onlineUser.id) {
-          const unreadStmt = db.prepare(`INSERT OR IGNORE INTO unread_messages (user_id, message_id, chat_id) VALUES (?, ?, ?)`);
-          unreadStmt.run(pUserId, messageId, chatId);
-          unreadStmt.free();
+          db.prepare('INSERT OR IGNORE INTO unread_messages (user_id, message_id, chat_id) VALUES (?, ?, ?)').run(pUserId, messageId, chatId);
         }
       });
       markDbActivity();
@@ -3596,11 +4134,18 @@ io.on('connection', (socket) => {
         text: messageRow.text || '',
         file: messageRow.file_data ? JSON.parse(messageRow.file_data) : null,
         reply_to: messageRow.reply_to ? JSON.parse(messageRow.reply_to) : null,
+        replyCount: 0,
         timestamp: messageRow.timestamp,
         read_at: messageRow.read_at,
         forwarded_from: messageRow.forwarded_from ? JSON.parse(messageRow.forwarded_from) : null,
         readBy: [onlineUser.username]
       };
+
+      // Обновляем квоту загрузок
+      if (file && file.size) {
+        const currentTotal = userTotalUploadSize.get(onlineUser.id) || 0;
+        userTotalUploadSize.set(onlineUser.id, currentTotal + Number(file.size));
+      }
 
       // Присоединяем отправителя к комнате чата если ещё не присоединён
       if (!socket.rooms.has(chatId)) {
@@ -3611,6 +4156,15 @@ io.on('connection', (socket) => {
       io.to(chatId).emit('new_message', {
         message: formattedMessage,
         chat: { ...chat, unreadCount: 0 }
+      });
+
+      // Push-уведомления для офлайн-участников
+      const onlineUserIds = new Set(Array.from(onlineUsers.values()).map(u => u.id));
+      const chatName = getChatDisplayName ? getChatDisplayName(chat) : (chat.name || 'Чат');
+      participants.forEach(pUserId => {
+        if (pUserId !== onlineUser.id && !onlineUserIds.has(pUserId)) {
+          sendPushNotification(pUserId, chatName, formattedMessage.text || '📎 Файл', formattedMessage.senderAvatar, { chatId, messageId });
+        }
       });
     
     // ============================================
@@ -3686,56 +4240,37 @@ io.on('connection', (socket) => {
     const { messageId, targetUserId } = data;
     const onlineUser = onlineUsers.get(socket.id);
 
-    console.log('=== ПЕРЕСЫЛКА СООБЩЕНИЯ ===', {
-      messageId,
-      targetUserId,
-      onlineUser: onlineUser ? onlineUser.username : null,
-      socketId: socket.id
-    });
-
     if (!onlineUser || !messageId || !targetUserId) {
-      console.log('Пересылка отменена: нет данных', { onlineUser: !!onlineUser, messageId, targetUserId });
       return;
     }
 
     // Получаем исходное сообщение
-    const msgStmt = db.prepare(`
+    const msgRow = db.prepare(`
       SELECT id, chat_id, sender_id,
              COALESCE(text, '') as text,
              COALESCE(file_data, '') as file_data,
              timestamp, forwarded_from
       FROM messages
       WHERE id = ?
-    `);
-    msgStmt.bind([messageId]);
+    `).get(messageId);
     let originalMessage = null;
-    if (msgStmt.step()) {
-      const row = msgStmt.getAsObject();
+    if (msgRow) {
       originalMessage = {
-        id: String(row['id'] || ''),
-        chat_id: String(row['chat_id'] || ''),
-        sender_id: String(row['sender_id'] || ''),
-        text: String(row['text'] || ''),
-        file_data: String(row['file_data'] || ''),
-        timestamp: String(row['timestamp'] || '')
+        id: String(msgRow.id || ''),
+        chat_id: String(msgRow.chat_id || ''),
+        sender_id: String(msgRow.sender_id || ''),
+        text: String(msgRow.text || ''),
+        file_data: String(msgRow.file_data || ''),
+        timestamp: String(msgRow.timestamp || '')
       };
-      console.log('row:', row);
-      console.log('originalMessage:', originalMessage);
     }
-    msgStmt.free();
-
-    console.log('Поиск сообщения по ID:', messageId);
-    console.log('Исходное сообщение:', originalMessage ? 'найдено' : 'не найдено');
 
     if (!originalMessage || !originalMessage.sender_id) {
-      console.error('Пересылка отменена: сообщение не найдено или sender_id пуст', messageId);
       return;
     }
 
     // Получаем или создаём чат между отправителем и получателем
     let chat = getDirectChatBetweenUsers(onlineUser.id, targetUserId);
-
-    console.log('Чат:', chat ? `найден ${chat.id}` : 'не найден, создаём новый');
 
     if (!chat) {
       // Создаём новый чат
@@ -3745,39 +4280,24 @@ io.on('connection', (socket) => {
       db.run(`INSERT INTO chat_participants (chat_id, user_id) VALUES (?, ?)`, [chatId, targetUserId]);
       markDbActivity();
       chat = { id: chatId, type: 'direct' };
-    } else {
-      // Чат найден — используем существующий
     }
 
-    // Проверяем что chat.id существует
     if (!chat || !chat.id) {
-      console.error('Ошибка: chat или chat.id не определён!', chat);
       return;
     }
 
-    // Проверяем originalMessage.sender_id
-    console.log('Проверка originalMessage:', {
-      id: originalMessage.id,
-      sender_id: originalMessage.sender_id,
-      text: originalMessage.text
-    });
-
     if (!originalMessage.sender_id) {
-      console.error('Ошибка: originalMessage.sender_id не определён!');
       return;
     }
 
     // Создаём пересланное сообщение
     const newMessageId = uuidv4();
     
-    console.log('newMessageId:', newMessageId);
-    
     // Получаем отправителя оригинального сообщения
     let senderUsername = 'Unknown';
     try {
       const sender = getUserById(originalMessage.sender_id);
       senderUsername = sender ? sender.username : 'Unknown';
-      console.log('Отправитель оригинала:', senderUsername);
     } catch (e) {
       console.error('Ошибка получения отправителя:', e.message);
     }
@@ -3788,15 +4308,9 @@ io.on('connection', (socket) => {
       sender_name: senderUsername
     };
 
-    console.log('forwardedFrom:', forwardedFrom);
-
-    // Проверяем что chat.id не пустой
     if (!chat.id) {
-      console.error('Ошибка: chat.id пустой!', chat);
       return;
     }
-
-    console.log('Вставка сообщения...');
 
     // Подготавливаем значения
     const encryptedText = encryptText(originalMessage.text || '');
@@ -3852,12 +4366,6 @@ io.on('connection', (socket) => {
 
         // Отправляем обновление чата получателю
         const chatWithUnread = getChatWithDetails(chat.id, targetUserId);
-        console.log('Отправляем chat_updated получателю:', {
-          chatId: chat.id,
-          chatName: chatWithUnread?.name,
-          participants: chatWithUnread?.participants,
-          lastMessage: chatWithUnread?.lastMessage
-        });
         if (chatWithUnread) {
           io.to(targetUser.socketId).emit('chat_updated', {
             chatId: chat.id,
@@ -3882,7 +4390,6 @@ io.on('connection', (socket) => {
         });
       }
 
-      console.log(`Сообщение переслано от ${onlineUser.username} пользователю ${targetUserId}`);
   });
 
   // Редактирование сообщения
@@ -3895,25 +4402,15 @@ io.on('connection', (socket) => {
     }
 
     // Проверяем, что сообщение принадлежит текущему пользователю
-    const msgStmt = db.prepare('SELECT sender_id, chat_id, text FROM messages WHERE id = ?');
-    msgStmt.bind([messageId]);
-    let message = null;
-    if (msgStmt.step()) {
-      message = msgStmt.getAsObject();
-    }
-    msgStmt.free();
+    const message = db.prepare('SELECT sender_id, chat_id, text FROM messages WHERE id = ?').get(messageId);
 
     if (!message || message.sender_id !== onlineUser.id) {
-      console.log(`Пользователь ${onlineUser.username} попытался редактировать чужое сообщение ${messageId}`);
       return;
     }
 
     // Обновляем текст сообщения
     const editedAt = new Date().toISOString();
     db.run('UPDATE messages SET text = ?, edited = 1, edited_at = ? WHERE id = ?', [newText, editedAt, messageId]);
-
-
-    console.log(`Сообщение ${messageId} отредактировано пользователем ${onlineUser.username}`);
 
     // Уведомляем всех участников чата об изменении сообщения
     const chatId = message.chat_id;
@@ -3931,42 +4428,21 @@ io.on('connection', (socket) => {
     const onlineUser = onlineUsers.get(socket.id);
 
     if (!onlineUser || !messageId || messageId === 'undefined' || messageId === 'null') {
-      console.log('Удаление сообщения отменено: нет данных');
       return;
     }
 
     try {
       // Проверяем, что сообщение принадлежит текущему пользователю или он администратор
-      const msgStmt = db.prepare('SELECT sender_id, chat_id FROM messages WHERE id = ?');
-      msgStmt.bind([messageId]);
-      let message = null;
-      if (msgStmt.step()) {
-        message = msgStmt.getAsObject();
-      }
-      msgStmt.free();
+      const message = db.prepare('SELECT sender_id, chat_id FROM messages WHERE id = ?').get(messageId);
 
       if (!message) {
-        console.log(`Сообщение ${messageId} не найдено для удаления`);
         return;
       }
 
       // Проверяем, что пользователь является автором сообщения или администратором
       const isAuthor = message.sender_id === onlineUser.id;
-      
-      // Дополнительная проверка - если пользователь администратор (в будущем можно расширить)
-      let isAdmin = false;
-      if (!isAuthor) {
-        // Здесь можно добавить проверку роли пользователя, например:
-        // const userStmt = db.prepare('SELECT role FROM users WHERE id = ?');
-        // userStmt.bind([onlineUser.id]);
-        // if (userStmt.step()) {
-        //   const userData = userStmt.getAsObject();
-        //   isAdmin = userData.role === 'admin';
-        // }
-      }
 
-      if (!isAuthor && !isAdmin) {
-        console.log(`Пользователь ${onlineUser.username} попытался удалить чужое сообщение ${messageId}`);
+      if (!isAuthor) {
         return;
       }
 
@@ -3974,11 +4450,9 @@ io.on('connection', (socket) => {
 
       // Удаляем само сообщение из базы данных
       db.run('DELETE FROM messages WHERE id = ?', [messageId]);
-      
+
       // Удаляем все реакции на это сообщение
       db.run('DELETE FROM message_reactions WHERE message_id = ?', [messageId]);
-      
-      console.log(`Сообщение ${messageId} удалено пользователем ${onlineUser.username}`);
 
       // Отправляем уведомление всем участникам чата о удалении сообщения
       io.to(chatId).emit('message_deleted', {
@@ -4026,9 +4500,11 @@ io.on('connection', (socket) => {
 
   // Статус пользователя (печатает...)
   socket.on('typing', (data) => {
-    const { chatId, isTyping } = data;
+    if (!checkWsRateLimit(socket.id)) return;
     const onlineUser = onlineUsers.get(socket.id);
     if (!onlineUser) return;
+    const { chatId, isTyping } = data;
+    if (!chatId) return;
 
     socket.to(chatId).emit('user_typing', {
       chatId,
@@ -4058,15 +4534,10 @@ io.on('connection', (socket) => {
 
 
     // Уведомляем отправителей о прочтении
-    const messagesStmt = db.prepare(`
+    const senderRows = db.prepare(`
       SELECT DISTINCT sender_id FROM messages WHERE chat_id = ? AND sender_id != ?
-    `);
-    messagesStmt.bind([chatId, onlineUser.id]);
-    const senderIds = [];
-    while (messagesStmt.step()) {
-      senderIds.push(messagesStmt.get()[0]);
-    }
-    messagesStmt.free();
+    `).all(chatId, onlineUser.id);
+    const senderIds = senderRows.map(row => row.sender_id);
 
     senderIds.forEach(senderId => {
       const senderSocket = Array.from(onlineUsers.values()).find(u => u.id === senderId);
@@ -4082,20 +4553,49 @@ io.on('connection', (socket) => {
 
   // Отключение
   socket.on('disconnect', () => {
+    wsRateMap.delete(socket.id);
     const onlineUser = onlineUsers.get(socket.id);
     if (onlineUser) {
-      db.run('UPDATE users SET status = ?, last_seen = CURRENT_TIMESTAMP WHERE id = ?', ['offline', onlineUser.id]);
-      io.emit('user_status_changed', {
-        userId: onlineUser.id,
-        username: onlineUser.username,
-        status: 'offline'
-      });
+      // Удаляем из userSocketMap
+      const userSockets = userSocketMap.get(onlineUser.id);
+      if (userSockets) {
+        userSockets.delete(socket.id);
+        if (userSockets.size === 0) userSocketMap.delete(onlineUser.id);
+      }
+
+      // Обновляем сессию в БД
+      try {
+        const existingRow = db.prepare('SELECT socket_ids FROM user_sessions WHERE user_id = ?').get(onlineUser.id);
+        if (existingRow) {
+          let sockets = [];
+          try { sockets = JSON.parse(existingRow.socket_ids); } catch {}
+          sockets = sockets.filter(sid => sid !== socket.id);
+          if (sockets.length > 0) {
+            db.run('INSERT OR REPLACE INTO user_sessions (user_id, socket_ids, last_seen) VALUES (?, ?, ?)',
+              [onlineUser.id, JSON.stringify(sockets), new Date().toISOString()]);
+          } else {
+            db.run('DELETE FROM user_sessions WHERE user_id = ?', [onlineUser.id]);
+          }
+        }
+      } catch (e) {
+        console.error('Ошибка обновления сессии при отключении:', e.message);
+      }
+
+      // Проверяем, есть ли у пользователя другие активные сокеты
+      const remainingSockets = userSocketMap.get(onlineUser.id);
+      if (!remainingSockets || remainingSockets.size === 0) {
+        db.run('UPDATE users SET status = ?, last_seen = CURRENT_TIMESTAMP WHERE id = ?', ['offline', onlineUser.id]);
+        io.emit('user_status_changed', {
+          userId: onlineUser.id,
+          username: onlineUser.username,
+          status: 'offline'
+        });
+        userActivity.delete(onlineUser.id);
+      }
 
       onlineUsers.delete(socket.id);
-      userActivity.delete(onlineUser.id);
       botRateLimit.delete(socket.id); // Очистка rate-limiting при отключении
       clearConversation(conversationStates, socket.id); // Очистка контекста разговора
-      console.log(`${onlineUser.username} отключился`);
     }
   });
 
@@ -4107,29 +4607,19 @@ io.on('connection', (socket) => {
     const onlineUser = onlineUsers.get(socket.id);
 
     if (!onlineUser || !messageId || !emoji) {
-      console.log('Реакция отменена: нет данных', { onlineUser: !!onlineUser, messageId, emoji });
       return;
     }
 
-    console.log('Добавление реакции:', { messageId, emoji, userId: onlineUser.id, username: onlineUser.username });
-
     try {
       // Проверяем, существует ли сообщение и получаем chat_id
-      const msgStmt = db.prepare(`SELECT id, chat_id FROM messages WHERE id = ?`);
-      msgStmt.bind([messageId]);
-      if (!msgStmt.step()) {
-        msgStmt.free();
-        console.log('Сообщение не найдено:', messageId);
+      const messageRow = db.prepare('SELECT id, chat_id FROM messages WHERE id = ?').get(messageId);
+      if (!messageRow) {
         return;
       }
-      const messageRow = msgStmt.getAsObject();
-      msgStmt.free();
 
       const chatId = messageRow.chat_id;
-      console.log('Найден chat_id для сообщения:', chatId);
 
       if (!chatId) {
-        console.log('chatId не найден для сообщения:', messageId);
         return;
       }
 
@@ -4145,8 +4635,6 @@ io.on('connection', (socket) => {
         VALUES (?, ?, ?, CURRENT_TIMESTAMP)
       `, [messageId, onlineUser.id, emoji]);
 
-      console.log('Отправка события reaction_added в чат:', chatId);
-
       // Уведомляем всех в чате о добавлении реакции с аватаркой
       io.to(chatId).emit('reaction_added', {
         messageId,
@@ -4156,7 +4644,6 @@ io.on('connection', (socket) => {
         avatar: onlineUser.avatar
       });
 
-      console.log(`Реакция ${emoji} добавлена пользователем ${onlineUser.username}`);
     } catch (err) {
       console.error('Ошибка при добавлении реакции:', err);
     }
@@ -4168,21 +4655,14 @@ io.on('connection', (socket) => {
     const onlineUser = onlineUsers.get(socket.id);
 
     if (!onlineUser || !messageId || !emoji) {
-      console.log('Удаление реакции отменено: нет данных', { onlineUser: !!onlineUser, messageId, emoji });
       return;
     }
 
-    console.log('Удаление реакции:', { messageId, emoji, userId: onlineUser.id });
-
     try {
       // Получаем chat_id сообщения
-      const msgStmt = db.prepare(`SELECT chat_id FROM messages WHERE id = ?`);
-      msgStmt.bind([messageId]);
-      const messageData = msgStmt.step() ? msgStmt.getAsObject() : null;
-      msgStmt.free();
+      const messageData = db.prepare('SELECT chat_id FROM messages WHERE id = ?').get(messageId);
 
       if (!messageData) {
-        console.log('Сообщение не найдено:', messageId);
         return;
       }
 
@@ -4201,7 +4681,6 @@ io.on('connection', (socket) => {
         userId: onlineUser.id
       });
 
-      console.log(`Реакция ${emoji} удалена пользователем ${onlineUser.username}`);
     } catch (err) {
       console.error('Ошибка при удалении реакции:', err);
     }
@@ -4220,16 +4699,11 @@ io.on('connection', (socket) => {
 
     try {
       // Проверяем, существует ли сообщение и получаем chat_id
-      const msgStmt = db.prepare(`SELECT id, chat_id, sender_id FROM messages WHERE id = ?`);
-      msgStmt.bind([messageId]);
-      if (!msgStmt.step()) {
-        msgStmt.free();
-        console.log('Сообщение не найдено для закрепления:', messageId);
+      const messageRow = db.prepare('SELECT id, chat_id, sender_id FROM messages WHERE id = ?').get(messageId);
+      if (!messageRow) {
         socket.emit('pin_error', { error: 'Сообщение не найдено' });
         return;
       }
-      const messageRow = msgStmt.getAsObject();
-      msgStmt.free();
 
       const chatId = messageRow.chat_id;
       const now = new Date().toISOString();
@@ -4238,28 +4712,25 @@ io.on('connection', (socket) => {
       db.run('UPDATE messages SET is_pinned = 1, pinned_by = ?, pinned_at = ? WHERE id = ?',
         [onlineUser.id, now, messageId]);
       // Получаем полные данные сообщения для рассылки (с camelCase ключами)
-      const fullMsgStmt = db.prepare(`
+      const row = db.prepare(`
         SELECT m.*, u.username as sender_name, u.avatar as sender_avatar
         FROM messages m
         JOIN users u ON m.sender_id = u.id
         WHERE m.id = ?
-      `);
-      fullMsgStmt.bind([messageId]);
+      `).get(messageId);
       let fullMessage = null;
-      if (fullMsgStmt.step()) {
-        const row = fullMsgStmt.getAsObject();
+      if (row) {
         fullMessage = {
-          id: String(row['id'] || ''),
-          chatId: String(row['chat_id'] || ''),
-          senderId: String(row['sender_id'] || ''),
-          text: decryptText(String(row['text'] || '')),
-          file_data: String(row['file_data'] || ''),
-          timestamp: String(row['timestamp'] || ''),
-          senderName: String(row['sender_name'] || row['username'] || ''),
-          senderAvatar: String(row['sender_avatar'] || row['avatar'] || '')
+          id: String(row.id || ''),
+          chatId: String(row.chat_id || ''),
+          senderId: String(row.sender_id || ''),
+          text: decryptText(String(row.text || '')),
+          file_data: String(row.file_data || ''),
+          timestamp: String(row.timestamp || ''),
+          senderName: String(row.sender_name || row.username || ''),
+          senderAvatar: String(row.sender_avatar || row.avatar || '')
         };
       }
-      fullMsgStmt.free();
 
       if (!fullMessage) {
         console.error('Не удалось получить данные сообщения для закрепления:', messageId);
@@ -4268,9 +4739,6 @@ io.on('connection', (socket) => {
       }
 
       // Уведомляем всех участников чата
-      console.log(`📌 Отправляем message_pinned в комнату ${chatId}:`, { chatId, messageId, fullMessageId: fullMessage.id });
-      const rooms = io.sockets.adapter.rooms;
-      console.log(`📌 Комнат в сокет-адаптере:`, Array.from(rooms.keys()));
       io.to(chatId).emit('message_pinned', {
         chatId,
         messageId,
@@ -4280,7 +4748,6 @@ io.on('connection', (socket) => {
         pinnedAt: now
       });
 
-      console.log(`✅ Сообщение ${messageId} закреплено пользователем ${onlineUser.username}`);
     } catch (err) {
       console.error('Ошибка при закреплении сообщения:', err);
       socket.emit('pin_error', { error: 'Ошибка при закреплении сообщения' });
@@ -4298,16 +4765,11 @@ io.on('connection', (socket) => {
 
     try {
       // Проверяем, существует ли сообщение
-      const msgStmt = db.prepare(`SELECT id, chat_id FROM messages WHERE id = ?`);
-      msgStmt.bind([messageId]);
-      if (!msgStmt.step()) {
-        msgStmt.free();
-        console.log('Сообщение не найдено для открепления:', messageId);
+      const messageRow = db.prepare('SELECT id, chat_id FROM messages WHERE id = ?').get(messageId);
+      if (!messageRow) {
         socket.emit('unpin_error', { error: 'Сообщение не найдено' });
         return;
       }
-      const messageRow = msgStmt.getAsObject();
-      msgStmt.free();
 
       const chatId = messageRow.chat_id;
 
@@ -4322,7 +4784,6 @@ io.on('connection', (socket) => {
         unpinnedByName: onlineUser.username
       });
 
-      console.log(`Сообщение ${messageId} откреплено пользователем ${onlineUser.username}`);
     } catch (err) {
       console.error('Ошибка при откреплении сообщения:', err);
       socket.emit('unpin_error', { error: 'Ошибка при откреплении сообщения' });
@@ -4339,31 +4800,25 @@ io.on('connection', (socket) => {
     }
 
     try {
-      const result = db.exec(`
+      const resultRows = db.prepare(`
         SELECT m.*, u.username as sender_name, u.avatar as sender_avatar
         FROM messages m
         JOIN users u ON m.sender_id = u.id
         WHERE m.chat_id = ? AND m.is_pinned = 1
         ORDER BY m.pinned_at DESC
         LIMIT 50
-      `, [chatId]);
+      `).all(chatId);
 
-      const pinnedMessages = result && result.length > 0 ? result[0].values.map(row => {
-        const cols = result[0].columns;
-        const obj = {};
-        cols.forEach((col, i) => obj[col] = row[i]);
-        // Преобразуем snake_case в camelCase для фронтенда
-        return {
-          id: String(obj['id'] || ''),
-          chatId: String(obj['chat_id'] || ''),
-          senderId: String(obj['sender_id'] || ''),
-          text: decryptText(String(obj['text'] || '')),
-          file_data: String(obj['file_data'] || ''),
-          timestamp: String(obj['timestamp'] || ''),
-          senderName: String(obj['sender_name'] || obj['username'] || ''),
-          senderAvatar: String(obj['sender_avatar'] || obj['avatar'] || '')
-        };
-      }) : [];
+      const pinnedMessages = resultRows.map(obj => ({
+        id: String(obj.id || ''),
+        chatId: String(obj.chat_id || ''),
+        senderId: String(obj.sender_id || ''),
+        text: decryptText(String(obj.text || '')),
+        file_data: String(obj.file_data || ''),
+        timestamp: String(obj.timestamp || ''),
+        senderName: String(obj.sender_name || obj.username || ''),
+        senderAvatar: String(obj.sender_avatar || obj.avatar || '')
+      }));
 
       socket.emit('pinned_messages_list', {
         chatId,
@@ -4376,107 +4831,126 @@ io.on('connection', (socket) => {
 });
 
 // ============================================
-// Напоминания о задачах (интервальная проверка)
+// Напоминания о задачах (по расписанию, при создании задачи)
 // ============================================
 
-// Проверка каждые 15 минут
-const REMINDER_INTERVAL = 15 * 60 * 1000;
+// Map: taskId -> timeoutId для отмены при удалении/редактировании
+const pendingReminders = new Map();
 
-function checkTaskReminders() {
+/**
+ * Отправить напоминание пользователю через бота «Помощник»
+ */
+function sendTaskReminder(userId, username, taskTitle, taskDate, taskTime) {
   try {
-    const now = new Date();
-    const today = now.toISOString().split('T')[0];
-    const tomorrow = new Date(now);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    const tomorrowStr = tomorrow.toISOString().split('T')[0];
+    const botChatId = `bot-chat-${userId}`;
+    const reminderText = `⏰ *Напоминание о задаче:*\n\n📅 **${taskTitle}**\n\nДата: ${new Date(taskDate).toLocaleDateString('ru-RU')}${taskTime ? `\nВремя: ${taskTime}` : ''}\n\n💡 *Совет:* Подготовьтесь заранее!`;
 
-    // Находим задачи на завтра
-    const tasksTomorrow = db.exec(`
-      SELECT ct.id, ct.title, ct.task_date, ct.task_time, ct.user_id, u.username
-      FROM calendar_tasks ct
-      JOIN users u ON ct.user_id = u.id
-      WHERE ct.task_date LIKE '${tomorrowStr}%'
-    `);
+    const botResult = db.prepare("SELECT id FROM users WHERE username = 'Помощник'").get();
+    if (!botResult) return;
 
-    if (!tasksTomorrow || tasksTomorrow.length === 0) return;
+    const botId = botResult.id;
+    const messageId = uuidv4();
+    const encryptedText = encryptText(reminderText || '');
 
-    // Отправляем напоминания
-    tasksTomorrow[0].values.forEach(row => {
-      const taskId = row[0];
-      const taskTitle = row[1];
-      const taskDate = row[2];
-      const taskTime = row[3];
-      const userId = row[4];
-      const username = row[5];
+    db.run(`
+      INSERT INTO messages (id, chat_id, sender_id, text, timestamp)
+      VALUES (?, ?, ?, ?, ?)
+    `, [messageId, botChatId, botId, encryptedText, new Date().toISOString()]);
 
-      // Проверяем, онлайн ли пользователь
-      let isOnline = false;
-      onlineUsers.forEach(user => {
-        if (user.id === userId) isOnline = true;
-      });
-
-      if (isOnline) {
-        // Находим чат с ботом
-        const botChatId = `bot-chat-${userId}`;
-        const reminderText = `⏰ *Напоминание о задаче:*\n\n📅 **${taskTitle}**\n\nДата: ${new Date(taskDate).toLocaleDateString('ru-RU')}${taskTime ? `\nВремя: ${taskTime}` : ''}\n\n💡 *Совет:* Подготовьтесь заранее!`;
-
-        // Отправляем сообщение
-        const botResult = db.exec("SELECT id FROM users WHERE username = 'Помощник'");
-        if (botResult && botResult.length > 0) {
-          const botId = botResult[0].values[0][0];
-          const messageId = uuidv4();
-          const encryptedText = encryptText(reminderText || '');
-
-          db.run(`
-            INSERT INTO messages (id, chat_id, sender_id, text, timestamp)
-            VALUES (?, ?, ?, ?, ?)
-          `, [messageId, botChatId, botId, encryptedText, new Date().toISOString()]);
-              // Находим сокет пользователя
-          let userSocket = null;
-          onlineUsers.forEach((user, socketId) => {
-            if (user.id === userId) userSocket = socketId;
-          });
-
-          const socketItem = Array.from(onlineUsers.entries()).find(([sid, u]) => u.id === userId);
-          if (socketItem) {
-            const userSocket = io.sockets.sockets.get(socketItem[0]);
-            if (userSocket) {
-              userSocket.emit('new_message', {
-                message: {
-                  id: messageId,
-                  chatId: botChatId,
-                  senderId: botId,
-                  senderName: 'Помощник',
-                  senderAvatar: 'https://ui-avatars.com/api/?name=🤖+Бот&background=667eea&color=fff',
-                  text: reminderText,
-                  timestamp: new Date().toISOString(),
-                  isBotMessage: true,
-                  buttons: [
-                    { label: '📅 Календарь', action: '/календарь' },
-                    { label: '✅ Отметить выполненной', action: '/задача' }
-                  ]
-                },
-                chat: { id: botChatId }
-              });
-            }
-          }
-
-          console.log(`Напоминание отправлено ${username} о задаче "${taskTitle}"`);
-        }
+    // Находим сокет пользователя и отправляем через WebSocket
+    const socketItem = Array.from(onlineUsers.entries()).find(([sid, u]) => u.id === userId);
+    if (socketItem) {
+      const userSocket = io.sockets.sockets.get(socketItem[0]);
+      if (userSocket) {
+        userSocket.emit('new_message', {
+          message: {
+            id: messageId,
+            chatId: botChatId,
+            senderId: botId,
+            senderName: 'Помощник',
+            senderAvatar: 'https://ui-avatars.com/api/?name=🤖+Бот&background=667eea&color=fff',
+            text: reminderText,
+            timestamp: new Date().toISOString(),
+            isBotMessage: true,
+            buttons: [
+              { label: '📅 Календарь', action: '/календарь' },
+              { label: '✅ Отметить выполненной', action: '/задача' }
+            ]
+          },
+          chat: { id: botChatId }
+        });
       }
-    });
+    }
+
   } catch (err) {
-    console.error('Ошибка проверки напоминаний:', err);
+    console.error('Ошибка отправки напоминания:', err);
   }
 }
 
-// Запускаем проверку после старта сервера
-setTimeout(() => {
-  checkTaskReminders();
-  // Затем проверяем каждые 15 минут
-  setInterval(checkTaskReminders, REMINDER_INTERVAL);
-  console.log('Напоминания о задачах активированы (проверка каждые 15 минут)');
-}, 5000);
+/**
+ * Запланировать напоминание для задачи.
+ * reminderTime — ISO timestamp, когда нужно отправить напоминание.
+ */
+function scheduleTaskReminder(taskId, userId, username, taskTitle, taskDate, taskTime, reminderTime) {
+  // Отменяем старый таймер если есть
+  const existing = pendingReminders.get(taskId);
+  if (existing) {
+    clearTimeout(existing);
+    pendingReminders.delete(taskId);
+  }
+
+  const now = Date.now();
+  const remindAt = new Date(reminderTime + '+00:00').getTime();
+
+  if (remindAt <= now) return;
+
+  const delay = remindAt - now;
+
+  pendingReminders.set(taskId, setTimeout(() => {
+    sendTaskReminder(userId, username, taskTitle, taskDate, taskTime);
+    pendingReminders.delete(taskId);
+  }, delay));
+
+}
+
+/**
+ * Восстановить все pending reminders из БД при старте сервера.
+ */
+function restorePendingReminders() {
+  try {
+    // SQLite datetime comparison: we store ISO like '2026-06-05T10:00:00'
+    // Replace 'T' with space for comparison, or use strftime for consistency
+    const tasksRows = db.prepare(`
+      SELECT ct.id, ct.title, ct.task_date, ct.task_time, ct.user_id, u.username, ct.reminder_time
+      FROM calendar_tasks ct
+      JOIN users u ON ct.user_id = u.id
+      WHERE ct.reminder_time IS NOT NULL AND REPLACE(ct.reminder_time, 'T', ' ') > datetime('now')
+    `).all();
+
+    if (!tasksRows || tasksRows.length === 0) return;
+
+    tasksRows.forEach(row => {
+      const taskId = row.id;
+      const taskTitle = row.title;
+      const taskDate = row.task_date;
+      const taskTime = row.task_time;
+      const userId = row.user_id;
+      const username = row.username;
+      const reminderTime = row.reminder_time; // ISO string from DB
+
+      scheduleTaskReminder(taskId, userId, username, taskTitle, taskDate, taskTime, reminderTime);
+    });
+
+  } catch (err) {
+    // При первом запуске колонка может ещё не существовать — игнорируем
+    if (!err.message.includes('no such column')) {
+      console.error('Ошибка восстановления напоминаний:', err);
+    }
+  }
+}
+
+// Запускаем восстановление напоминаний после старта сервера
+setTimeout(restorePendingReminders, 8000);
 
 // Закрытие и сохранение БД при завершении
 process.on('SIGINT', () => {
@@ -4490,6 +4964,7 @@ process.on('SIGINT', () => {
   // Небольшая задержка перед закрытием БД
   setTimeout(() => {
     stopAutoSave(); // Останавливаем автосохранение
+    flushLogsSync(); // Сбрасываем логи перед выходом
     if (db) {
       saveDatabaseSync(); // Финальное синхронное сохранение
       db.close();
@@ -4501,7 +4976,8 @@ process.on('SIGINT', () => {
 
 // Инициализация и запуск
 console.log('Начало инициализации БД...');
-initDatabase().then(() => {
+try {
+  initDatabase();
   console.log('initDatabase завершено успешно, запуск сервера...');
 
   // State machine + аналитика бота
@@ -4513,7 +4989,35 @@ initDatabase().then(() => {
   bot = initBotEngine({ db, io, uuidv4, encryptText });
   console.log('🤖 Бот-помощник инициализирован');
 
-  startAutoSave(); // Запускаем автосохранение каждые 30 секунд
+  // Загружаем квоты загрузок из БД
+  try {
+    const quotaRows = db.prepare(`
+      SELECT u.id, COALESCE(SUM(LENGTH(m.file_data)), 0) as total
+      FROM users u
+      LEFT JOIN messages m ON m.sender_id = u.id AND m.file_data IS NOT NULL
+      GROUP BY u.id
+    `).all();
+    for (const row of quotaRows) {
+      userTotalUploadSize.set(String(row.id), Number(row.total) || 0);
+    }
+  } catch (e) {
+    console.error('Ошибка загрузки квот:', e.message);
+  }
+
+  // Восстанавливаем сессии
+  try {
+    const sessions = db.prepare('SELECT user_id, last_seen FROM user_sessions').all();
+    const twoMinAgo = Date.now() - 120000;
+    for (const row of sessions) {
+      const lastSeen = new Date(row.last_seen).getTime();
+      if (lastSeen > twoMinAgo) {
+        console.log(`Сессия пользователя ${row.user_id} будет восстановлена при reconnect`);
+      }
+    }
+  } catch (e) {
+    console.error('Ошибка восстановления сессий:', e.message);
+  }
+
   server.listen(PORT, HOST, () => {
     const displayHost = HOST === '0.0.0.0' ? getLocalIP() : HOST;
     console.log(`Сервер запущен на http://${displayHost}:${PORT}`);
@@ -4521,8 +5025,8 @@ initDatabase().then(() => {
     console.log(`База данных: ${DB_PATH}`);
     console.log(`Путь загрузок: ${UPLOADS_PATH}`);
   });
-}).catch(err => {
+} catch (err) {
   console.error('Ошибка инициализации БД:', err);
   console.error('Stack:', err.stack);
   process.exit(1);
-});
+}

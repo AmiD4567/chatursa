@@ -119,15 +119,15 @@ function initBotEngine({ db, io, uuidv4, encryptText }) {
    */
   function sendBotMessage(socket, chatId, text, buttons = []) {
     try {
-      const botResult = db.exec("SELECT id, username, avatar FROM users WHERE username = 'Помощник'");
-      if (!botResult || botResult.length === 0 || botResult[0].values.length === 0) {
+      const botResult = db.prepare("SELECT id, username, avatar FROM users WHERE username = ?").get('Помощник');
+      if (!botResult) {
         console.error('Помощник не найден в базе');
         return;
       }
 
-      const botId = botResult[0].values[0][0];
-      const botUsername = botResult[0].values[0][1];
-      const botAvatar = botResult[0].values[0][2];
+      const botId = botResult.id;
+      const botUsername = botResult.username;
+      const botAvatar = botResult.avatar;
 
       if (!chatId || typeof chatId !== 'string') {
         console.error('Некорректный ID чата:', chatId);

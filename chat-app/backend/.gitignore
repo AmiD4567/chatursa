@@ -1,0 +1,13 @@
+# Build artifacts (frontend build output)
+public/static/
+public/asset-manifest.json
+
+# Logs
+*.log
+
+# Database
+chat.db
+
+# Uploads
+uploads/
+stickers/

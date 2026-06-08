@@ -104,6 +104,7 @@ function addEmojiToHistory(emoji) {
 const BASE_CATEGORIES = Object.entries(emojiData).map(([name, data]) => ({
   id: name.toLowerCase().replace(/\s+/g, '_'),
   label: name,
+  icon: data.icon,
   iconUnified: getUnified(data.icon),
   emojis: data.emojis.map(e => ({ emoji: e.emoji, unified: getUnified(e.emoji) })),
 }));
@@ -113,6 +114,7 @@ const EMOJI_CATEGORIES = [
   {
     id: 'recent',
     label: 'Последние',
+    icon: '🕐',
     iconUnified: getUnified('🕐'), // Часы как иконка для "последних"
     isRecent: true,
     emojis: [], // Заполняется динамически
@@ -120,12 +122,14 @@ const EMOJI_CATEGORIES = [
   ...BASE_CATEGORIES,
 ];
 
-/** Компонент для рендеринга одного эмодзи как <img> из Apple CDN */
-function EmojiImage({ unified, size = '22px', className = '' }) {
-  const src = `${APPLE_EMOJI_CDN}/${unified}.png`;
+/** Компонент для рендеринга эмодзи как <img> из Apple CDN */
+function EmojiImage({ unified, size = '22px', className = '', emoji = '' }) {
+  if (!unified) {
+    return <span className={className} style={{ fontSize: size, lineHeight: 1, display: 'inline-block', verticalAlign: 'middle' }}>{emoji}</span>;
+  }
   return (
     <img
-      src={src}
+      src={`${APPLE_EMOJI_CDN}/${unified}.png`}
       alt=""
       draggable={false}
       className={className}
@@ -277,7 +281,7 @@ export default function EmojiInlinePicker({ show, onEmojiClick, onClose, theme, 
               {cat.isRecent ? (
                 <span style={{ fontSize: '16px' }}>🕐</span>
               ) : (
-                <EmojiImage unified={cat.iconUnified} size="18px" />
+                <EmojiImage unified={cat.iconUnified} size="18px" emoji={cat.icon} />
               )}
             </button>
           ))}
@@ -295,7 +299,7 @@ export default function EmojiInlinePicker({ show, onEmojiClick, onClose, theme, 
               onClick={() => handleEmojiClick(item.emoji)}
               title={item.emoji}
             >
-              <EmojiImage unified={item.unified} size="22px" />
+              <EmojiImage unified={item.unified} size="22px" emoji={item.emoji} />
             </button>
           ))}
         </div>
