@@ -1878,7 +1878,7 @@ app.post('/api/upload-general-chat-avatar', upload.single('avatar'), (req, res) 
 const ALLOWED_MIME_TYPES = [
   'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/avif', 'image/svg+xml',
   'video/mp4', 'video/webm',
-  'audio/mpeg', 'audio/ogg', 'audio/wav',
+  'audio/mpeg', 'audio/ogg', 'audio/wav', 'audio/mp4', 'audio/x-m4a',
   'application/pdf', 'application/zip', 'application/x-rar-compressed',
   'text/plain', 'text/csv',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // .xlsx

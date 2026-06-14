@@ -329,6 +329,8 @@ function ChatWindow({
                               onClick={() => onImageClick(message.file.url, message.file.filename)}
                               className="message-image-clickable"
                             />
+                          ) : message.file.mimetype?.startsWith('audio/') ? (
+                            <VoiceMessagePlayer src={message.file.url} />
                           ) : (
                             <a href={`${serverUrl}/api/download/${extractFileUuidFromUrl(message.file.url)}`} className="file-link-main" title={message.file.filename} download>
                               <span className="file-icon-main">{getFileIcon(message.file.mimetype)}</span>
@@ -357,6 +359,61 @@ function ChatWindow({
       )}
       {activeChat && children}
     </main>
+  );
+}
+
+function VoiceMessagePlayer({ src }) {
+  const audioRef = React.useRef(null);
+  const [playing, setPlaying] = React.useState(false);
+  const [currentTime, setCurrentTime] = React.useState(0);
+  const [duration, setDuration] = React.useState(0);
+
+  React.useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    const onMeta = () => setDuration(audio.duration || 0);
+    const onTime = () => setCurrentTime(audio.currentTime);
+    const onEnd = () => { setPlaying(false); setCurrentTime(0); };
+    audio.addEventListener('loadedmetadata', onMeta);
+    audio.addEventListener('timeupdate', onTime);
+    audio.addEventListener('ended', onEnd);
+    audio.addEventListener('canplaythrough', onMeta);
+    return () => {
+      audio.removeEventListener('loadedmetadata', onMeta);
+      audio.removeEventListener('timeupdate', onTime);
+      audio.removeEventListener('ended', onEnd);
+      audio.removeEventListener('canplaythrough', onMeta);
+    };
+  }, []);
+
+  const toggle = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (playing) { audio.pause(); setPlaying(false); }
+    else { audio.play().then(() => setPlaying(true)).catch(() => {}); }
+  };
+
+  const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
+
+  const fmt = (s) => {
+    const m = Math.floor(s / 60);
+    const sec = Math.floor(s % 60);
+    return `${m}:${sec.toString().padStart(2, '0')}`;
+  };
+
+  return (
+    <div className="voice-message-player" onClick={e => e.stopPropagation()}>
+      <audio ref={audioRef} src={src} preload="metadata" />
+      <button className={`voice-play-btn ${playing ? 'is-playing' : ''}`} onClick={toggle}>
+        {playing ? '⏸' : '▶'}
+      </button>
+      <div className="voice-progress-wrap">
+        <div className="voice-progress-track">
+          <div className="voice-progress-fill" style={{ width: `${progress}%` }} />
+        </div>
+      </div>
+      <span className="voice-duration">{playing || currentTime > 0 ? fmt(currentTime) : fmt(duration)}</span>
+    </div>
   );
 }
 

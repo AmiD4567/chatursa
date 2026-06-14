@@ -246,6 +246,7 @@ function App() {
   const [browserNotificationPermission, setBrowserNotificationPermission] = useState('default');
   const [showNotificationBanner, setShowNotificationBanner] = useState(false);
   const [activeView, setActiveView] = useState('chats'); // 'chats', 'phonebook', 'calendar', 'admin', 'settings'
+  const [showChatList, setShowChatList] = useState(true); // На мобильных: true = список чатов, false = активный чат
   const [activeSettingsTab, setActiveSettingsTab] = useState('appearance'); // 'appearance', 'notifications', 'about'
   const [userUiSettings, setUserUiSettings] = useState({
     themeColor: '#667eea',
@@ -694,6 +695,11 @@ function App() {
     const handleResize = () => {
       setWindowWidth(window.innerWidth);
       document.documentElement.style.setProperty('--app-height', `${window.innerHeight}px`);
+
+      // Сбрасываем мобильный вид при переходе через breakpoint 768px
+      if (window.innerWidth > 768) {
+        setShowChatList(true);
+      }
     };
 
     window.addEventListener('resize', handleResize);
@@ -2441,6 +2447,7 @@ function App() {
 
   const handleOpenChats = () => {
     setActiveView('chats');
+    setShowChatList(true); // На мобильных — показываем список чатов
   };
 
   const handleOpenSettings = () => {
@@ -2578,6 +2585,9 @@ function App() {
   const handleSelectChat = async (chat) => {
     setActiveChatId(chat.id);
     activeChatIdRef.current = chat.id;
+
+    // На мобильных — переключаемся на вид чата
+    setShowChatList(false);
 
     // Очищаем индикаторы печати при смене чата
     setTypingUsers({});
@@ -6294,7 +6304,7 @@ function App() {
 
       {/* Боковая панель со списком чатов */}
       {activeView === 'chats' && (
-      <aside className="sidebar">
+      <aside className={`sidebar ${!showChatList ? 'hidden-mobile' : ''}`}>
         {searchResults.length > 0 && (
           <div className="chats-search-results-header">
             <span className="chats-search-results-count">Найдено: {searchResults.length}</span>
@@ -6512,10 +6522,21 @@ function App() {
 
       {/* Основная область чата */}
       {activeView === 'chats' && (
-      <main className="chat-main">
+      <main className={`chat-main ${showChatList ? '' : 'visible-mobile'}`}>
         {activeChat ? (
           <div className="chat-view-container">
             <header className="chat-header-main">
+              {/* Кнопка «назад к списку чатов» — только на мобильных */}
+              {windowWidth <= 768 && showChatList === false && (
+                <button
+                  className="back-to-chats-list"
+                  onClick={() => setShowChatList(true)}
+                  title="Список чатов"
+                  aria-label="Назад к списку чатов"
+                >
+                  ←
+                </button>
+              )}
               <div className="chat-title">
                 {activeChat.type === 'direct' && activeChat.participantsDetails ? (
                   (() => {
@@ -6809,6 +6830,8 @@ function App() {
                             onClick={() => handleImageClick(message.file.url, message.file.filename)}
                             className="message-image-clickable"
                           />
+                        ) : message.file.mimetype?.startsWith('audio/') ? (
+                          <VoiceMessagePlayer src={message.file.url} />
                         ) : (
                           <a href={`${SOCKET_URL}/api/download/${extractFileUuidFromUrl(message.file.url)}`} className="file-link-main" title={message.file.filename} download>
                             <span className="file-icon-main">{getFileIcon(message.file.mimetype)}</span>
@@ -9430,6 +9453,61 @@ function App() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function VoiceMessagePlayer({ src }) {
+  const audioRef = React.useRef(null);
+  const [playing, setPlaying] = React.useState(false);
+  const [currentTime, setCurrentTime] = React.useState(0);
+  const [duration, setDuration] = React.useState(0);
+
+  React.useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    const onMeta = () => setDuration(audio.duration || 0);
+    const onTime = () => setCurrentTime(audio.currentTime);
+    const onEnd = () => { setPlaying(false); setCurrentTime(0); };
+    audio.addEventListener('loadedmetadata', onMeta);
+    audio.addEventListener('timeupdate', onTime);
+    audio.addEventListener('ended', onEnd);
+    audio.addEventListener('canplaythrough', onMeta);
+    return () => {
+      audio.removeEventListener('loadedmetadata', onMeta);
+      audio.removeEventListener('timeupdate', onTime);
+      audio.removeEventListener('ended', onEnd);
+      audio.removeEventListener('canplaythrough', onMeta);
+    };
+  }, []);
+
+  const toggle = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (playing) { audio.pause(); setPlaying(false); }
+    else { audio.play().then(() => setPlaying(true)).catch(() => {}); }
+  };
+
+  const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
+
+  const fmt = (s) => {
+    const m = Math.floor(s / 60);
+    const sec = Math.floor(s % 60);
+    return `${m}:${sec.toString().padStart(2, '0')}`;
+  };
+
+  return (
+    <div className="voice-message-player" onClick={e => e.stopPropagation()}>
+      <audio ref={audioRef} src={src} preload="metadata" />
+      <button className={`voice-play-btn ${playing ? 'is-playing' : ''}`} onClick={toggle}>
+        {playing ? '⏸' : '▶'}
+      </button>
+      <div className="voice-progress-wrap">
+        <div className="voice-progress-track">
+          <div className="voice-progress-fill" style={{ width: `${progress}%` }} />
+        </div>
+      </div>
+      <span className="voice-duration">{playing || currentTime > 0 ? fmt(currentTime) : fmt(duration)}</span>
     </div>
   );
 }

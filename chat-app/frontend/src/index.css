@@ -1003,7 +1003,7 @@ body::before {
 
 .app-container {
   display: flex;
-  height: 100vh;
+  height: 100dvh;
   width: 100%;
   background: var(--page-bg);
   overflow: hidden;
@@ -1027,7 +1027,7 @@ body::before {
   align-items: center;
   padding: 8px 0;
   flex-shrink: 0;
-  height: 100vh;
+  height: 100dvh;
   border-right: 1px solid var(--border-color);
   box-shadow: 4px 0 24px rgba(0, 0, 0, 0.2);
   position: relative;
@@ -1904,6 +1904,33 @@ body::before {
   }
 }
 
+/* На мобильных — emoji panel как overlay поверх чата, без сдвига контента */
+@media (max-width: 768px) {
+  .chat-main.emoji-panel-open {
+    margin-right: 0 !important;
+  }
+
+  .message-form-main.emoji-panel-open {
+    padding-right: 0 !important;
+  }
+
+  /* Emoji panel поверх контента */
+  .emoji-picker-container,
+  .emoji-inline-picker-wrapper {
+    position: absolute !important;
+    bottom: 60px !important;
+    left: 8px !important;
+    right: 8px !important;
+    max-width: calc(100vw - 16px) !important;
+    z-index: 9999 !important;
+    background: var(--bg-secondary) !important;
+    border-radius: var(--radius-lg) !important;
+    box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.3) !important;
+    max-height: 60vh !important;
+    overflow-y: auto !important;
+  }
+}
+
 /* Chat background pattern */
 .chat-main::before {
   content: '';
@@ -1981,6 +2008,24 @@ body::before {
   align-items: center;
   gap: 6px;
   font-weight: 500;
+}
+
+/* Кнопка «назад к списку чатов» — видна только на мобильных */
+.chat-header-main .back-to-chats-list {
+  display: none !important;
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  font-size: 24px;
+  cursor: pointer;
+  padding: 8px 12px;
+  margin-right: -8px;
+  border-radius: var(--radius-md);
+  transition: all var(--transition-fast);
+}
+
+.chat-header-main .back-to-chats-list:hover {
+  background: var(--bg-glass-hover);
 }
 
 .user-status-text {
@@ -7966,6 +8011,7 @@ body::before {
     order: 1;
     width: 100%;
     height: auto;
+    max-height: 56px;
     flex-direction: row;
     padding: 4px 8px;
     gap: 2px;
@@ -8002,6 +8048,7 @@ body::before {
     display: none;
   }
 
+  /* На мобильных sidebar и чат — взаимно исключающие виды */
   .sidebar {
     order: 0;
     width: 100%;
@@ -8010,6 +8057,12 @@ body::before {
     min-height: 0;
     border-right: none;
     border-bottom: 1px solid var(--border-color);
+    /* По умолчанию показываем sidebar */
+    display: flex;
+  }
+
+  .sidebar.hidden-mobile {
+    display: none !important;
   }
 
   .chat-main {
@@ -8019,6 +8072,12 @@ body::before {
     margin: 0;
     border-radius: 0;
     max-height: none;
+    /* По умолчанию скрыт, если sidebar виден */
+    display: none;
+  }
+
+  .chat-main.visible-mobile {
+    display: flex !important;
   }
 
   .chat-view-container {
@@ -8027,8 +8086,20 @@ body::before {
     overflow: hidden;
   }
 
+  /* Скролл сообщений на мобильных */
+  .messages-container-main {
+    overflow-y: auto !important;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
   .message-content {
     max-width: 85%;
+  }
+
+  /* Кнопка «назад» в header чата */
+  .chat-header-main .back-to-chats-list {
+    display: inline-flex !important;
   }
 
   .full-page-view {
