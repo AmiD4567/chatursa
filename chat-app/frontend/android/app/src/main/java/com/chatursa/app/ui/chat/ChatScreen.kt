@@ -102,11 +102,18 @@ fun ChatScreen(
         }
     }
 
+    val firstMessageLoad = remember { mutableStateOf(true) }
+
     LaunchedEffect(uiState.messages.size) {
         if (uiState.messages.isNotEmpty() && !uiState.isSearching) {
-            val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: return@LaunchedEffect
-            if (lastVisible >= listState.layoutInfo.totalItemsCount - 3) {
-                listState.animateScrollToItem(uiState.messages.size - 1)
+            if (firstMessageLoad.value) {
+                firstMessageLoad.value = false
+                listState.scrollToItem(uiState.messages.size - 1)
+            } else {
+                val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: return@LaunchedEffect
+                if (lastVisible >= listState.layoutInfo.totalItemsCount - 3) {
+                    listState.animateScrollToItem(uiState.messages.size - 1)
+                }
             }
         }
     }
@@ -857,7 +864,8 @@ fun MessageBubble(
                 // Message text (supports stickers)
                 StickerAwareText(
                     text = message.text,
-                    isOwn = isOwn
+                    isOwn = isOwn,
+                    isDarkMode = com.chatursa.app.ui.theme.LocalIsDarkMode.current
                 )
 
                 // File attachment
@@ -888,17 +896,19 @@ fun MessageBubble(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     if (message.edited) {
+                        val editColor = if (isOwn || com.chatursa.app.ui.theme.LocalIsDarkMode.current) Color.White.copy(alpha = 0.5f) else Color.Black.copy(alpha = 0.4f)
                         Text(
                             text = "ред.",
                             style = MaterialTheme.typography.labelSmall,
-                            color = Color.White.copy(alpha = 0.5f),
+                            color = editColor,
                             modifier = Modifier.padding(end = 4.dp)
                         )
                     }
+                    val timeColor = if (isOwn || com.chatursa.app.ui.theme.LocalIsDarkMode.current) Color.White.copy(alpha = 0.5f) else Color.Black.copy(alpha = 0.4f)
                     Text(
                         text = formatTime(message.timestamp),
                         style = MaterialTheme.typography.labelSmall,
-                        color = Color.White.copy(alpha = 0.5f)
+                        color = timeColor
                     )
                     if (isOwn) {
                         Spacer(modifier = Modifier.width(4.dp))
@@ -1021,12 +1031,13 @@ fun FileAttachment(fileData: FileData, isOwn: Boolean, onImageClick: (String) ->
 }
 
 @Composable
-fun StickerAwareText(text: String, isOwn: Boolean) {
+fun StickerAwareText(text: String, isOwn: Boolean, isDarkMode: Boolean) {
+    val textColor = if (isOwn || isDarkMode) Color.White else Color.Black
     if (!text.contains("\u0000STICKER\u0000")) {
         Text(
             text = text,
             style = MaterialTheme.typography.bodyLarge,
-            color = Color.White
+            color = textColor
         )
         return
     }
@@ -1070,7 +1081,7 @@ fun StickerAwareText(text: String, isOwn: Boolean) {
                     Text(
                         text = parts[i],
                         style = MaterialTheme.typography.bodyLarge,
-                        color = Color.White
+                        color = textColor
                     )
                 } else if (i % 2 == 1 && parts[i].isNotBlank()) {
                     AsyncImage(
