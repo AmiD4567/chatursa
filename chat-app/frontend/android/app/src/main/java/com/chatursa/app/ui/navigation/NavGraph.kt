@@ -137,6 +137,15 @@ fun AppNavGraph(
                 }
             }
 
+            LaunchedEffect(chatListState.createdChatId) {
+                val chatId = chatListState.createdChatId ?: return@LaunchedEffect
+                val chat = chatListState.chats.find { it.id == chatId } ?: return@LaunchedEffect
+                val json = Gson().toJson(chat)
+                val encoded = java.net.URLEncoder.encode(json, "UTF-8")
+                rootNavController.navigate("chat/$encoded")
+                chatListViewModel.resetCreatedChatId()
+            }
+
             MainScreen(
                 authViewModel = authViewModel,
                 chatListViewModel = chatListViewModel,

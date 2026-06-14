@@ -24,7 +24,8 @@ data class ChatListUiState(
     val isConnecting: Boolean = false,
     val error: String? = null,
     val searchQuery: String = "",
-    val typingUsers: Map<String, List<String>> = emptyMap()
+    val typingUsers: Map<String, List<String>> = emptyMap(),
+    val createdChatId: String? = null
 )
 
 class ChatListViewModel(application: Application) : AndroidViewModel(application) {
@@ -100,7 +101,7 @@ class ChatListViewModel(application: Application) : AndroidViewModel(application
                     }
                     is SocketEvent.ChatCreated -> {
                         val chats = listOf(event.chat) + _uiState.value.chats
-                        _uiState.value = _uiState.value.copy(chats = chats)
+                        _uiState.value = _uiState.value.copy(chats = chats, createdChatId = event.chat.id)
                     }
                     is SocketEvent.UserStatusChanged -> {
                         val updatedChats = _uiState.value.chats.map { chat ->
@@ -207,8 +208,15 @@ class ChatListViewModel(application: Application) : AndroidViewModel(application
             chat.participants.contains(userId) &&
             chat.participants.contains(currentUser.id)
         }
-        if (existing != null) return
+        if (existing != null) {
+            _uiState.value = _uiState.value.copy(createdChatId = existing.id)
+            return
+        }
         socketManager.createChat(listOf(userId, currentUser.id), type)
+    }
+
+    fun resetCreatedChatId() {
+        _uiState.value = _uiState.value.copy(createdChatId = null)
     }
 
     override fun onCleared() {
