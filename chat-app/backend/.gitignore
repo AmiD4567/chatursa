@@ -11,3 +11,6 @@ chat.db
 # Uploads
 uploads/
 stickers/
+
+# Backups
+backups/

@@ -4396,6 +4396,28 @@ body::before {
   color: var(--page-text-primary);
 }
 
+/* E2EE Toggle Button */
+.e2ee-toggle-btn {
+  background: transparent;
+  border: none;
+  font-size: 18px;
+  cursor: pointer;
+  padding: 8px 6px;
+  border-radius: 8px;
+  transition: background 0.2s, opacity 0.2s;
+  opacity: 0.5;
+  line-height: 1;
+}
+
+.e2ee-toggle-btn:hover {
+  background: #f0f0f0;
+  opacity: 1;
+}
+
+.e2ee-toggle-btn.active {
+  opacity: 1;
+}
+
 /* Chat Menu Dropdown */
 .chat-menu-dropdown {
   position: absolute;

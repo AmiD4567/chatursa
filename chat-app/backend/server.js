@@ -1,5 +1,6 @@
 const express = require('express');
 const http = require('http');
+const https = require('https');
 const { Server } = require('socket.io');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -330,7 +331,37 @@ if (!SERVER_URL) {
 
 
 const app = express();
-const server = http.createServer(app);
+
+// SSL опции — по умолчанию HTTPS выключен.
+// Для включения установите HTTPS_ENABLED=true в .env
+// и разместите сертификаты в ssl/server.key и ssl/server.crt (или укажите свои пути)
+const HTTPS_ENABLED = process.env.HTTPS_ENABLED === 'true';
+const SSL_KEY_PATH = process.env.SSL_KEY_PATH || path.join(__dirname, '../../ssl/server.key');
+const SSL_CERT_PATH = process.env.SSL_CERT_PATH || path.join(__dirname, '../../ssl/server.crt');
+let httpsOptions = null;
+let useHttps = false;
+if (HTTPS_ENABLED) {
+  if (fs.existsSync(SSL_KEY_PATH) && fs.existsSync(SSL_CERT_PATH)) {
+    try {
+      httpsOptions = {
+        key: fs.readFileSync(SSL_KEY_PATH, 'utf8'),
+        cert: fs.readFileSync(SSL_CERT_PATH, 'utf8')
+      };
+      useHttps = true;
+      console.log('SSL сертификаты загружены, включён HTTPS');
+    } catch (err) {
+      console.error('Ошибка загрузки SSL сертификатов:', err.message);
+      console.log('Сервер работает по HTTP');
+    }
+  } else {
+    console.log(`HTTPS_ENABLED=true, но сертификаты не найдены: ${SSL_KEY_PATH}, ${SSL_CERT_PATH}`);
+    console.log('Сервер работает по HTTP');
+  }
+} else {
+  console.log('Сервер работает по HTTP (для включения HTTPS установите HTTPS_ENABLED=true)');
+}
+
+const server = useHttps ? https.createServer(httpsOptions, app) : http.createServer(app);
 const io = new Server(server, {
   cors: {
     origin: "*",
@@ -412,11 +443,22 @@ function initDatabase() {
     { table: 'messages', column: 'pinned_at', type: 'TEXT' },
     { table: 'messages', column: 'edited', type: 'INTEGER DEFAULT 0' },
     { table: 'messages', column: 'edited_at', type: 'TEXT' },
+    { table: 'users', column: 'e2ee_public_key', type: 'TEXT' },
+    { table: 'messages', column: 'e2ee', type: 'INTEGER DEFAULT 0' },
+    { table: 'messages', column: 'e2ee_nonce', type: 'TEXT' },
+    { table: 'messages', column: 'e2ee_ephemeral', type: 'TEXT' },
     { table: 'calendar_tasks', column: 'task_time', type: 'TEXT' },
     { table: 'calendar_tasks', column: 'task_end_time', type: 'TEXT' },
     { table: 'calendar_tasks', column: 'reminder_time', type: 'TEXT' },
     { table: 'chats', column: 'avatar', type: 'TEXT' },
-    { table: 'user_sessions', column: 'last_seen', type: 'TEXT DEFAULT CURRENT_TIMESTAMP' }
+    { table: 'user_sessions', column: 'last_seen', type: 'TEXT DEFAULT CURRENT_TIMESTAMP' },
+    { table: 'user_device_sessions', column: 'device_id', type: 'TEXT' },
+    { table: 'user_device_sessions', column: 'device_name', type: 'TEXT DEFAULT \'\'' },
+    { table: 'user_device_sessions', column: 'ip_address', type: 'TEXT DEFAULT \'\'' },
+    { table: 'user_device_sessions', column: 'socket_ids', type: 'TEXT NOT NULL DEFAULT \'[]\'' },
+    { table: 'user_device_sessions', column: 'login_time', type: 'TEXT DEFAULT CURRENT_TIMESTAMP' },
+    { table: 'user_device_sessions', column: 'last_seen', type: 'TEXT DEFAULT CURRENT_TIMESTAMP' },
+    { table: 'user_device_sessions', column: 'is_current', type: 'INTEGER DEFAULT 0' }
   ];
 
   migrations.forEach(({ table, column, type }) => {
@@ -427,12 +469,28 @@ function initDatabase() {
     }
   });
 
-  // Таблица сессий для восстановления после рестарта
+  // Таблица сессий для восстановления после рестарта (legacy, per-user)
   db.exec(`
     CREATE TABLE IF NOT EXISTS user_sessions (
       user_id TEXT PRIMARY KEY,
       socket_ids TEXT NOT NULL DEFAULT '[]',
       last_seen TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    );
+  `);
+
+  // Таблица устройств/сессий (multi-device support, per-device)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS user_device_sessions (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      device_id TEXT NOT NULL,
+      device_name TEXT DEFAULT '',
+      ip_address TEXT DEFAULT '',
+      socket_ids TEXT NOT NULL DEFAULT '[]',
+      login_time TEXT DEFAULT CURRENT_TIMESTAMP,
+      last_seen TEXT DEFAULT CURRENT_TIMESTAMP,
+      is_current INTEGER DEFAULT 0,
       FOREIGN KEY (user_id) REFERENCES users(id)
     );
   `);
@@ -638,6 +696,84 @@ function saveDatabaseSync() {
   }
 }
 
+// ============================================
+// Автоматическое резервное копирование БД
+// ============================================
+
+const BACKUP_ENABLED = process.env.BACKUP_ENABLED !== 'false';
+const BACKUP_INTERVAL = parseInt(process.env.BACKUP_INTERVAL || '60', 10) * 60 * 1000; // мс
+const BACKUP_DIR = process.env.BACKUP_DIR || path.join(__dirname, 'backups');
+const BACKUP_RETENTION = parseInt(process.env.BACKUP_RETENTION || '24', 10);
+
+function performBackup() {
+  if (!db || !BACKUP_ENABLED) return;
+
+  try {
+    // Создаём папку если нет
+    if (!fs.existsSync(BACKUP_DIR)) {
+      fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    }
+
+    // Делаем checkpoint WAL перед копированием
+    db.pragma('wal_checkpoint(PASSIVE)');
+
+    // Формируем имя файла: chat-backup-YYYY-MM-DD-HHmmss.db
+    const now = new Date();
+    const ts = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}-${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}${String(now.getSeconds()).padStart(2,'0')}`;
+    const backupFile = path.join(BACKUP_DIR, `chat-backup-${ts}.db`);
+
+    // Копируем файл БД
+    fs.copyFileSync(DB_PATH, backupFile);
+
+    // Копируем WAL и SHM если существуют
+    const walPath = DB_PATH + '-wal';
+    const shmPath = DB_PATH + '-shm';
+    if (fs.existsSync(walPath)) {
+      fs.copyFileSync(walPath, backupFile + '-wal');
+    }
+    if (fs.existsSync(shmPath)) {
+      fs.copyFileSync(shmPath, backupFile + '-shm');
+    }
+
+    console.log(`✅ Резервная копия: ${backupFile} (${(fs.statSync(backupFile).size / 1024 / 1024).toFixed(2)} MB)`);
+
+    // Ротация: удаляем старые бэкапы, оставляя только BACKUP_RETENTION последних
+    const files = fs.readdirSync(BACKUP_DIR)
+      .filter(f => f.startsWith('chat-backup-') && f.endsWith('.db'))
+      .map(f => ({ name: f, time: fs.statSync(path.join(BACKUP_DIR, f)).mtimeMs }))
+      .sort((a, b) => b.time - a.time);
+
+    if (files.length > BACKUP_RETENTION) {
+      const toDelete = files.slice(BACKUP_RETENTION);
+      for (const file of toDelete) {
+        const basePath = path.join(BACKUP_DIR, file.name);
+        fs.unlinkSync(basePath);
+        // Удаляем сопутствующие WAL/SHM
+        try { fs.unlinkSync(basePath + '-wal'); } catch {}
+        try { fs.unlinkSync(basePath + '-shm'); } catch {}
+        console.log(`🗑️ Удалён старый бэкап: ${file.name}`);
+      }
+    }
+  } catch (err) {
+    console.error('❌ Ошибка резервного копирования:', err.message);
+  }
+}
+
+function startBackupScheduler() {
+  if (!BACKUP_ENABLED) {
+    console.log('⏭️ Резервное копирование отключено (BACKUP_ENABLED=false)');
+    return;
+  }
+
+  // Выполняем первый бэкап через 30 секунд после старта сервера
+  setTimeout(() => {
+    performBackup();
+    // Затем по расписанию
+    setInterval(performBackup, BACKUP_INTERVAL);
+    console.log(`💾 Авто-бэкап запущен: каждые ${BACKUP_INTERVAL / 60000} мин, хранить ${BACKUP_RETENTION} копий`);
+  }, 30000);
+}
+
 // Проверка бездействия: раз в 30 секунд ищем пользователей, неактивных >10 минут
 function startIdleChecker() {
   setInterval(() => {
@@ -665,6 +801,19 @@ const onlineUsers = new Map(); // socketId -> { id, username, socketId, status }
 
 // Обратный индекс: userId -> Set<socketId> (один пользователь на нескольких вкладках/устройствах)
 const userSocketMap = new Map(); // userId -> Set<socketId>
+
+// Возвращает ВСЕ socketId для userId (multi-device support)
+function getUserSockets(userId) {
+  const sockets = userSocketMap.get(userId);
+  if (!sockets) return [];
+  return Array.from(sockets);
+}
+
+// Отправляет событие ВСЕМ сокетам пользователя
+function emitToUser(userId, event, data) {
+  const socketIds = getUserSockets(userId);
+  socketIds.forEach(sid => io.to(sid).emit(event, data));
+}
 
 // Время последней активности каждого пользователя (userId -> timestamp)
 const userActivity = new Map();
@@ -737,14 +886,24 @@ const upload = multer({
   limits: { fileSize: config.uploads?.maxFileSize || 50 * 1024 * 1024 } // 50MB лимит
 });
 
+// Принудительный редирект HTTP → HTTPS (код 301)
+app.use((req, res, next) => {
+  if (useHttps && !req.secure && req.headers['x-forwarded-proto'] !== 'https') {
+    return res.redirect(301, `https://${req.headers.host}${req.url}`);
+  }
+  next();
+});
+
 // Helmet с настройками, совместимыми с WebSocket и стикерами
-const CSP_ORIGINS = process.env.CHAT_APP_SERVER_URL || `http://localhost:${PORT}`;
+const PROTOCOL = useHttps ? 'https' : 'http';
+const WS_PROTOCOL = useHttps ? 'wss:' : 'ws:';
+const CSP_ORIGINS = process.env.CHAT_APP_SERVER_URL || `${PROTOCOL}://localhost:${PORT}`;
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
       imgSrc: ["'self'", 'data:', 'https://ui-avatars.com', 'https://cdn.jsdelivr.net', CSP_ORIGINS],
-      connectSrc: ["'self'", 'ws:', 'wss:', 'https://api.github.com', CSP_ORIGINS, 'capacitor://localhost', 'http://localhost'],
+      connectSrc: ["'self'", WS_PROTOCOL, 'wss:', 'https://api.github.com', CSP_ORIGINS, 'capacitor://localhost', `${PROTOCOL}://localhost`],
       fontSrc: ["'self'", 'data:', 'https://fonts.gstatic.com'],
       styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
       scriptSrc: ["'self'", "'unsafe-inline'"],
@@ -756,11 +915,29 @@ app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' }
 }));
 
+// HSTS (HTTP Strict Transport Security)
+app.use((req, res, next) => {
+  if (useHttps) {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload');
+  }
+  next();
+});
+
+// Дополнительные заголовки безопасности
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  next();
+});
+
 // CORS — разрешаем только наш фронтенд
-const ALLOWED_ORIGINS = [CSP_ORIGINS, 'http://localhost:3000', 'http://localhost:3001', 'capacitor://localhost', 'http://localhost']; 
+const ALLOWED_ORIGINS = [CSP_ORIGINS, `${PROTOCOL}://localhost:3000`, `${PROTOCOL}://localhost:3001`, 'capacitor://localhost', `${PROTOCOL}://localhost`]; 
 app.use(cors({
   origin: (origin, cb) => {
-    if (!origin || ALLOWED_ORIGINS.includes(origin) || origin.startsWith('http://192.168.') || origin.startsWith('capacitor://')) return cb(null, true);
+    if (!origin || ALLOWED_ORIGINS.includes(origin) || origin.startsWith('http://192.168.') || origin.startsWith('https://192.168.') || origin.startsWith('capacitor://')) return cb(null, true);
     cb(null, true); // в локальной сети разрешаем все
   },
   credentials: true
@@ -775,7 +952,7 @@ app.get('/api/csrf-token', (req, res) => {
   const token = uuidv4();
   csrfTokens.add(token);
   if (csrfTokens.size > 1000) csrfTokens.clear();
-  res.cookie('X-CSRF-Token', token, { httpOnly: true, sameSite: 'strict', maxAge: 3600000 });
+  res.cookie('X-CSRF-Token', token, { httpOnly: true, sameSite: 'strict', maxAge: 3600000, secure: useHttps });
   res.json({ csrfToken: token });
 });
 
@@ -1743,6 +1920,101 @@ app.put('/api/profile', (req, res) => {
   }
 });
 
+// ============================================
+// E2EE API
+// ============================================
+
+// Получение публичного ключа E2EE пользователя
+app.get('/api/e2ee/key/:userId', (req, res) => {
+  const { userId } = req.params;
+  if (!userId) return res.status(400).json({ error: 'userId обязателен' });
+
+  try {
+    const row = db.prepare('SELECT e2ee_public_key FROM users WHERE id = ?').get(userId);
+    if (row && row.e2ee_public_key) {
+      res.json({ publicKey: row.e2ee_public_key });
+    } else {
+      res.status(404).json({ error: 'Ключ не найден' });
+    }
+  } catch (err) {
+    console.error('Ошибка получения E2EE ключа:', err);
+    res.status(500).json({ error: 'Ошибка сервера' });
+  }
+});
+
+// Загрузка публичного ключа E2EE
+app.put('/api/e2ee/key', (req, res) => {
+  const { userId, publicKey } = req.body;
+  if (!userId || !publicKey) {
+    return res.status(400).json({ error: 'userId и publicKey обязательны' });
+  }
+
+  try {
+    db.run('UPDATE users SET e2ee_public_key = ? WHERE id = ?', [publicKey, userId]);
+    console.log(`[E2EE] Ключ сохранён для пользователя ${userId}`);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Ошибка сохранения E2EE ключа:', err);
+    res.status(500).json({ error: 'Ошибка сервера' });
+  }
+});
+
+// Проверка, есть ли у пользователя E2EE ключ
+app.get('/api/e2ee/status/:userId', (req, res) => {
+  const { userId } = req.params;
+  try {
+    const row = db.prepare('SELECT e2ee_public_key FROM users WHERE id = ?').get(userId);
+    res.json({ hasKey: !!(row && row.e2ee_public_key) });
+  } catch (err) {
+    res.json({ hasKey: false });
+  }
+});
+
+// Получение списка активных сессий пользователя (multi-device)
+app.get('/api/sessions/:userId', (req, res) => {
+  const { userId } = req.params;
+  if (!userId) return res.status(400).json({ error: 'userId обязателен' });
+  try {
+    const rows = db.prepare(`
+      SELECT id, device_id, device_name, ip_address, login_time, last_seen, is_current,
+             json_array_length(socket_ids) as socket_count
+      FROM user_device_sessions WHERE user_id = ?
+      ORDER BY last_seen DESC
+    `).all(userId);
+    res.json({ sessions: rows.map(r => ({ ...r, socket_count: Number(r.socket_count || 0) })) });
+  } catch (err) {
+    console.error('Ошибка получения сессий:', err);
+    res.status(500).json({ error: 'Ошибка сервера' });
+  }
+});
+
+// Принудительное завершение сессии (logout device)
+app.delete('/api/sessions/:sessionId', (req, res) => {
+  const { sessionId } = req.params;
+  const { userId } = req.query;
+  if (!sessionId) return res.status(400).json({ error: 'sessionId обязателен' });
+  try {
+    const session = db.prepare('SELECT * FROM user_device_sessions WHERE id = ?').get(sessionId);
+    if (!session) return res.status(404).json({ error: 'Сессия не найдена' });
+    if (userId && session.user_id !== userId) return res.status(403).json({ error: 'Нет доступа' });
+    if (session.is_current) return res.status(400).json({ error: 'Нельзя завершить текущую сессию' });
+
+    // Отключаем все сокеты этой сессии
+    let devSockets = [];
+    try { devSockets = JSON.parse(session.socket_ids); } catch {}
+    devSockets.forEach(sid => {
+      const sock = io.sockets.sockets.get(sid);
+      if (sock) sock.disconnect(true);
+    });
+
+    db.run('DELETE FROM user_device_sessions WHERE id = ?', [sessionId]);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Ошибка удаления сессии:', err);
+    res.status(500).json({ error: 'Ошибка сервера' });
+  }
+});
+
 // API для удаления чата
 app.delete('/api/chats/:chatId', (req, res) => {
   const { chatId } = req.params;
@@ -2650,6 +2922,7 @@ app.get('/api/messages/:chatId', (req, res) => {
   try {
     const rows = db.prepare(`
       SELECT m.id, m.chat_id, m.sender_id, m.text, m.file_data, m.reply_to, m.timestamp, m.read_at,
+             m.e2ee, m.e2ee_nonce, m.e2ee_ephemeral,
              u.username as senderName, u.avatar as senderAvatar
       FROM messages m
       LEFT JOIN users u ON m.sender_id = u.id
@@ -2658,6 +2931,7 @@ app.get('/api/messages/:chatId', (req, res) => {
     `).all(chatId);
 
     const messages = rows.map(row => {
+      const isE2EE = row.e2ee === 1 || row.e2ee === true;
       let file = null;
       if (row.file_data) {
         try {
@@ -2671,13 +2945,16 @@ app.get('/api/messages/:chatId', (req, res) => {
         id: row.id,
         chatId: row.chat_id,
         senderId: row.sender_id,
-        text: decryptText(row.text),
+        text: isE2EE ? (row.text || '') : (decryptText(row.text) || ''),
         file: file,
-        reply_to: row.reply_to ? JSON.parse(row.reply_to) : null,
+        reply_to: row.reply_to ? (() => { try { return JSON.parse(row.reply_to); } catch { return null; } })() : null,
         timestamp: row.timestamp,
         read_at: row.read_at || null,
         senderName: row.senderName,
-        senderAvatar: row.senderAvatar
+        senderAvatar: row.senderAvatar,
+        e2ee: isE2EE ? 1 : 0,
+        e2ee_nonce: isE2EE ? (row.e2ee_nonce || '') : undefined,
+        e2ee_ephemeral: isE2EE ? (row.e2ee_ephemeral || '') : undefined
       };
     });
 
@@ -2785,20 +3062,27 @@ app.get('/api/thread/:messageId', (req, res) => {
         const rt = JSON.parse(r.reply_to);
         return rt.messageId === messageId;
       } catch { return false; }
-    }).map(row => ({
-      id: row.id,
-      chatId: row.chat_id,
-      senderId: row.sender_id,
-      senderName: row.senderName,
-      senderAvatar: row.senderAvatar,
-      text: decryptText(row.text) || '',
-      file: row.file_data ? (() => { try { return JSON.parse(row.file_data); } catch { return null; } })() : null,
-      timestamp: row.timestamp,
-      reply_to: row.reply_to ? JSON.parse(row.reply_to) : null,
-      edited: row.edited === 1 || row.edited === true,
-      editedAt: row.edited_at || null
-    }));
+    }).map(row => {
+      const rIsE2EE = row.e2ee === 1 || row.e2ee === true;
+      return {
+        id: row.id,
+        chatId: row.chat_id,
+        senderId: row.sender_id,
+        senderName: row.senderName,
+        senderAvatar: row.senderAvatar,
+        text: rIsE2EE ? (row.text || '') : (decryptText(row.text) || ''),
+        file: row.file_data ? (() => { try { return JSON.parse(row.file_data); } catch { return null; } })() : null,
+        timestamp: row.timestamp,
+        reply_to: row.reply_to ? (() => { try { return JSON.parse(row.reply_to); } catch { return null; } })() : null,
+        edited: row.edited === 1 || row.edited === true,
+        editedAt: row.edited_at || null,
+        e2ee: rIsE2EE ? 1 : 0,
+        e2ee_nonce: rIsE2EE ? (row.e2ee_nonce || '') : undefined,
+        e2ee_ephemeral: rIsE2EE ? (row.e2ee_ephemeral || '') : undefined
+      };
+    });
 
+    const oIsE2EE = original.e2ee === 1 || original.e2ee === true;
     res.json({
       original: {
         id: original.id,
@@ -2806,11 +3090,14 @@ app.get('/api/thread/:messageId', (req, res) => {
         senderId: original.sender_id,
         senderName: original.senderName,
         senderAvatar: original.senderAvatar,
-        text: decryptText(original.text) || '',
+        text: oIsE2EE ? (original.text || '') : (decryptText(original.text) || ''),
         file: original.file_data ? (() => { try { return JSON.parse(original.file_data); } catch { return null; } })() : null,
         timestamp: original.timestamp,
         edited: original.edited === 1 || original.edited === true,
-        editedAt: original.edited_at || null
+        editedAt: original.edited_at || null,
+        e2ee: oIsE2EE ? 1 : 0,
+        e2ee_nonce: oIsE2EE ? (original.e2ee_nonce || '') : undefined,
+        e2ee_ephemeral: oIsE2EE ? (original.e2ee_ephemeral || '') : undefined
       },
       replies: threadReplies
     });
@@ -2901,8 +3188,6 @@ app.post('/api/messages/:messageId/forward', (req, res) => {
 // ============================================
 // API для извлечения превью ссылок (Open Graph)
 // ============================================
-
-const https = require('https');
 
 /**
  * Извлекает Open Graph метаданные из HTML страницы.
@@ -3410,8 +3695,9 @@ function getUserChats(userId) {
     `).get(chat.id);
     let lastMessage = null;
     if (msg) {
-      lastMessage = {
-        text: decryptText(msg.text) || (msg.file_data ? '📎 Файл' : ''),
+      const msgIsE2EE = msg.e2ee === 1 || msg.e2ee === true;
+    lastMessage = {
+        text: msgIsE2EE ? '🔒 Encrypted message' : (decryptText(msg.text) || (msg.file_data ? '📎 Файл' : '')),
         timestamp: msg.timestamp,
         senderName: msg.senderName,
         senderAvatar: msg.senderAvatar
@@ -3484,24 +3770,28 @@ function getChatMessages(chatId, limit = 100) {
         });
       }
 
+      const isE2EE = row.e2ee === 1 || row.e2ee === true;
       messages.push({
         id: row.id,
         chatId: row.chat_id,
         senderId: row.sender_id,
         senderName: row.senderName,
         senderAvatar: row.senderAvatar,
-        text: decryptText(row.text) || '',
-        file: row.file_data && !isBotMessage ? JSON.parse(row.file_data) : null,
-        reply_to: row.reply_to ? JSON.parse(row.reply_to) : null,
+        text: isE2EE ? (row.text || '') : (decryptText(row.text) || ''),
+        file: row.file_data && !isBotMessage ? (() => { try { return JSON.parse(row.file_data); } catch { return null; } })() : null,
+        reply_to: row.reply_to ? (() => { try { return JSON.parse(row.reply_to); } catch { return null; } })() : null,
         timestamp: row.timestamp,
         read_at: row.read_at,
-        forwarded_from: row.forwarded_from ? JSON.parse(row.forwarded_from) : null,
+        forwarded_from: row.forwarded_from ? (() => { try { return JSON.parse(row.forwarded_from); } catch { return null; } })() : null,
         readBy: [],
         buttons: buttons,
         isBotMessage: isBotMessage,
         edited: row.edited === 1 || row.edited === true,
         editedAt: row.edited_at || null,
-        reactions: Object.keys(reactions).length > 0 ? reactions : undefined
+        reactions: Object.keys(reactions).length > 0 ? reactions : undefined,
+        e2ee: isE2EE ? 1 : 0,
+        e2ee_nonce: isE2EE ? (row.e2ee_nonce || '') : undefined,
+        e2ee_ephemeral: isE2EE ? (row.e2ee_ephemeral || '') : undefined
       });
     }
     const replyCounts = {};
@@ -3611,7 +3901,7 @@ io.on('connection', (socket) => {
   // socket.id используется как ключ в onlineUsers Map.
   // Поддерживается несколько сокетов на одного пользователя (несколько вкладок).
   socket.on('user_joined', (data) => {
-    const { userId, email, username } = data || {};
+    const { userId, email, username, deviceId, deviceName } = data || {};
 
     if (!userId && !email && !username) {
       console.error('user_joined: нет userId/email/username');
@@ -3666,7 +3956,7 @@ io.on('connection', (socket) => {
       }
       userSocketMap.get(user.id).add(socket.id);
 
-      // Сохраняем сессию в БД
+      // Сохраняем сессию в БД (legacy)
       try {
         const existingRow = db.prepare('SELECT socket_ids FROM user_sessions WHERE user_id = ?').get(user.id);
         let sockets = [];
@@ -3678,6 +3968,28 @@ io.on('connection', (socket) => {
           [user.id, JSON.stringify(sockets), new Date().toISOString()]);
       } catch (e) {
         console.error('Ошибка сохранения сессии:', e.message);
+      }
+
+      // Сохраняем устройство/сессию (multi-device)
+      const resolvedDeviceId = deviceId || `unknown-${socket.id}`;
+      const resolvedDeviceName = deviceName || 'Unknown Device';
+      const clientIp = socket.handshake?.address || '';
+      try {
+        const existingDevice = db.prepare('SELECT id, socket_ids FROM user_device_sessions WHERE user_id = ? AND device_id = ?').get(user.id, resolvedDeviceId);
+        if (existingDevice) {
+          let devSockets = [];
+          try { devSockets = JSON.parse(existingDevice.socket_ids); } catch {}
+          if (!devSockets.includes(socket.id)) devSockets.push(socket.id);
+          db.run('UPDATE user_device_sessions SET socket_ids = ?, last_seen = ?, is_current = 1 WHERE id = ?',
+            [JSON.stringify(devSockets), new Date().toISOString(), existingDevice.id]);
+        } else {
+          const sessionId = uuidv4();
+          db.run(`INSERT INTO user_device_sessions (id, user_id, device_id, device_name, ip_address, socket_ids, login_time, last_seen, is_current)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+            [sessionId, user.id, resolvedDeviceId, resolvedDeviceName, clientIp, JSON.stringify([socket.id]), new Date().toISOString(), new Date().toISOString()]);
+        }
+      } catch (e) {
+        console.error('Ошибка сохранения устройства:', e.message);
       }
 
       // Обновляем статус в БД
@@ -3955,21 +4267,17 @@ io.on('connection', (socket) => {
       chat = getChatById(chatId);
     }
 
-    // Отправляем информацию о чате всем участникам
+    // Отправляем информацию о чате всем участникам (все сессии)
     const chatWithParticipants = getChatWithDetails(chat.id);
 
-    chatWithParticipants.participants.forEach((p) => {
-      const pSocket = Array.from(onlineUsers.values()).find((u) => u.username === p.username);
-      if (pSocket) {
-        io.to(pSocket.socketId).emit('chat_created', { chat: chatWithParticipants });
-      }
-    });
-
-    // Также отправляем создателю напрямую (если он онлайн)
-    const creatorSocket = onlineUsers.get(socket.id);
-    if (creatorSocket) {
-      socket.emit('chat_created', { chat: chatWithParticipants });
+    if (chatWithParticipants.participantsDetails) {
+      chatWithParticipants.participantsDetails.forEach((participant) => {
+        emitToUser(participant.id, 'chat_created', { chat: chatWithParticipants });
+      });
     }
+
+    // Также отправляем создателю через его текущий сокет (чтобы сразу присоединиться к комнате)
+    socket.emit('chat_created', { chat: chatWithParticipants });
   });
 
   // Присоединение к чату
@@ -4022,7 +4330,7 @@ io.on('connection', (socket) => {
       socket.emit('error', { message: 'Слишком много запросов. Подождите.' });
       return;
     }
-    const { chatId, text, file, forwardedFrom, replyTo } = data;
+    const { chatId, text, file, forwardedFrom, replyTo, e2ee, e2ee_nonce, e2ee_ephemeral } = data;
     let onlineUser = onlineUsers.get(socket.id);
 
     if (!onlineUser) {
@@ -4060,14 +4368,27 @@ io.on('connection', (socket) => {
     const timestamp = new Date().toISOString(); // Используем локальное время клиента
 
     try {
-      // Шифруем текст в JS перед сохранением
-      const encryptedText = encryptText(text || '');
+      let storedText, storedE2EE, storedNonce, storedEphemeral;
+
+      if (e2ee) {
+        // E2EE: храним ciphertext как есть (сервер не расшифровывает)
+        storedText = text || '';
+        storedE2EE = 1;
+        storedNonce = e2ee_nonce || null;
+        storedEphemeral = e2ee_ephemeral || null;
+      } else {
+        // Обычное серверное шифрование
+        storedText = encryptText(text || '');
+        storedE2EE = 0;
+        storedNonce = null;
+        storedEphemeral = null;
+      }
 
       // Вставляем сообщение с временем клиента
       db.run(`
-        INSERT INTO messages (id, chat_id, sender_id, text, file_data, reply_to, timestamp, forwarded_from)
-        VALUES (?, ?, ?, ?, ${fileDataStr ? `'${fileDataStr}'` : 'NULL'}, ${replyToStr ? `'${replyToStr.replace(/'/g, "''")}'` : 'NULL'}, ?, ${forwardedFromStr ? `'${forwardedFromStr}'` : 'NULL'})
-      `, [messageId, chatId, onlineUser.id, encryptedText, timestamp]);
+        INSERT INTO messages (id, chat_id, sender_id, text, file_data, reply_to, timestamp, forwarded_from, e2ee, e2ee_nonce, e2ee_ephemeral)
+        VALUES (?, ?, ?, ?, ${fileDataStr ? `'${fileDataStr}'` : 'NULL'}, ${replyToStr ? `'${replyToStr.replace(/'/g, "''")}'` : 'NULL'}, ?, ${forwardedFromStr ? `'${forwardedFromStr}'` : 'NULL'}, ?, ?, ?)
+      `, [messageId, chatId, onlineUser.id, storedText, timestamp, storedE2EE, storedNonce, storedEphemeral]);
 
       // Помечаем активность БД — перезапускает таймер автосохранения
       markDbActivity();
@@ -4075,6 +4396,7 @@ io.on('connection', (socket) => {
       // Получаем информацию о сообщении
       const msgRow = db.prepare(`
         SELECT m.id, m.chat_id, m.sender_id, m.text, m.file_data, m.reply_to, m.timestamp, m.forwarded_from,
+               m.e2ee, m.e2ee_nonce, m.e2ee_ephemeral,
                u.username as senderName, u.avatar as senderAvatar
         FROM messages m
         JOIN users u ON m.sender_id = u.id
@@ -4082,17 +4404,21 @@ io.on('connection', (socket) => {
       `).get(messageId);
       let messageRow = null;
       if (msgRow) {
+        const isE2EE = msgRow.e2ee === 1 || msgRow.e2ee === true;
         messageRow = {
           id: String(msgRow.id || ''),
           chat_id: String(msgRow.chat_id || ''),
           sender_id: String(msgRow.sender_id || ''),
-          text: decryptText(String(msgRow.text || '')),
+          text: isE2EE ? String(msgRow.text || '') : decryptText(String(msgRow.text || '')),
           file_data: String(msgRow.file_data || ''),
           reply_to: msgRow.reply_to,
           timestamp: String(msgRow.timestamp || ''),
           forwarded_from: msgRow.forwarded_from,
           senderName: String(msgRow.senderName || msgRow.username || ''),
-          senderAvatar: String(msgRow.senderAvatar || msgRow.avatar || '')
+          senderAvatar: String(msgRow.senderAvatar || msgRow.avatar || ''),
+          e2ee: isE2EE ? 1 : 0,
+          e2ee_nonce: isE2EE ? String(msgRow.e2ee_nonce || '') : undefined,
+          e2ee_ephemeral: isE2EE ? String(msgRow.e2ee_ephemeral || '') : undefined
         };
       }
 
@@ -4105,15 +4431,15 @@ io.on('connection', (socket) => {
       const partRows = db.prepare('SELECT user_id FROM chat_participants WHERE chat_id = ?').all(chatId);
       const participants = partRows.map(row => String(row.user_id || ''));
 
-      // Автоматически присоединяем всех онлайн-участников к комнате чата
+      // Автоматически присоединяем все сессии участников к комнате чата
       participants.forEach((pUserId) => {
-        const participantSocket = Array.from(onlineUsers.values()).find((u) => u.id === pUserId);
-        if (participantSocket) {
-          const sock = io.sockets.sockets.get(participantSocket.socketId);
+        const socketIds = getUserSockets(pUserId);
+        socketIds.forEach((sid) => {
+          const sock = io.sockets.sockets.get(sid);
           if (sock && !sock.rooms.has(chatId)) {
             sock.join(chatId);
           }
-        }
+        });
       });
 
       // Добавляем непрочитанные для всех кроме отправителя
@@ -4138,7 +4464,10 @@ io.on('connection', (socket) => {
         timestamp: messageRow.timestamp,
         read_at: messageRow.read_at,
         forwarded_from: messageRow.forwarded_from ? JSON.parse(messageRow.forwarded_from) : null,
-        readBy: [onlineUser.username]
+        readBy: [onlineUser.username],
+        e2ee: messageRow.e2ee || 0,
+        e2ee_nonce: messageRow.e2ee_nonce,
+        e2ee_ephemeral: messageRow.e2ee_ephemeral
       };
 
       // Обновляем квоту загрузок
@@ -4249,7 +4578,8 @@ io.on('connection', (socket) => {
       SELECT id, chat_id, sender_id,
              COALESCE(text, '') as text,
              COALESCE(file_data, '') as file_data,
-             timestamp, forwarded_from
+             timestamp, forwarded_from,
+             e2ee, e2ee_nonce, e2ee_ephemeral
       FROM messages
       WHERE id = ?
     `).get(messageId);
@@ -4261,7 +4591,10 @@ io.on('connection', (socket) => {
         sender_id: String(msgRow.sender_id || ''),
         text: String(msgRow.text || ''),
         file_data: String(msgRow.file_data || ''),
-        timestamp: String(msgRow.timestamp || '')
+        timestamp: String(msgRow.timestamp || ''),
+        e2ee: msgRow.e2ee,
+        e2ee_nonce: msgRow.e2ee_nonce,
+        e2ee_ephemeral: msgRow.e2ee_ephemeral
       };
     }
 
@@ -4313,14 +4646,27 @@ io.on('connection', (socket) => {
     }
 
     // Подготавливаем значения
-    const encryptedText = encryptText(originalMessage.text || '');
+    const isForwardE2EE = originalMessage.e2ee === 1 || originalMessage.e2ee === true;
     const timestamp = new Date().toISOString(); // Используем текущее время клиента
+    let forwardText, forwardE2EE, forwardNonce, forwardEphemeral;
+
+    if (isForwardE2EE) {
+      forwardText = originalMessage.text || '';
+      forwardE2EE = 1;
+      forwardNonce = originalMessage.e2ee_nonce || null;
+      forwardEphemeral = originalMessage.e2ee_ephemeral || null;
+    } else {
+      forwardText = encryptText(originalMessage.text || '');
+      forwardE2EE = 0;
+      forwardNonce = null;
+      forwardEphemeral = null;
+    }
 
     try {
       db.run(
-        `INSERT INTO messages (id, chat_id, sender_id, text, file_data, timestamp, forwarded_from)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [newMessageId, chat.id, onlineUser.id, encryptedText, originalMessage.file_data || null, timestamp, JSON.stringify(forwardedFrom)]
+        `INSERT INTO messages (id, chat_id, sender_id, text, file_data, timestamp, forwarded_from, e2ee, e2ee_nonce, e2ee_ephemeral)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [newMessageId, chat.id, onlineUser.id, forwardText, originalMessage.file_data || null, timestamp, JSON.stringify(forwardedFrom), forwardE2EE, forwardNonce, forwardEphemeral]
       );
       markDbActivity();
     } catch (insertErr) {
@@ -4334,6 +4680,7 @@ io.on('connection', (socket) => {
       .run(targetUserId, newMessageId, chat.id);
     const forwardedMessage = db.prepare(`
         SELECT m.id, m.chat_id, m.sender_id, m.text, m.file_data, m.timestamp, m.forwarded_from,
+               m.e2ee, m.e2ee_nonce, m.e2ee_ephemeral,
                u.username as senderName, u.avatar as senderAvatar
         FROM messages m
         JOIN users u ON m.sender_id = u.id
@@ -4342,36 +4689,37 @@ io.on('connection', (socket) => {
 
       if (!forwardedMessage) return;
 
+      const fwdIsE2EE = forwardedMessage.e2ee === 1 || forwardedMessage.e2ee === true;
       const formattedMessage = {
         id: forwardedMessage.id,
         chatId: forwardedMessage.chat_id,
         senderId: forwardedMessage.sender_id,
         senderName: forwardedMessage.senderName,
         senderAvatar: forwardedMessage.senderAvatar,
-        text: decryptText(forwardedMessage.text || '') || '',
+        text: fwdIsE2EE ? (forwardedMessage.text || '') : (decryptText(forwardedMessage.text || '') || ''),
         file: forwardedMessage.file_data ? JSON.parse(forwardedMessage.file_data) : null,
         timestamp: forwardedMessage.timestamp,
         forwarded_from: forwardedMessage.forwarded_from ? JSON.parse(forwardedMessage.forwarded_from) : null,
-        readBy: [onlineUser.username]
+        readBy: [onlineUser.username],
+        e2ee: fwdIsE2EE ? 1 : 0,
+        e2ee_nonce: fwdIsE2EE ? (forwardedMessage.e2ee_nonce || '') : undefined,
+        e2ee_ephemeral: fwdIsE2EE ? (forwardedMessage.e2ee_ephemeral || '') : undefined
       };
 
       // Уведомляем получателя о новом сообщении
-      const targetUser = Array.from(onlineUsers.values()).find(u => u.id === targetUserId);
-      if (targetUser) {
-        // Отправляем сообщение получателю напрямую
-        io.to(targetUser.socketId).emit('new_message', {
-          message: formattedMessage,
-          chat: { id: chat.id, type: chat.type, unreadCount: 1 }
-        });
+      // Отправляем сообщение получателю (все сессии)
+      emitToUser(targetUserId, 'new_message', {
+        message: formattedMessage,
+        chat: { id: chat.id, type: chat.type, unreadCount: 1 }
+      });
 
-        // Отправляем обновление чата получателю
-        const chatWithUnread = getChatWithDetails(chat.id, targetUserId);
-        if (chatWithUnread) {
-          io.to(targetUser.socketId).emit('chat_updated', {
-            chatId: chat.id,
-            chat: chatWithUnread
-          });
-        }
+      // Отправляем обновление чата получателю (все сессии)
+      const chatWithUnread = getChatWithDetails(chat.id, targetUserId);
+      if (chatWithUnread) {
+        emitToUser(targetUserId, 'chat_updated', {
+          chatId: chat.id,
+          chat: chatWithUnread
+        });
       }
 
       // Отправляем подтверждение отправителю
@@ -4394,7 +4742,7 @@ io.on('connection', (socket) => {
 
   // Редактирование сообщения
   socket.on('edit_message', (data) => {
-    const { messageId, newText } = data;
+    const { messageId, newText, e2ee, e2ee_nonce } = data;
     const onlineUser = onlineUsers.get(socket.id);
 
     if (!onlineUser || !messageId || !newText) {
@@ -4402,23 +4750,35 @@ io.on('connection', (socket) => {
     }
 
     // Проверяем, что сообщение принадлежит текущему пользователю
-    const message = db.prepare('SELECT sender_id, chat_id, text FROM messages WHERE id = ?').get(messageId);
+    const message = db.prepare('SELECT sender_id, chat_id, text, e2ee FROM messages WHERE id = ?').get(messageId);
 
     if (!message || message.sender_id !== onlineUser.id) {
       return;
     }
 
-    // Обновляем текст сообщения
+    // Обновляем текст сообщения (и нонс для E2EE)
+    const isEditE2EE = e2ee || (message.e2ee === 1 || message.e2ee === true);
     const editedAt = new Date().toISOString();
-    db.run('UPDATE messages SET text = ?, edited = 1, edited_at = ? WHERE id = ?', [newText, editedAt, messageId]);
+    let storedEditText, storedNonce;
+    if (isEditE2EE) {
+      storedEditText = newText;
+      storedNonce = e2ee_nonce || null;
+    } else {
+      storedEditText = encryptText(newText);
+      storedNonce = null;
+    }
+    db.run('UPDATE messages SET text = ?, edited = 1, edited_at = ?, e2ee_nonce = COALESCE(?, e2ee_nonce) WHERE id = ?',
+      [storedEditText, editedAt, storedNonce, messageId]);
 
     // Уведомляем всех участников чата об изменении сообщения
     const chatId = message.chat_id;
     io.to(chatId).emit('message_edited', {
       messageId,
-      newText,
+      newText: storedEditText,
       editedBy: onlineUser.id,
-      editedAt
+      editedAt,
+      e2ee: isEditE2EE ? 1 : 0,
+      e2ee_nonce: storedNonce
     });
   });
 
@@ -4533,21 +4893,18 @@ io.on('connection', (socket) => {
     
 
 
-    // Уведомляем отправителей о прочтении
+    // Уведомляем отправителей о прочтении (все сессии)
     const senderRows = db.prepare(`
       SELECT DISTINCT sender_id FROM messages WHERE chat_id = ? AND sender_id != ?
     `).all(chatId, onlineUser.id);
     const senderIds = senderRows.map(row => row.sender_id);
 
     senderIds.forEach(senderId => {
-      const senderSocket = Array.from(onlineUsers.values()).find(u => u.id === senderId);
-      if (senderSocket) {
-        io.to(senderSocket.socketId).emit('messages_read', {
-          chatId,
-          readBy: onlineUser.id,
-          readAt: now
-        });
-      }
+      emitToUser(senderId, 'messages_read', {
+        chatId,
+        readBy: onlineUser.id,
+        readAt: now
+      });
     });
   });
 
@@ -4563,7 +4920,7 @@ io.on('connection', (socket) => {
         if (userSockets.size === 0) userSocketMap.delete(onlineUser.id);
       }
 
-      // Обновляем сессию в БД
+      // Обновляем сессию в БД (legacy)
       try {
         const existingRow = db.prepare('SELECT socket_ids FROM user_sessions WHERE user_id = ?').get(onlineUser.id);
         if (existingRow) {
@@ -4579,6 +4936,24 @@ io.on('connection', (socket) => {
         }
       } catch (e) {
         console.error('Ошибка обновления сессии при отключении:', e.message);
+      }
+
+      // Обновляем устройство (удаляем socket.id из device_sessions)
+      try {
+        const deviceRows = db.prepare('SELECT id, device_id, socket_ids FROM user_device_sessions WHERE user_id = ?').all(onlineUser.id);
+        for (const dev of deviceRows) {
+          let devSockets = [];
+          try { devSockets = JSON.parse(dev.socket_ids); } catch {}
+          const filtered = devSockets.filter(sid => sid !== socket.id);
+          if (filtered.length === 0) {
+            db.run('DELETE FROM user_device_sessions WHERE id = ?', [dev.id]);
+          } else {
+            db.run('UPDATE user_device_sessions SET socket_ids = ?, last_seen = ? WHERE id = ?',
+              [JSON.stringify(filtered), new Date().toISOString(), dev.id]);
+          }
+        }
+      } catch (e) {
+        console.error('Ошибка обновления устройства при отключении:', e.message);
       }
 
       // Проверяем, есть ли у пользователя другие активные сокеты
@@ -4720,15 +5095,19 @@ io.on('connection', (socket) => {
       `).get(messageId);
       let fullMessage = null;
       if (row) {
+        const pinIsE2EE = row.e2ee === 1 || row.e2ee === true;
         fullMessage = {
           id: String(row.id || ''),
           chatId: String(row.chat_id || ''),
           senderId: String(row.sender_id || ''),
-          text: decryptText(String(row.text || '')),
+          text: pinIsE2EE ? String(row.text || '') : decryptText(String(row.text || '')),
           file_data: String(row.file_data || ''),
           timestamp: String(row.timestamp || ''),
           senderName: String(row.sender_name || row.username || ''),
-          senderAvatar: String(row.sender_avatar || row.avatar || '')
+          senderAvatar: String(row.sender_avatar || row.avatar || ''),
+          e2ee: pinIsE2EE ? 1 : 0,
+          e2ee_nonce: pinIsE2EE ? String(row.e2ee_nonce || '') : undefined,
+          e2ee_ephemeral: pinIsE2EE ? String(row.e2ee_ephemeral || '') : undefined
         };
       }
 
@@ -4809,16 +5188,22 @@ io.on('connection', (socket) => {
         LIMIT 50
       `).all(chatId);
 
-      const pinnedMessages = resultRows.map(obj => ({
-        id: String(obj.id || ''),
-        chatId: String(obj.chat_id || ''),
-        senderId: String(obj.sender_id || ''),
-        text: decryptText(String(obj.text || '')),
-        file_data: String(obj.file_data || ''),
-        timestamp: String(obj.timestamp || ''),
-        senderName: String(obj.sender_name || obj.username || ''),
-        senderAvatar: String(obj.sender_avatar || obj.avatar || '')
-      }));
+      const pinnedMessages = resultRows.map(obj => {
+        const pinListIsE2EE = obj.e2ee === 1 || obj.e2ee === true;
+        return {
+          id: String(obj.id || ''),
+          chatId: String(obj.chat_id || ''),
+          senderId: String(obj.sender_id || ''),
+          text: pinListIsE2EE ? String(obj.text || '') : decryptText(String(obj.text || '')),
+          file_data: String(obj.file_data || ''),
+          timestamp: String(obj.timestamp || ''),
+          senderName: String(obj.sender_name || obj.username || ''),
+          senderAvatar: String(obj.sender_avatar || obj.avatar || ''),
+          e2ee: pinListIsE2EE ? 1 : 0,
+          e2ee_nonce: pinListIsE2EE ? (obj.e2ee_nonce || '') : undefined,
+          e2ee_ephemeral: pinListIsE2EE ? (obj.e2ee_ephemeral || '') : undefined
+        };
+      });
 
       socket.emit('pinned_messages_list', {
         chatId,
@@ -5004,6 +5389,9 @@ try {
     console.error('Ошибка загрузки квот:', e.message);
   }
 
+  // Запускаем планировщик бэкапов
+  startBackupScheduler();
+
   // Восстанавливаем сессии
   try {
     const sessions = db.prepare('SELECT user_id, last_seen FROM user_sessions').all();
@@ -5020,7 +5408,7 @@ try {
 
   server.listen(PORT, HOST, () => {
     const displayHost = HOST === '0.0.0.0' ? getLocalIP() : HOST;
-    console.log(`Сервер запущен на http://${displayHost}:${PORT}`);
+    console.log(`Сервер запущен на ${PROTOCOL}://${displayHost}:${PORT}`);
     console.log(`URL для клиентов: ${SERVER_URL}`);
     console.log(`База данных: ${DB_PATH}`);
     console.log(`Путь загрузок: ${UPLOADS_PATH}`);

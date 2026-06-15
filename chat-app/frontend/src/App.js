@@ -6,9 +6,93 @@ import { SAFE_EMOJIS } from './safe-emojis';
 import { splitTextByUrls, detectUrls } from './urlUtils';
 import { useReactionParticles } from './ReactionParticlesManager';
 import emojiData from './emojiData.json';
+import { saveMessages, getMessages, saveChats, getChats, queueOutgoing, getOutbox, removeFromOutbox } from './db';
+import { initE2EEForUser, ensureSharedKey, encryptMessage, decryptMessage, getCachedSharedKey, setE2EEApiBase } from './crypto';
+import DisconnectedOverlay from './DisconnectedOverlay';
 
 const SOCKET_URL = 'http://192.168.210.48:3001';
 const STORAGE_KEY = 'chat_user_data';
+
+// Получить или создать идентификатор устройства (persistent в localStorage)
+function getDeviceId() {
+  let deviceId = localStorage.getItem('chat_device_id');
+  if (!deviceId) {
+    deviceId = 'dev-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+    localStorage.setItem('chat_device_id', deviceId);
+  }
+  return deviceId;
+}
+
+// Получить название устройства (браузер/платформа)
+function getDeviceName() {
+  const ua = navigator.userAgent || '';
+  if (ua.includes('Electron')) return 'Desktop App';
+  if (ua.includes('Android')) return 'Android';
+  if (ua.includes('iPhone') || ua.includes('iPad')) return 'iOS';
+  if (ua.includes('Windows')) return 'Windows Browser';
+  if (ua.includes('Mac')) return 'macOS Browser';
+  if (ua.includes('Linux')) return 'Linux Browser';
+  return 'Web Browser';
+}
+
+// Компонент управления устройствами (multi-device)
+function DevicesSettings({ currentUser, SOCKET_URL, getDeviceId, getDeviceName }) {
+  const [sessions, setSessions] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!currentUser?.id) return;
+    setLoading(true);
+    fetch(`${SOCKET_URL}/api/sessions/${currentUser.id}`)
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(data => { setSessions(data.sessions || []); setLoading(false); })
+      .catch(() => { setError('Не удалось загрузить сессии'); setLoading(false); });
+  }, [currentUser]);
+
+  const handleLogout = async (sessionId) => {
+    if (!confirm('Завершить эту сессию?')) return;
+    try {
+      const res = await fetch(`${SOCKET_URL}/api/sessions/${sessionId}?userId=${currentUser.id}`, { method: 'DELETE' });
+      if (res.ok) {
+        setSessions(prev => prev.filter(s => s.id !== sessionId));
+      }
+    } catch (err) {
+      console.error('Ошибка завершения сессии:', err);
+    }
+  };
+
+  return (
+    <div className="settings-tab-content">
+      <div className="setting-section">
+        <h3>📱 Активные устройства</h3>
+        <p className="setting-description">Устройства, с которых выполнен вход. Текущее устройство помечено 🖥️.</p>
+        {loading && <p>⏳ Загрузка...</p>}
+        {error && <p className="error-text">{error}</p>}
+        {!loading && sessions.length === 0 && !error && <p>Нет активных сессий.</p>}
+        {sessions.map(session => (
+          <div key={session.id} className={`setting-item session-item ${session.is_current ? 'current-session' : ''}`}>
+            <div className="setting-info">
+              <span className="setting-icon">{session.is_current ? '🖥️' : '📱'}</span>
+              <div>
+                <div className="setting-title">
+                  {session.device_name || 'Неизвестное устройство'}
+                  {session.is_current ? <span className="current-badge"> (текущее)</span> : ''}
+                </div>
+                <div className="setting-description">
+                  IP: {session.ip_address || 'N/A'} · Сокетов: {session.socket_count} · {session.login_time ? new Date(session.login_time).toLocaleString() : ''}
+                </div>
+              </div>
+            </div>
+            {!session.is_current && (
+              <button className="btn-danger-small" onClick={() => handleLogout(session.id)}>Завершить</button>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 // Извлекает UUID/имя файла из URL для маршрута /api/download/:uuid
 function extractFileUuidFromUrl(url) {
@@ -104,6 +188,10 @@ function App() {
 
   // Реакции на сообщения
   const [messageReactions, setMessageReactions] = useState({});
+
+  // E2EE состояние
+  const [e2eeEnabled, setE2eeEnabled] = useState({}); // { chatId: true/false }
+  const myKeyPairRef = useRef(null);
 
   // Ref-карта бейджей реакций для получения DOM-позиций
   const reactionBadgeRefs = useRef({});
@@ -247,7 +335,7 @@ function App() {
   const [showNotificationBanner, setShowNotificationBanner] = useState(false);
   const [activeView, setActiveView] = useState('chats'); // 'chats', 'phonebook', 'calendar', 'admin', 'settings'
   const [showChatList, setShowChatList] = useState(true); // На мобильных: true = список чатов, false = активный чат
-  const [activeSettingsTab, setActiveSettingsTab] = useState('appearance'); // 'appearance', 'notifications', 'about'
+  const [activeSettingsTab, setActiveSettingsTab] = useState('appearance'); // 'appearance', 'notifications', 'devices', 'about'
   const [userUiSettings, setUserUiSettings] = useState({
     themeColor: '#667eea',
     themeGradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
@@ -926,7 +1014,9 @@ function App() {
           newSocket.emit('user_joined', {
             userId: parsed.userId,
             username: parsed.username,
-            email: parsed.email
+            email: parsed.email,
+            deviceId: getDeviceId(),
+            deviceName: getDeviceName()
           });
         } catch (e) {
           console.error('Ошибка парсинга savedData при переподключении:', e);
@@ -953,6 +1043,9 @@ function App() {
         console.log('Переподключение: присоединяемся к чату', activeChatIdRef.current);
         newSocket.emit('join_chat', activeChatIdRef.current);
       }
+
+      // Отправляем накопленные офлайн-сообщения
+      flushOutbox();
     });
 
     newSocket.on('reconnect_attempt', (attemptNumber) => {
@@ -975,13 +1068,15 @@ function App() {
       console.error('Ошибка подключения:', err.message);
     });
 
+    // Очищаем старый ключ с паролем (безопасность)
+    localStorage.removeItem('chat_credentials');
+
     // Проверяем сохраненные данные пользователя (для авто-входа)
     const savedData = localStorage.getItem(STORAGE_KEY);
-    const savedCredentials = localStorage.getItem('chat_credentials');
+    const savedEmail = localStorage.getItem('chat_credentials_email');
     const savedLastUser = localStorage.getItem('chat_last_user');
 
     console.log('Сохранённые данные:', savedData);
-    console.log('Сохранённые учётные данные:', savedCredentials);
 
     // Загружаем данные последнего пользователя для отображения на экране входа
     if (savedLastUser) {
@@ -993,15 +1088,14 @@ function App() {
       }
     }
 
-    // Если есть учётные данные, заполняем форму
-    if (savedCredentials) {
+    // Предзаполняем email (пароль не храним)
+    if (savedEmail) {
       try {
-        const creds = JSON.parse(savedCredentials);
+        const creds = JSON.parse(savedEmail);
         setEmail(creds.email || '');
-        setPassword(creds.password ? (creds._enc ? atob(creds.password) : creds.password) : '');
         setRememberMe(true);
       } catch (e) {
-        console.error('Ошибка парсинга credentials:', e);
+        console.error('Ошибка парсинга savedEmail:', e);
       }
     }
 
@@ -1013,7 +1107,9 @@ function App() {
         newSocket.emit('user_joined', {
           userId: parsed.userId,
           username: parsed.username,
-          email: parsed.email
+          email: parsed.email,
+          deviceId: getDeviceId(),
+          deviceName: getDeviceName()
         });
       } catch (e) {
         console.error('Ошибка парсинга savedData:', e);
@@ -1062,6 +1158,9 @@ function App() {
       }));
       setChats(chatsWithZeroUnread);
 
+      // Сохраняем список чатов в IndexedDB для офлайн-доступа
+      saveChats(chatsWithZeroUnread).catch(err => console.error('[Offline] save chats error:', err));
+
       // Сохраняем данные пользователя для повторного входа
       localStorage.setItem(STORAGE_KEY, JSON.stringify({
         userId: user.userId,
@@ -1079,6 +1178,14 @@ function App() {
 
       // Проверяем статус админа
       checkAdminStatus(user.userId);
+
+      // Инициализируем E2EE
+      setE2EEApiBase(SOCKET_URL);
+      initE2EEForUser(user.userId).then(result => {
+        if (result) {
+          myKeyPairRef.current = result.keyPair;
+        }
+      });
 
       // Проверяем право на бронирование переговорной
       // По умолчанию у Root есть это право
@@ -1099,22 +1206,31 @@ function App() {
           newSocket.emit('join_chat', firstChat.id);
         }
       }
+
+      // Отправляем накопленные офлайн-сообщения
+      flushOutbox();
     });
 
-    newSocket.on('chat_history', ({ chatId, messages: chatMessages }) => {
+    newSocket.on('chat_history', async ({ chatId, messages: chatMessages }) => {
       // Очищаем таймаут загрузки если он есть
       if (window.chatLoadTimeout) {
         clearTimeout(window.chatLoadTimeout);
         window.chatLoadTimeout = null;
       }
 
+      // Дешифруем E2EE сообщения
+      const decryptedMessages = await decryptE2EEMessages(chatMessages, chatId);
+
+      // Сохраняем сообщения в IndexedDB для офлайн-доступа
+      saveMessages(chatId, decryptedMessages).catch(err => console.error('[Offline] save error:', err));
+
       // Устанавливаем сообщения только для активного чата
       if (activeChatIdRef.current === chatId) {
-        setMessages(chatMessages);
+        setMessages(decryptedMessages);
 
         // Инициализируем реакции из сообщений
         const reactionsData = {};
-        chatMessages.forEach(msg => {
+        decryptedMessages.forEach(msg => {
           if (msg.reactions) {
             reactionsData[msg.id] = { reactions: msg.reactions };
           }
@@ -1123,7 +1239,18 @@ function App() {
       }
     });
 
-    newSocket.on('new_message', ({ message, chat, isOwnMessage }) => {
+    newSocket.on('new_message', async ({ message, chat, isOwnMessage }) => {
+      // Расшифровываем E2EE сообщение
+      if (message.e2ee && message.e2ee_nonce) {
+        const decryptedText = await decryptE2EEMessageText(message, message.chatId);
+        if (decryptedText !== message.text) {
+          message.text = decryptedText;
+        }
+      }
+
+      // Сохраняем в IndexedDB для офлайн-доступа
+      saveMessages(message.chatId, [message]).catch(err => console.error('[Offline] save msg error:', err));
+
       // Используем currentUserRef.current и activeChatIdRef.current для актуальных значений
       const myId = currentUserRef.current?.id;
       const isMyMessage = isOwnMessage || message.senderId === myId;
@@ -1295,7 +1422,9 @@ function App() {
     newSocket.on('chat_created', ({ chat }) => {
       setChats(prev => {
         if (prev.find(c => c.id === chat.id)) return prev;
-        return [...prev, chat];
+        const newChats = [...prev, chat];
+        saveChats(newChats).catch(() => {});
+        return newChats;
       });
       // Переключаемся на новый чат
       setActiveChatId(chat.id);
@@ -1306,10 +1435,11 @@ function App() {
     newSocket.on('chat_updated', ({ chatId, chat }) => {
       setChats(prev => {
         const chatExists = prev.some(c => c.id === chatId);
+        let result;
         
         if (chatExists) {
           // Обновляем только lastMessage и timestamp, сохраняя локальные данные
-          return prev.map(c => {
+          result = prev.map(c => {
             if (c.id === chatId) {
               return {
                 ...c,  // Сохраняем все локальные данные (participantsDetails и т.д.)
@@ -1322,11 +1452,10 @@ function App() {
         } else {
           // Чат не существует - добавляем его
           console.log('chat_updated: новый чат не найден, добавляем:', chat);
-          return [...prev, {
-            ...chat,
-            unreadCount: 0
-          }];
+          result = [...prev, { ...chat, unreadCount: 0 }];
         }
+        saveChats(result).catch(() => {});
+        return result;
       });
     });
 
@@ -1537,10 +1666,14 @@ function App() {
     });
 
     // Обработка редактирования сообщения
-    newSocket.on('message_edited', ({ messageId, newText, editedBy, editedAt }) => {
+    newSocket.on('message_edited', async ({ messageId, newText, editedBy, editedAt, e2ee, e2ee_nonce }) => {
+      let displayText = newText;
+      if (e2ee && activeChatIdRef.current) {
+        displayText = await decryptE2EEMessageText({ text: newText, e2ee: true, e2ee_nonce: e2ee_nonce }, activeChatIdRef.current);
+      }
       setMessages(prev => prev.map(msg =>
         msg.id === messageId
-          ? { ...msg, text: newText, edited: true, editedAt }
+          ? { ...msg, text: displayText, edited: true, editedAt }
           : msg
       ));
     });
@@ -1886,15 +2019,13 @@ function App() {
       const data = await response.json();
 
       if (response.ok) {
-        // Сохраняем учётные данные если выбрана опция "Запомнить меня"
+        // Сохраняем email для быстрого входа (пароль НЕ сохраняем)
         if (rememberMe) {
-          localStorage.setItem('chat_credentials', JSON.stringify({
-            email: email,
-            password: btoa(password),
-            _enc: true
+          localStorage.setItem('chat_credentials_email', JSON.stringify({
+            email: email
           }));
         } else {
-          localStorage.removeItem('chat_credentials');
+          localStorage.removeItem('chat_credentials_email');
         }
 
         // Подключаемся к сокету с данными пользователя
@@ -2602,13 +2733,38 @@ function App() {
         if (response.ok) {
           const data = await response.json();
           setMessages(data.messages || []);
+          // Сохраняем в IndexedDB для офлайн-доступа
+          saveMessages(chat.id, data.messages || []).catch(() => {});
         } else {
-          console.error('Ошибка загрузки сообщений через API');
-          setMessages([]);
+          console.error('Ошибка загрузки сообщений через API, пробуем IndexedDB...');
+          // Fallback на IndexedDB (офлайн-режим)
+          try {
+            const offlineMessages = await getMessages(chat.id);
+            if (offlineMessages.length > 0) {
+              setMessages(offlineMessages);
+            } else {
+              setMessages([]);
+            }
+          } catch (dbErr) {
+            console.error('Ошибка загрузки из IndexedDB:', dbErr);
+            setMessages([]);
+          }
         }
       } catch (err) {
         console.error('Ошибка загрузки сообщений:', err);
-        setMessages([]);
+        // Fallback на IndexedDB (сервер недоступен)
+        try {
+          const offlineMessages = await getMessages(chat.id);
+          if (offlineMessages.length > 0) {
+            console.log(`[Offline] Загружено ${offlineMessages.length} сообщений из кэша`);
+            setMessages(offlineMessages);
+          } else {
+            setMessages([]);
+          }
+        } catch (dbErr) {
+          console.error('Ошибка загрузки из IndexedDB:', dbErr);
+          setMessages([]);
+        }
       }
     } else {
       // Сокет подключён, используем WebSocket
@@ -2616,16 +2772,31 @@ function App() {
       socket.emit('mark_read', { chatId: chat.id });
 
       // Устанавливаем таймаут на случай если chat_history не придёт
-      const loadTimeout = setTimeout(() => {
+      const loadTimeout = setTimeout(async () => {
         if (activeChatIdRef.current === chat.id) {
-          fetch(`${SOCKET_URL}/api/messages/${chat.id}?userId=${currentUser?.id}`)
-            .then(res => res.ok ? res.json() : null)
-            .then(data => {
-              if (data && activeChatIdRef.current === chat.id) {
+          try {
+            const res = await fetch(`${SOCKET_URL}/api/messages/${chat.id}?userId=${currentUser?.id}`);
+            if (res.ok) {
+              const data = await res.json();
+              if (activeChatIdRef.current === chat.id) {
                 setMessages(data.messages || []);
               }
-            })
-            .catch(err => console.error('Ошибка загрузки через API fallback:', err));
+            } else {
+              // Fallback на IndexedDB если сервер ответил ошибкой
+              const offlineMessages = await getMessages(chat.id);
+              if (offlineMessages.length > 0 && activeChatIdRef.current === chat.id) {
+                setMessages(offlineMessages);
+              }
+            }
+          } catch (err) {
+            console.error('Ошибка загрузки через API fallback:', err);
+            // Fallback на IndexedDB если сервер недоступен
+            const offlineMessages = await getMessages(chat.id);
+            if (offlineMessages.length > 0 && activeChatIdRef.current === chat.id) {
+              console.log(`[Offline] Загружено ${offlineMessages.length} сообщений из кэша (timeout)`);
+              setMessages(offlineMessages);
+            }
+          }
         }
       }, 3000);
 
@@ -2917,6 +3088,90 @@ function App() {
     return text;
   };
 
+  // E2EE: получить общий ключ для чата
+  const ensureE2EEForChat = async (chatId) => {
+    const cached = getCachedSharedKey(chatId);
+    if (cached) return cached;
+    if (!myKeyPairRef.current || !currentUser) return null;
+    const chat = chats.find(c => c.id === chatId);
+    if (!chat || chat.type !== 'direct') return null;
+    const otherUser = chat.participantsDetails?.find(p => p.username !== currentUser?.username);
+    if (!otherUser) return null;
+    return ensureSharedKey(chatId, otherUser.id, myKeyPairRef.current.privateKey);
+  };
+
+  // E2EE: зашифровать текст для чата
+  const prepareE2EEMessage = async (chatId, text) => {
+    if (!e2eeEnabled[chatId] || !text) return { text, e2ee: false };
+    const sharedKey = await ensureE2EEForChat(chatId);
+    if (!sharedKey) {
+      console.warn('[E2EE] Нет общего ключа для чата', chatId);
+      return { text, e2ee: false };
+    }
+    const { ciphertext, nonce } = await encryptMessage(sharedKey, text);
+    return { text: ciphertext, e2ee: true, e2ee_nonce: nonce, e2ee_ephemeral: '' };
+  };
+
+  // E2EE: расшифровать сообщение
+  const decryptE2EEMessageText = async (message, chatId) => {
+    if (!message.e2ee) return message.text;
+    const cachedKey = getCachedSharedKey(chatId);
+    const sharedKey = cachedKey || await ensureE2EEForChat(chatId);
+    if (!sharedKey || !message.e2ee_nonce) {
+      console.warn('[E2EE] Нет ключа для расшифровки', chatId);
+      return message.text;
+    }
+    const plaintext = await decryptMessage(sharedKey, message.text, message.e2ee_nonce);
+    return plaintext || message.text;
+  };
+
+  // E2EE: расшифровать массив сообщений
+  const decryptE2EEMessages = async (messages, chatId) => {
+    const hasE2EE = messages.some(m => m.e2ee);
+    if (!hasE2EE) return messages;
+    const sharedKey = getCachedSharedKey(chatId) || await ensureE2EEForChat(chatId);
+    if (!sharedKey) return messages;
+    return Promise.all(messages.map(async (msg) => {
+      if (!msg.e2ee || !msg.e2ee_nonce) return msg;
+      const plaintext = await decryptMessage(sharedKey, msg.text, msg.e2ee_nonce);
+      if (plaintext !== null) return { ...msg, text: plaintext };
+      return msg;
+    }));
+  };
+
+  // Отправка сообщения с поддержкой офлайн-режима
+  const sendOrQueueMessage = (msgData) => {
+    if (socket && socket.connected) {
+      socket.emit('send_message', msgData);
+    } else {
+      // Офлайн: сохраняем в очередь отправки
+      const offlineMsg = {
+        ...msgData,
+        _offline: true,
+        _localId: Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
+      };
+      queueOutgoing(offlineMsg).catch(err => console.error('[Offline] queue error:', err));
+      console.log('[Offline] Сообщение сохранено в очередь:', offlineMsg._localId);
+    }
+  };
+
+  // Отправка всех накопленных офлайн-сообщений
+  const flushOutbox = async () => {
+    if (!socket || !socket.connected) return;
+    try {
+      const queue = await getOutbox();
+      if (queue.length === 0) return;
+      console.log(`[Offline] Отправка ${queue.length} накопленных сообщений...`);
+      for (const msg of queue) {
+        socket.emit('send_message', msg);
+        await removeFromOutbox(msg.id);
+      }
+      console.log('[Offline] Очередь отправлена');
+    } catch (err) {
+      console.error('[Offline] Ошибка отправки очереди:', err);
+    }
+  };
+
   const handleSendMessage = async (e) => {
     e.preventDefault();
     if (!socket || (!hasInputContent() && !selectedFile) || !activeChatId) return;
@@ -2935,9 +3190,11 @@ function App() {
         });
         const fileData = await response.json();
 
-        socket.emit('send_message', {
+        const e2eePrepared = await prepareE2EEMessage(activeChatId, messageText);
+        sendOrQueueMessage({
           chatId: activeChatId,
-          text: messageText,
+          text: e2eePrepared.text,
+          ...(e2eePrepared.e2ee ? { e2ee: true, e2ee_nonce: e2eePrepared.e2ee_nonce, e2ee_ephemeral: e2eePrepared.e2ee_ephemeral } : {}),
           replyTo: replyToMessage ? { messageId: replyToMessage.id, text: replyToMessage.text, senderName: replyToMessage.senderName } : null,
           file: {
             filename: fileData.filename,
@@ -2968,9 +3225,11 @@ function App() {
     } else if (editingMessage) {
       // Inline-режим редактирования: отправляем edit_message с текстом из поля ввода
       const newText = messageText.trim();
+      const editE2EE = await prepareE2EEMessage(activeChatId, newText);
       socket.emit('edit_message', {
         messageId: editingMessage,
-        newText: newText
+        newText: editE2EE.text,
+        ...(editE2EE.e2ee ? { e2ee: true, e2ee_nonce: editE2EE.e2ee_nonce } : {})
       });
       setEditingMessage(null);
       setIsEditMode(false);
@@ -2984,9 +3243,11 @@ function App() {
         return newDrafts;
       });
     } else {
-      socket.emit('send_message', {
+      const e2eePrepared = await prepareE2EEMessage(activeChatId, messageText);
+      sendOrQueueMessage({
         chatId: activeChatId,
-        text: messageText,
+        text: e2eePrepared.text,
+        ...(e2eePrepared.e2ee ? { e2ee: true, e2ee_nonce: e2eePrepared.e2ee_nonce, e2ee_ephemeral: e2eePrepared.e2ee_ephemeral } : {}),
         replyTo: replyToMessage ? { messageId: replyToMessage.id, text: replyToMessage.text, senderName: replyToMessage.senderName } : null
       });
       setReplyToMessage(null);
@@ -3407,7 +3668,7 @@ function App() {
   const handleStickerSend = (stickerObj) => {
     if (!socket || !activeChatId) return;
     const text = '\x00STICKER\x00' + stickerObj.file + '\x00STICKER\x00';
-    socket.emit('send_message', {
+    sendOrQueueMessage({
       chatId: activeChatId,
       text: text,
       replyTo: replyToMessage ? { messageId: replyToMessage.id, text: replyToMessage.text, senderName: replyToMessage.senderName } : null
@@ -5033,50 +5294,19 @@ function App() {
               <div className="last-user-actions">
                 <button 
                   className="last-user-login-btn"
-                  onClick={async () => {
-                    // Автоматически выполняем вход без показа формы
-                    const savedCredentials = localStorage.getItem('chat_credentials');
-                    if (savedCredentials) {
+                  onClick={() => {
+                    // Показываем форму входа с предзаполненным email
+                    const savedEmail = localStorage.getItem('chat_credentials_email');
+                    if (savedEmail) {
                       try {
-                        const creds = JSON.parse(savedCredentials);
-                        // Устанавливаем значения для handleLogin
+                        const creds = JSON.parse(savedEmail);
                         setEmail(creds.email || '');
-                        setPassword(creds.password ? (creds._enc ? atob(creds.password) : creds.password) : '');
-                        setRememberMe(true);
-                        setAuthMode('login');
-                        setAuthError('');
-                        setIsLoading(true);
-                        
-                        // Выполняем вход напрямую
-                        try {
-                          const response = await fetch(`${SOCKET_URL}/api/login`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ email: creds.email, password: creds.password })
-                          });
-
-                          const data = await response.json();
-
-                          if (response.ok) {
-                            // Подключаемся к сокету с данными пользователя
-                            socket.emit('join', {
-                              username: data.user.username,
-                              userId: data.user.id
-                            });
-                            // Проверяем статус админа
-                            checkAdminStatus(data.user.id);
-                          } else {
-                            setAuthError(data.error || 'Ошибка входа');
-                          }
-                        } catch (err) {
-                          setAuthError('Ошибка соединения с сервером');
-                        } finally {
-                          setIsLoading(false);
-                        }
                       } catch (e) {
-                        console.error('Ошибка парсинга credentials:', e);
+                        console.error('Ошибка парсинга savedEmail:', e);
                       }
                     }
+                    setPassword('');
+                    setShowLoginForm(true);
                   }}
                 >
                   Войти
@@ -5318,14 +5548,7 @@ function App() {
   return (
     <div className="app-container">
       {/* Оверлей потери связи */}
-      {connectionStatus === 'disconnected' && (
-        <div className="disconnected-overlay">
-          <div className="disconnected-overlay-content">
-            <div className="disconnected-spinner"></div>
-            <p>Потеряно соединение с сервером. Переподключение...</p>
-          </div>
-        </div>
-      )}
+      {connectionStatus === 'disconnected' && <DisconnectedOverlay />}
 
       {/* Баннер уведомления о включении уведомлений */}
       {showNotificationBanner && browserNotificationPermission !== 'granted' && (
@@ -6659,6 +6882,20 @@ function App() {
                   </span>
                 </div>
               </div>
+              {activeChat?.type === 'direct' && (
+                <button
+                  className={`e2ee-toggle-btn ${e2eeEnabled[activeChatId] ? 'active' : ''}`}
+                  onClick={() => {
+                    setE2eeEnabled(prev => ({
+                      ...prev,
+                      [activeChatId]: !prev[activeChatId]
+                    }));
+                  }}
+                  title={e2eeEnabled[activeChatId] ? 'E2EE включено' : 'Включить E2EE'}
+                >
+                  {e2eeEnabled[activeChatId] ? '🔒' : '🔓'}
+                </button>
+              )}
               <button
                 className="chat-menu-btn"
                 onClick={handleOpenChatMenu}
@@ -7583,6 +7820,12 @@ function App() {
                 🔔 Уведомления
               </button>
               <button
+                className={`settings-tab ${activeSettingsTab === 'devices' ? 'active' : ''}`}
+                onClick={() => setActiveSettingsTab('devices')}
+              >
+                📱 Устройства
+              </button>
+              <button
                 className={`settings-tab ${activeSettingsTab === 'about' ? 'active' : ''}`}
                 onClick={() => setActiveSettingsTab('about')}
               >
@@ -7860,6 +8103,15 @@ function App() {
                     </button>
                   </div>
                 </div>
+              )}
+
+              {activeSettingsTab === 'devices' && (
+                <DevicesSettings
+                  currentUser={currentUser}
+                  SOCKET_URL={SOCKET_URL}
+                  getDeviceId={getDeviceId}
+                  getDeviceName={getDeviceName}
+                />
               )}
 
               {activeSettingsTab === 'about' && (
