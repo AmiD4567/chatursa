@@ -1,0 +1,26 @@
+version: "3.8"
+
+services:
+  chat-app:
+    build: .
+    container_name: chat-app
+    ports:
+      - "3001:3001"
+    volumes:
+      - chat-data:/data
+    environment:
+      - CHAT_APP_HOST=0.0.0.0
+      - CHAT_APP_PORT=3001
+      - CHAT_APP_DB_PATH=/data/chat.db
+      - CHAT_APP_UPLOADS_PATH=/data/uploads
+      - BACKUP_DIR=/data/backups
+      - BACKUP_ENABLED=true
+      - BACKUP_INTERVAL=60
+      - BACKUP_RETENTION=24
+      - CHAT_ENCRYPTION_KEY=${CHAT_ENCRYPTION_KEY:-}
+      - CHAT_APP_SERVER_URL=${CHAT_APP_SERVER_URL:-http://localhost:3001}
+      - HTTPS_ENABLED=${HTTPS_ENABLED:-false}
+    restart: unless-stopped
+
+volumes:
+  chat-data:

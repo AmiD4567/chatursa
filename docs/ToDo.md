@@ -2,46 +2,6 @@
 
 ## ✅ Выполнено
 
-### Проверка обновлений (GitHub Releases)
-- [x] Backend `/api/version` — возвращает текущую версию из package.json
-- [x] Backend `/api/check-update` — проверяет GitHub releases, сравнивает версии
-- [x] Electron main.js: автообновление через `electron-updater`, события передаются фронтенду (убран нативный диалог)
-- [x] Electron preload.js: IPC методы `checkForUpdates`, `downloadUpdate`, `quitAndInstall` + слушатели с cleanup
-- [x] Frontend App.js: единая система обновлений (Electron + Browser)
-  - Слушатели событий autoUpdater (checking, available, downloaded, progress, error)
-  - Функция `checkForUpdates()` — автоматически выбирает Electron или API путь
-  - Баннер с кнопками «Обновить» / «Отмена»
-  - Прогресс-бар при скачивании
-  - Кнопка «Установить и перезапустить» после завершения загрузки
-- [x] Раздел «О приложении»: кнопки используют единую систему `checkForUpdates`
-- [x] CSS: стили баннера, прогресс-бара inline, секции error/ready
-
----
-
-## 🔄 В процессе
-
-### Улучшения баннера обновлений
-- [ ] Кнопка «🔄 Обновить сейчас» на баннере — принудительная проверка + показать release notes
-- [ ] Показ `releaseName` / `publishedAt` в баннере (не только версия)
-
----
-
-## 📋 Запланировано
-
-### Bot assistant
-- [ ] Context state machine — Map(socketId -> {step, context}) для многошаговых диалогов
-- [ ] Bot analytics — трекинг команд, fallback phrases, статистика
-
-### Electron / Desktop
-- [ ] Тест публикации релизов через `node publish.js` → AmiD4567/chatursa
-- [ ] Проверка: автообновление через electron-updater работает корректно после миграции на repo `chatursa`
-
----
-
----
-
-## ✅ Выполнено
-
 ### E2EE (End-to-End Encryption)
 
 #### Бэкенд (server.js)
@@ -74,19 +34,6 @@
 - [x] UI: кнопка 🔒/🔓 в шапке direct-чата
 - [x] CSS: `.e2ee-toggle-btn` стили
 
-## 🔄 В процессе / План доработок E2EE
-
-- [ ] **Perfect Forward Secrecy** — добавить ratcheting (Double Ratchet / смена ключей при каждом N сообщений)
-- [ ] **Групповые E2EE чаты** — реализовать Sender Keys или аналогичный протокол
-- [ ] **Аудит безопасности** — проверить: нет ли утечки plaintext в IndexedDB, корректно ли очищаются ключи при logout
-- [ ] **Self-destruct сообщения** (таймер самоуничтожения для E2EE-чатов)
-- [ ] **Индикатор E2EE в списке чатов** — показывать значок замка рядом с lastMessage
-- [ ] **Отзыв/сброс ключей** — возможность перегенерировать ключи
-
----
-
-## ✅ Выполнено
-
 ### Multi-device синхронизация
 - [x] `getUserSockets(userId)` / `emitToUser(userId, event, data)` — helpers для доставки всем сессиям
 - [x] `mark_read` — уведомляет все сессии отправителей о прочтении
@@ -103,23 +50,71 @@
 - [x] Отправка deviceId при логине и reconnect
 - [x] Вкладка "📱 Устройства" в настройках с кнопкой "Завершить"
 
-## 📋 Следующие пункты
+### Офлайн-режим
+- [x] Service Worker (v2) — кэширование статики и API-запросов
+- [x] IndexedDB: хранение сообщений, чатов, outbox
+- [x] Очередь отправки при reconnect
+- [x] Fallback загрузка из кэша при недоступности сервера
 
-### Push-уведомления (Phase 1)
-- [ ] FCM для Android (Capacitor), APNs для iOS
+### Автообновления (GitHub Releases)
+- [x] Backend: `/api/version`, `/api/check-update`
+- [x] Electron: `electron-updater` + IPC + фронтенд-баннер
+- [x] Баннер с прогресс-баром, кнопками «Обновить» / «Установить и перезапустить»
 
-### Инфраструктура (Phase 1)
-- [ ] SQLite → PostgreSQL (для 50+ concurrent users)
+### Backup БД
+- [x] Авто-бэкап SQLite по расписанию (каждый час)
+- [x] Ротация (24 копии), WAL checkpoint перед копированием
+- [x] Кастомный интервал и директория через .env
 
-### Инфраструктура (Phase 1)
-- [ ] SQLite → PostgreSQL (или SQLite WAL2 с репликацией) — для 50+ concurrent users
-- [ ] Docker Compose (уже есть в плане)
+### Безопасность
+- [x] Пароль НЕ хранится в localStorage (исправлено)
+- [x] JWT, bcrypt, Helmet, HSTS, XSS, CSRF, rate limiting
+- [x] 2FA (TOTP) для админов, security logs
 
-### Phase 2 (Retention)
-- [ ] Голосовые/видеозвонки (WebRTC + TURN)
-- [ ] LDAP/SSO/OIDC интеграция
-- [ ] Архив чатов + поиск с фильтрацией
-- [ ] Треды с уведомлениями
+---
+
+## 🔄 Phase 1 (MVP) — Без этого запускаться нельзя
+
+### Push-уведомления
+- [ ] **FCM для Android (Capacitor)** — настроить Firebase Cloud Messaging
+- [ ] **APNs для iOS** — настроить Apple Push Notification service
+- [ ] Web Push (VAPID) — есть черновик, донастроить
+
+### Инфраструктура
+- [ ] **SQLite → PostgreSQL** (или SQLite WAL2 с репликацией) — для 50+ concurrent users
+- [x] **Docker Compose** — `Dockerfile` (multi-stage: frontend build + backend), `docker-compose.yml` (persistent volume для SQLite + uploads, restart policy), env vars через `CHAT_APP_*`
+
+### E2EE — доработки Phase 1
+- [ ] **Индикатор E2EE в списке чатов** — значок замка рядом с lastMessage
+- [ ] **Групповые E2EE чаты** — Sender Keys протокол
+- [ ] **Perfect Forward Secrecy** — Double Ratchet / смена ключей при каждом N сообщений
+- [ ] **Self-destruct сообщения** — таймер самоуничтожения для E2EE-чатов
+- [ ] **Аудит безопасности E2EE** — утечки plaintext в IndexedDB, очистка ключей при logout
+- [ ] **Отзыв/сброс ключей** — перегенерация через UI
+
+---
+
+## 📋 Phase 2 (Retention) — Заставит вернуться на второй день
+
+- [ ] **Голосовые и видеозвонки (WebRTC + TURN)**
+- [ ] **LDAP / SSO / OIDC интеграция** — AD, Google, Azure
+- [ ] **Архив чатов + поиск с фильтрацией** — по дате, файлам, отправителю
+- [ ] **Треды с уведомлениями**
+- [ ] **Улучшения баннера обновлений** — release notes, кнопка принудительной проверки
+- [ ] **Bot assistant** — context state machine, аналитика
+- [ ] **2FA для обычных пользователей** (TOTP)
+
+---
+
+## 📋 Phase 3 (Killer-features) — Ниша
+
+- [ ] **Self-destruct сообщения / секретные чаты** (прочитал и забыл)
+- [ ] **Полный LAN-режим (P2P mesh синхронизация)** — без интернета
+- [ ] **Корпоративный портал** — HR, опросы, документы, согласования, интеграция с 1С/Bitrix24
+- [ ] **Аудиторский лог (compliance-ready)** — неизменяемость, экспорт для регуляторов
+- [ ] **Bot API (Slack-подобные /commands)** — публичное API для интеграций
+
+---
 
 ## 🐛 Известные проблемы E2EE
 - E2EE пока только для direct-чатов (2 участника). Групповые чаты используют серверное шифрование

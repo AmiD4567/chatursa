@@ -1428,7 +1428,12 @@ app.get('/api/admin/files', (req, res) => {
       WHERE file_data IS NOT NULL
       ORDER BY timestamp DESC
     `).all().map(row => {
-      const fileData = JSON.parse(row.file_data);
+      let fileData;
+      try {
+        fileData = JSON.parse(row.file_data);
+      } catch {
+        return null;
+      }
       return {
         id: row.id,
         name: fileData.name || 'Без имени',
@@ -1437,7 +1442,7 @@ app.get('/api/admin/files', (req, res) => {
         mime_type: fileData.mimetype || '',
         created_at: row.timestamp
       };
-    });
+    }).filter(Boolean);
 
     res.json({ files: filesList });
   } catch (err) {
