@@ -14,12 +14,28 @@ const bcrypt = require('bcryptjs');
 const Database = require('better-sqlite3');
 const crypto = require('crypto');
 const webPush = require('web-push');
+const admin = require('firebase-admin');
+const { getMessaging } = require('firebase-admin/messaging');
 const speakeasy = require('speakeasy');
 const QRCode = require('qrcode');
 const cookieParser = require('cookie-parser');
 
 // Загрузка .env файла
 try { require('dotenv').config({ path: path.join(__dirname, '.env') }); } catch (e) {}
+
+// Firebase Admin SDK (FCM)
+const FCM_SERVICE_ACCOUNT_PATH = process.env.FCM_SERVICE_ACCOUNT_PATH || path.join(__dirname, 'firebase-service-account.json');
+if (fs.existsSync(FCM_SERVICE_ACCOUNT_PATH)) {
+  try {
+    const serviceAccount = require(FCM_SERVICE_ACCOUNT_PATH);
+    admin.initializeApp({ credential: admin.cert(serviceAccount) });
+    console.log('✅ Firebase Admin SDK инициализирован (FCM)');
+  } catch (e) {
+    console.warn('⚠️ Ошибка инициализации Firebase:', e.message);
+  }
+} else {
+  console.warn('⚠️ Firebase service account не найден, FCM недоступен');
+}
 
 // VAPID keys for Web Push
 const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || 'BHOqP4mk3F0J_T0HPrs3KfZINBiqgj--SKHK6axuY8YqMsA6_qOZnD01DS7Ou2KchkUOY51Oz5Fpwk5_oPG9yco';
@@ -447,6 +463,8 @@ function initDatabase() {
     { table: 'messages', column: 'e2ee', type: 'INTEGER DEFAULT 0' },
     { table: 'messages', column: 'e2ee_nonce', type: 'TEXT' },
     { table: 'messages', column: 'e2ee_ephemeral', type: 'TEXT' },
+    { table: 'messages', column: 'expires_at', type: 'TEXT' },
+    { table: 'chats', column: 'e2ee', type: 'INTEGER DEFAULT 0' },
     { table: 'calendar_tasks', column: 'task_time', type: 'TEXT' },
     { table: 'calendar_tasks', column: 'task_end_time', type: 'TEXT' },
     { table: 'calendar_tasks', column: 'reminder_time', type: 'TEXT' },
@@ -560,6 +578,14 @@ function initDatabase() {
       PRIMARY KEY (chat_id, user_id)
     );
 
+    CREATE TABLE IF NOT EXISTS group_e2ee_keys (
+      chat_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      encrypted_key TEXT NOT NULL,
+      rotated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (chat_id, user_id)
+    );
+
     CREATE TABLE IF NOT EXISTS messages (
       id TEXT PRIMARY KEY,
       chat_id TEXT NOT NULL,
@@ -626,6 +652,15 @@ function initDatabase() {
       FOREIGN KEY (user_id) REFERENCES users(id)
     );
     CREATE INDEX IF NOT EXISTS idx_push_user ON push_subscriptions(user_id);
+
+    CREATE TABLE IF NOT EXISTS fcm_tokens (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      token TEXT NOT NULL UNIQUE,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_fcm_user ON fcm_tokens(user_id);
 
     CREATE INDEX IF NOT EXISTS idx_messages_chat_id ON messages(chat_id);
     CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
@@ -1975,6 +2010,76 @@ app.get('/api/e2ee/status/:userId', (req, res) => {
   }
 });
 
+// ============================================
+// Group E2EE API
+// ============================================
+
+// Получить зашифрованный групповой ключ для участника
+app.get('/api/e2ee/group-key/:chatId', (req, res) => {
+  const { chatId } = req.params;
+  const { userId } = req.query;
+  if (!chatId || !userId) return res.status(400).json({ error: 'chatId и userId обязательны' });
+  try {
+    const row = db.prepare('SELECT encrypted_key FROM group_e2ee_keys WHERE chat_id = ? AND user_id = ?').get(chatId, userId);
+    if (row) {
+      res.json({ encryptedKey: row.encrypted_key });
+    } else {
+      res.status(404).json({ error: 'Ключ не найден' });
+    }
+  } catch (err) {
+    console.error('Ошибка получения группового ключа:', err);
+    res.status(500).json({ error: 'Ошибка сервера' });
+  }
+});
+
+// Загрузить зашифрованные групповые ключи для всех участников
+app.put('/api/e2ee/group-key', (req, res) => {
+  const { chatId, keys } = req.body; // keys: [{ userId, encryptedKey }]
+  if (!chatId || !keys || !Array.isArray(keys) || keys.length === 0) {
+    return res.status(400).json({ error: 'chatId и keys обязательны' });
+  }
+  try {
+    const insert = db.prepare('INSERT OR REPLACE INTO group_e2ee_keys (chat_id, user_id, encrypted_key) VALUES (?, ?, ?)');
+    const tx = db.transaction((keysData) => {
+      for (const k of keysData) {
+        insert.run(chatId, k.userId, k.encryptedKey);
+      }
+    });
+    tx(keys);
+    db.run('UPDATE chats SET e2ee = 1 WHERE id = ?', [chatId]);
+    markDbActivity();
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Ошибка сохранения групповых ключей:', err);
+    res.status(500).json({ error: 'Ошибка сервера' });
+  }
+});
+
+// Удалить групповые ключи (при отключении E2EE или смене состава)
+app.delete('/api/e2ee/group-key/:chatId', (req, res) => {
+  const { chatId } = req.params;
+  try {
+    db.run('DELETE FROM group_e2ee_keys WHERE chat_id = ?', [chatId]);
+    db.run('UPDATE chats SET e2ee = 0 WHERE id = ?', [chatId]);
+    markDbActivity();
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Ошибка удаления групповых ключей:', err);
+    res.status(500).json({ error: 'Ошибка сервера' });
+  }
+});
+
+// Получить список участников, у кого есть ключ (для проверки статуса)
+app.get('/api/e2ee/group-key/:chatId/members', (req, res) => {
+  const { chatId } = req.params;
+  try {
+    const rows = db.prepare('SELECT user_id FROM group_e2ee_keys WHERE chat_id = ?').all(chatId);
+    res.json({ members: rows.map(r => r.user_id) });
+  } catch (err) {
+    res.status(500).json({ error: 'Ошибка сервера' });
+  }
+});
+
 // Получение списка активных сессий пользователя (multi-device)
 app.get('/api/sessions/:userId', (req, res) => {
   const { userId } = req.params;
@@ -2668,6 +2773,35 @@ app.delete('/api/push/subscribe', (req, res) => {
   }
 });
 
+// ============================================
+// FCM API для Android push-уведомлений
+// ============================================
+
+// Регистрация FCM-токена
+app.post('/api/push/fcm/register', (req, res) => {
+  const { userId, token, unregister } = req.body;
+  if (unregister === 'true') {
+    try {
+      db.run('DELETE FROM fcm_tokens WHERE token = ?', [token]);
+      return res.json({ success: true });
+    } catch (err) {
+      return res.status(500).json({ error: 'Ошибка удаления FCM-токена' });
+    }
+  }
+  if (!userId || !token) {
+    return res.status(400).json({ error: 'userId и token обязательны' });
+  }
+  try {
+    const id = uuidv4();
+    db.run('INSERT OR REPLACE INTO fcm_tokens (id, user_id, token, created_at) VALUES (?, ?, ?, ?)',
+      [id, userId, token, new Date().toISOString()]);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Ошибка сохранения FCM-токена:', err);
+    res.status(500).json({ error: 'Ошибка сохранения токена' });
+  }
+});
+
 // API для отправки задачи другому пользователю
 app.post('/api/calendar/tasks/:taskId/share', (req, res) => {
   const { taskId } = req.params;
@@ -3109,6 +3243,39 @@ app.get('/api/thread/:messageId', (req, res) => {
   } catch (err) {
     console.error('Ошибка загрузки треда:', err);
     res.status(500).json({ error: 'Ошибка при загрузке треда' });
+  }
+});
+
+// API для отметки сообщений как прочитанных (из push-уведомления)
+app.post('/api/messages/read', (req, res) => {
+  const { chatId, userId } = req.body;
+  if (!chatId || !userId) {
+    return res.status(400).json({ error: 'chatId и userId обязательны' });
+  }
+
+  try {
+    db.run('DELETE FROM unread_messages WHERE user_id = ? AND chat_id = ?', [userId, chatId]);
+
+    const now = new Date().toISOString();
+    db.run(`
+      UPDATE messages
+      SET read_at = ?
+      WHERE chat_id = ? AND sender_id != ? AND read_at IS NULL
+    `, [now, chatId, userId]);
+
+    const senderRows = db.prepare(`
+      SELECT DISTINCT sender_id FROM messages WHERE chat_id = ? AND sender_id != ?
+    `).all(chatId, userId);
+    const senderIds = senderRows.map(row => row.sender_id);
+
+    senderIds.forEach(senderId => {
+      emitToUser(senderId, 'messages_read', { chatId, readBy: userId, readAt: now });
+    });
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Ошибка отметки прочитанных:', err);
+    res.status(500).json({ error: 'Ошибка сервера' });
   }
 });
 
@@ -3665,7 +3832,8 @@ function getChatWithDetails(chatId, userId = null) {
     participants: participants.map(p => p.username),
     participantsDetails: participants,
     unreadCount,
-    lastMessage
+    lastMessage,
+    e2ee: chat.e2ee || 0
   };
 }
 
@@ -3721,14 +3889,16 @@ function getUserChats(userId) {
 function getChatMessages(chatId, limit = 100) {
   try {
     // Сначала получаем последние N сообщений в обратном порядке (новые первые)
+    // Исключаем просроченные self-destruct сообщения
     const messagesReversed = db.prepare(`
       SELECT m.*, u.username as senderName, u.avatar as senderAvatar
       FROM messages m
       JOIN users u ON m.sender_id = u.id
       WHERE m.chat_id = ?
+        AND (m.expires_at IS NULL OR m.expires_at > ?)
       ORDER BY m.timestamp DESC
       LIMIT ?
-    `).all(chatId, limit);
+    `).all(chatId, new Date().toISOString(), limit);
 
     // Переворачиваем чтобы получить в правильном порядке (старые первые)
     const messages = [];
@@ -3796,7 +3966,8 @@ function getChatMessages(chatId, limit = 100) {
         reactions: Object.keys(reactions).length > 0 ? reactions : undefined,
         e2ee: isE2EE ? 1 : 0,
         e2ee_nonce: isE2EE ? (row.e2ee_nonce || '') : undefined,
-        e2ee_ephemeral: isE2EE ? (row.e2ee_ephemeral || '') : undefined
+        e2ee_ephemeral: isE2EE ? (row.e2ee_ephemeral || '') : undefined,
+        expires_at: row.expires_at || null
       });
     }
     const replyCounts = {};
@@ -3859,7 +4030,30 @@ function sendPushNotification(userId, title, body, icon, data) {
         });
     }
   } catch (err) {
-    console.error('Ошибка отправки push-уведомления:', err.message);
+    console.error('Ошибка отправки Web Push:', err.message);
+  }
+}
+
+function sendFcmNotification(userId, title, body, data) {
+  if (!admin.apps.length) return;
+  try {
+    const rows = db.prepare('SELECT token FROM fcm_tokens WHERE user_id = ?').all(userId);
+    if (!rows.length) return;
+    const message = {
+      tokens: rows.map(r => r.token),
+      notification: { title, body },
+      data: Object.fromEntries(Object.entries(data || {}).map(([k, v]) => [k, String(v)])),
+      android: { priority: 'high', ttl: 86400000 }
+    };
+    getMessaging().sendEachForMulticast(message).then(response => {
+      response.responses.forEach((resp, idx) => {
+        if (!resp.success && resp.error?.code === 'messaging/registration-token-not-registered') {
+          db.run('DELETE FROM fcm_tokens WHERE token = ?', [rows[idx].token]);
+        }
+      });
+    }).catch(err => console.error('Ошибка отправки FCM:', err.message));
+  } catch (err) {
+    console.error('Ошибка отправки FCM:', err.message);
   }
 }
 
@@ -4335,7 +4529,7 @@ io.on('connection', (socket) => {
       socket.emit('error', { message: 'Слишком много запросов. Подождите.' });
       return;
     }
-    const { chatId, text, file, forwardedFrom, replyTo, e2ee, e2ee_nonce, e2ee_ephemeral } = data;
+    const { chatId, text, file, forwardedFrom, replyTo, e2ee, e2ee_nonce, e2ee_ephemeral, expiresAt } = data;
     let onlineUser = onlineUsers.get(socket.id);
 
     if (!onlineUser) {
@@ -4390,10 +4584,11 @@ io.on('connection', (socket) => {
       }
 
       // Вставляем сообщение с временем клиента
+      const expiresAtStr = expiresAt || null;
       db.run(`
-        INSERT INTO messages (id, chat_id, sender_id, text, file_data, reply_to, timestamp, forwarded_from, e2ee, e2ee_nonce, e2ee_ephemeral)
-        VALUES (?, ?, ?, ?, ${fileDataStr ? `'${fileDataStr}'` : 'NULL'}, ${replyToStr ? `'${replyToStr.replace(/'/g, "''")}'` : 'NULL'}, ?, ${forwardedFromStr ? `'${forwardedFromStr}'` : 'NULL'}, ?, ?, ?)
-      `, [messageId, chatId, onlineUser.id, storedText, timestamp, storedE2EE, storedNonce, storedEphemeral]);
+        INSERT INTO messages (id, chat_id, sender_id, text, file_data, reply_to, timestamp, forwarded_from, e2ee, e2ee_nonce, e2ee_ephemeral, expires_at)
+        VALUES (?, ?, ?, ?, ${fileDataStr ? `'${fileDataStr}'` : 'NULL'}, ${replyToStr ? `'${replyToStr.replace(/'/g, "''")}'` : 'NULL'}, ?, ${forwardedFromStr ? `'${forwardedFromStr}'` : 'NULL'}, ?, ?, ?, ?)
+      `, [messageId, chatId, onlineUser.id, storedText, timestamp, storedE2EE, storedNonce, storedEphemeral, expiresAtStr]);
 
       // Помечаем активность БД — перезапускает таймер автосохранения
       markDbActivity();
@@ -4401,7 +4596,7 @@ io.on('connection', (socket) => {
       // Получаем информацию о сообщении
       const msgRow = db.prepare(`
         SELECT m.id, m.chat_id, m.sender_id, m.text, m.file_data, m.reply_to, m.timestamp, m.forwarded_from,
-               m.e2ee, m.e2ee_nonce, m.e2ee_ephemeral,
+               m.e2ee, m.e2ee_nonce, m.e2ee_ephemeral, m.expires_at,
                u.username as senderName, u.avatar as senderAvatar
         FROM messages m
         JOIN users u ON m.sender_id = u.id
@@ -4423,7 +4618,8 @@ io.on('connection', (socket) => {
           senderAvatar: String(msgRow.senderAvatar || msgRow.avatar || ''),
           e2ee: isE2EE ? 1 : 0,
           e2ee_nonce: isE2EE ? String(msgRow.e2ee_nonce || '') : undefined,
-          e2ee_ephemeral: isE2EE ? String(msgRow.e2ee_ephemeral || '') : undefined
+          e2ee_ephemeral: isE2EE ? String(msgRow.e2ee_ephemeral || '') : undefined,
+          expires_at: msgRow.expires_at || null
         };
       }
 
@@ -4472,7 +4668,8 @@ io.on('connection', (socket) => {
         readBy: [onlineUser.username],
         e2ee: messageRow.e2ee || 0,
         e2ee_nonce: messageRow.e2ee_nonce,
-        e2ee_ephemeral: messageRow.e2ee_ephemeral
+        e2ee_ephemeral: messageRow.e2ee_ephemeral,
+        expires_at: messageRow.expires_at || null
       };
 
       // Обновляем квоту загрузок
@@ -4498,6 +4695,7 @@ io.on('connection', (socket) => {
       participants.forEach(pUserId => {
         if (pUserId !== onlineUser.id && !onlineUserIds.has(pUserId)) {
           sendPushNotification(pUserId, chatName, formattedMessage.text || '📎 Файл', formattedMessage.senderAvatar, { chatId, messageId });
+          sendFcmNotification(pUserId, chatName, (formattedMessage.senderName || '') + ': ' + (formattedMessage.text || '📎 Файл'), { chatId, messageId, senderId: formattedMessage.senderId });
         }
       });
     
@@ -4520,29 +4718,29 @@ io.on('connection', (socket) => {
       const command = text.trim().toLowerCase().split(' ')[0];
 
       // State machine: проверяем контекст разговора
-      const stateResult = processConversationState(conversationStates, sendBotMessage, socket.id, text);
+      const stateResult = processConversationState(conversationStates, sendBotMessage, socket, chatId, text);
 
-      if (stateResult.response !== null) {
-        // State machine вернул ответ — отправляем и выходим
+      if (stateResult.handled) {
         return;
       }
 
-      // Если это команда начала нового диалога (/создать задачу)
+      // Если это команда начала нового диалога
       if (isDialogStartCommand(text)) {
-        startConversation(conversationStates, sendBotMessage, socket.id);
-        botAnalytics.recordCommand('/создать задачу');
+        const cleanCommand = text.trim().toLowerCase();
+        startConversation(conversationStates, sendBotMessage, socket, chatId, cleanCommand);
+        botAnalytics.recordCommand(cleanCommand);
         return;
       }
 
       // Обычные команды с данными
       if (command === '/сегодня') {
-        handleTodayCommand({ db, sendBotMessage }, onlineUser, chatId);
+        handleTodayCommand({ db, sendBotMessage, socket, chatId }, onlineUser);
         botAnalytics.recordCommand('/сегодня');
         return;
       }
 
       if (command === '/контакты') {
-        handleContactsCommand({ db, sendBotMessage }, chatId);
+        handleContactsCommand({ db, sendBotMessage, socket, chatId });
         botAnalytics.recordCommand('/контакты');
         return;
       }
@@ -4777,9 +4975,11 @@ io.on('connection', (socket) => {
 
     // Уведомляем всех участников чата об изменении сообщения
     const chatId = message.chat_id;
+    // Для не-E2EE сообщений расшифровываем перед отправкой (как в send_message)
+    const emitText = isEditE2EE ? storedEditText : decryptText(storedEditText);
     io.to(chatId).emit('message_edited', {
       messageId,
-      newText: storedEditText,
+      newText: emitText,
       editedBy: onlineUser.id,
       editedAt,
       e2ee: isEditE2EE ? 1 : 0,
@@ -4975,7 +5175,6 @@ io.on('connection', (socket) => {
 
       onlineUsers.delete(socket.id);
       botRateLimit.delete(socket.id); // Очистка rate-limiting при отключении
-      clearConversation(conversationStates, socket.id); // Очистка контекста разговора
     }
   });
 
@@ -5417,6 +5616,30 @@ try {
     console.log(`URL для клиентов: ${SERVER_URL}`);
     console.log(`База данных: ${DB_PATH}`);
     console.log(`Путь загрузок: ${UPLOADS_PATH}`);
+
+    // Очистка self-destruct сообщений каждые 10 секунд
+    setInterval(() => {
+      try {
+        const now = new Date().toISOString();
+        const expiredMessages = db.prepare(`
+          SELECT id, chat_id FROM messages WHERE expires_at IS NOT NULL AND expires_at <= ?
+        `).all(now);
+        for (const msg of expiredMessages) {
+          db.run('DELETE FROM messages WHERE id = ?', [msg.id]);
+          db.run('DELETE FROM message_reactions WHERE message_id = ?', [msg.id]);
+          io.to(msg.chat_id).emit('message_deleted', {
+            messageId: msg.id,
+            deletedBy: 'system',
+            chatId: msg.chat_id
+          });
+        }
+        if (expiredMessages.length > 0) {
+          markDbActivity();
+        }
+      } catch (e) {
+        console.error('Ошибка очистки self-destruct сообщений:', e.message);
+      }
+    }, 10000);
   });
 } catch (err) {
   console.error('Ошибка инициализации БД:', err);
