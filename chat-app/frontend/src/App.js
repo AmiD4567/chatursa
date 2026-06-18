@@ -7,11 +7,38 @@ import { splitTextByUrls, detectUrls } from './urlUtils';
 import { useReactionParticles } from './ReactionParticlesManager';
 import emojiData from './emojiData.json';
 import { saveMessages, getMessages, saveChats, getChats, queueOutgoing, getOutbox, removeFromOutbox } from './db';
-import { initE2EEForUser, ensureSharedKey, encryptMessage, decryptMessage, getCachedSharedKey, setE2EEApiBase } from './crypto';
+import { initE2EEForUser, ensureSharedKey, encryptMessage, decryptMessage, getCachedSharedKey, setE2EEApiBase, getCachedGroupKey, cacheGroupKey, decryptGroupKey, generateGroupKey, encryptGroupKeyForMember, getPeerPublicKey } from './crypto';
 import DisconnectedOverlay from './DisconnectedOverlay';
 
 const SOCKET_URL = 'http://192.168.210.48:3001';
 const STORAGE_KEY = 'chat_user_data';
+
+const SELF_DESTRUCT_OPTIONS = [
+  { label: '5 секунд', value: 5000 },
+  { label: '30 секунд', value: 30000 },
+  { label: '1 минута', value: 60000 },
+  { label: '5 минут', value: 300000 },
+  { label: '1 час', value: 3600000 },
+  { label: '24 часа', value: 86400000 }
+];
+
+function getTimerLabel(ms) {
+  const opt = SELF_DESTRUCT_OPTIONS.find(o => o.value === ms);
+  return opt ? opt.label : '';
+}
+
+function formatTimeRemaining(expiresAt) {
+  const remaining = new Date(expiresAt).getTime() - Date.now();
+  if (remaining <= 0) return '0 сек';
+  const secs = Math.floor(remaining / 1000);
+  if (secs < 60) return `${secs} сек`;
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins} мин`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours} ч`;
+  const days = Math.floor(hours / 24);
+  return `${days} д`;
+}
 
 // Получить или создать идентификатор устройства (persistent в localStorage)
 function getDeviceId() {
@@ -158,6 +185,8 @@ function App() {
   const [typingUsers, setTypingUsers] = useState({}); // { userId: { username, timeout } }
   const [showNewChatModal, setShowNewChatModal] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [selfDestructTimer, setSelfDestructTimer] = useState(null); // null | 5000 | 30000 | 60000 | 3600000
+  const [showTimerPicker, setShowTimerPicker] = useState(false);
   const [emojiPickerPinned, setEmojiPickerPinned] = useState(false);
   const openEmojiTimerRef = useRef(null);
   const closeEmojiTimerRef = useRef(null);
@@ -308,6 +337,42 @@ function App() {
   const [expandedSections, setExpandedSections] = useState({ birthdays: true, tasks: true, sharedTasks: true });
   const [unreadNotificationsCount, setUnreadNotificationsCount] = useState(0); // Количество непрочитанных уведомлений
   const [showNotificationSettings, setShowNotificationSettings] = useState(false);
+  const [showPollModal, setShowPollModal] = useState(false);
+  const [pollQuestion, setPollQuestion] = useState('');
+  const [pollOptions, setPollOptions] = useState(['', '']);
+  const [pollIsAnonymous, setPollIsAnonymous] = useState(false);
+  const [pollAllowsMultiple, setPollAllowsMultiple] = useState(false);
+  const [pollClosesAt, setPollClosesAt] = useState('');
+  const [pollHideResults, setPollHideResults] = useState(false);
+  const [pollLoading, setPollLoading] = useState(false);
+  const [showAnnouncements, setShowAnnouncements] = useState(false);
+  const [wikiCategories, setWikiCategories] = useState([]);
+  const [wikiArticles, setWikiArticles] = useState([]);
+  const [wikiActiveCategory, setWikiActiveCategory] = useState(null);
+  const [wikiActiveArticle, setWikiActiveArticle] = useState(null);
+  const [wikiEditMode, setWikiEditMode] = useState(false);
+  const [wikiEditTitle, setWikiEditTitle] = useState('');
+  const [wikiEditContent, setWikiEditContent] = useState('');
+  const [wikiEditCategory, setWikiEditCategory] = useState('');
+  const [showWikiCategoryModal, setShowWikiCategoryModal] = useState(false);
+  const [wikiCategoryName, setWikiCategoryName] = useState('');
+  const [wikiCategoryDesc, setWikiCategoryDesc] = useState('');
+  const [wikiFileUploading, setWikiFileUploading] = useState(false);
+  const [wikiFiles, setWikiFiles] = useState([]);
+  const [wikiSearch, setWikiSearch] = useState('');
+  const [showHR, setShowHR] = useState(false);
+  const [hrRequests, setHrRequests] = useState([]);
+  const [showHRCreate, setShowHRCreate] = useState(false);
+  const [hrForm, setHrForm] = useState({ type: 'vacation', startDate: '', endDate: '', reason: '' });
+  const [hrLoading, setHrLoading] = useState(false);
+  const [hrViewMode, setHrViewMode] = useState('my'); // 'my' or 'pending'
+  const [announcements, setAnnouncements] = useState([]);
+  const [showCreateAnnouncement, setShowCreateAnnouncement] = useState(false);
+  const [announcementTitle, setAnnouncementTitle] = useState('');
+  const [announcementContent, setAnnouncementContent] = useState('');
+  const [announcementPriority, setAnnouncementPriority] = useState('normal');
+  const [announcementLoading, setAnnouncementLoading] = useState(false);
+  const [unreadAnnouncements, setUnreadAnnouncements] = useState(0);
   const [notificationSettings, setNotificationSettings] = useState({
     newMessages: true,
     birthdays: true,
@@ -1158,6 +1223,17 @@ function App() {
       }));
       setChats(chatsWithZeroUnread);
 
+      // Инициализируем E2EE статус из данных сервера (групповые чаты)
+      const initialE2EE = {};
+      for (const chat of chatsWithZeroUnread) {
+        if (chat.e2ee) {
+          initialE2EE[chat.id] = true;
+        }
+      }
+      if (Object.keys(initialE2EE).length > 0) {
+        setE2eeEnabled(prev => ({ ...prev, ...initialE2EE }));
+      }
+
       // Сохраняем список чатов в IndexedDB для офлайн-доступа
       saveChats(chatsWithZeroUnread).catch(err => console.error('[Offline] save chats error:', err));
 
@@ -1678,6 +1754,22 @@ function App() {
       ));
     });
 
+    // === ОБРАБОТКА ОПРОСОВ ===
+    newSocket.on('poll_vote', ({ poll }) => {
+      setMessages(prev => prev.map(msg => {
+        if (!msg.poll || msg.poll.id !== poll.id) return msg;
+        return { ...msg, poll: { ...poll, votedIndices: msg.poll.votedIndices || [] } };
+      }));
+    });
+
+    // === ОБРАБОТКА ОБЪЯВЛЕНИЙ ===
+    newSocket.on('new_announcement', () => {
+      setUnreadAnnouncements(prev => prev + 1);
+      if (showAnnouncements) {
+        fetchAnnouncements();
+      }
+    });
+
     // === ОБРАБОТКА РЕАКЦИЙ ===
 
     // Обработка добавления реакции
@@ -2038,6 +2130,20 @@ function App() {
         setPassword('');
         // Проверяем статус админа
         checkAdminStatus(data.user.id);
+
+        // Регистрируем push-подписку
+        const pushSub = window.__pushSubscription || JSON.parse(localStorage.getItem('chat_push_subscription') || 'null');
+        if (pushSub) {
+          try {
+            await fetch(`${SOCKET_URL}/api/push/subscribe`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ userId: data.user.id, subscription: pushSub })
+            });
+          } catch (err) {
+            console.warn('[Push] Ошибка регистрации подписки:', err.message);
+          }
+        }
       } else {
         setAuthError(data.error || 'Ошибка входа');
       }
@@ -2126,6 +2232,19 @@ function App() {
 
   const confirmLogout = () => {
     localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem('chat_push_subscription');
+
+    // Отписываемся от push-уведомлений
+    const pushSub = window.__pushSubscription;
+    if (pushSub && pushSub.endpoint) {
+      fetch(`${SOCKET_URL}/api/push/subscribe`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ endpoint: pushSub.endpoint })
+      }).catch(() => {});
+      window.__pushSubscription = null;
+    }
+
     setIsLoggedIn(false);
     setCurrentUser(null);
     setChats([]);
@@ -3092,12 +3211,37 @@ function App() {
   const ensureE2EEForChat = async (chatId) => {
     const cached = getCachedSharedKey(chatId);
     if (cached) return cached;
+    const cachedGroup = getCachedGroupKey(chatId);
+    if (cachedGroup) return cachedGroup;
     if (!myKeyPairRef.current || !currentUser) return null;
     const chat = chats.find(c => c.id === chatId);
-    if (!chat || chat.type !== 'direct') return null;
-    const otherUser = chat.participantsDetails?.find(p => p.username !== currentUser?.username);
-    if (!otherUser) return null;
-    return ensureSharedKey(chatId, otherUser.id, myKeyPairRef.current.privateKey);
+    if (!chat) return null;
+
+    if (chat.type === 'direct') {
+      const otherUser = chat.participantsDetails?.find(p => p.username !== currentUser?.username);
+      if (!otherUser) return null;
+      return ensureSharedKey(chatId, otherUser.id, myKeyPairRef.current.privateKey);
+    }
+
+    if (chat.type === 'group') {
+      try {
+        const res = await fetch(`${SOCKET_URL}/api/e2ee/group-key/${chatId}?userId=${currentUser.id}`);
+        if (!res.ok) return null;
+        const data = await res.json();
+        if (!data.encryptedKey) return null;
+        const parsed = JSON.parse(data.encryptedKey);
+        const groupKey = await decryptGroupKey(myKeyPairRef.current.privateKey, parsed.encryptedKey, parsed.nonce, parsed.encryptedBy);
+        if (groupKey) {
+          cacheGroupKey(chatId, groupKey);
+          return groupKey;
+        }
+      } catch (err) {
+        console.error('[E2EE] group key fetch error:', err);
+      }
+      return null;
+    }
+
+    return null;
   };
 
   // E2EE: зашифровать текст для чата
@@ -3191,11 +3335,13 @@ function App() {
         const fileData = await response.json();
 
         const e2eePrepared = await prepareE2EEMessage(activeChatId, messageText);
+        const expiresAt = selfDestructTimer ? new Date(Date.now() + selfDestructTimer).toISOString() : null;
         sendOrQueueMessage({
           chatId: activeChatId,
           text: e2eePrepared.text,
           ...(e2eePrepared.e2ee ? { e2ee: true, e2ee_nonce: e2eePrepared.e2ee_nonce, e2ee_ephemeral: e2eePrepared.e2ee_ephemeral } : {}),
           replyTo: replyToMessage ? { messageId: replyToMessage.id, text: replyToMessage.text, senderName: replyToMessage.senderName } : null,
+          ...(expiresAt ? { expiresAt } : {}),
           file: {
             filename: fileData.filename,
             url: fileData.url,
@@ -3203,6 +3349,7 @@ function App() {
             mimetype: fileData.mimetype
           }
         });
+        setSelfDestructTimer(null);
       } catch (error) {
         console.error('Ошибка загрузки файла:', error);
       } finally {
@@ -3244,12 +3391,15 @@ function App() {
       });
     } else {
       const e2eePrepared = await prepareE2EEMessage(activeChatId, messageText);
+      const expiresAt = selfDestructTimer ? new Date(Date.now() + selfDestructTimer).toISOString() : null;
       sendOrQueueMessage({
         chatId: activeChatId,
         text: e2eePrepared.text,
         ...(e2eePrepared.e2ee ? { e2ee: true, e2ee_nonce: e2eePrepared.e2ee_nonce, e2ee_ephemeral: e2eePrepared.e2ee_ephemeral } : {}),
-        replyTo: replyToMessage ? { messageId: replyToMessage.id, text: replyToMessage.text, senderName: replyToMessage.senderName } : null
+        replyTo: replyToMessage ? { messageId: replyToMessage.id, text: replyToMessage.text, senderName: replyToMessage.senderName } : null,
+        ...(expiresAt ? { expiresAt } : {})
       });
+      setSelfDestructTimer(null);
       setReplyToMessage(null);
       setInputText('');
       // Очищаем contentEditable div
@@ -3269,6 +3419,318 @@ function App() {
     const file = e.target.files[0];
     if (file) {
       setSelectedFile(file);
+    }
+  };
+
+  // Создание опроса
+  const handleCreatePoll = async () => {
+    const question = pollQuestion.trim();
+    const options = pollOptions.map(o => o.trim()).filter(Boolean);
+    if (!question || options.length < 2 || !activeChatId || !currentUser) return;
+    setPollLoading(true);
+    try {
+      const res = await fetch(`${SOCKET_URL}/api/polls`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chatId: activeChatId,
+          userId: currentUser.id,
+          question,
+          options,
+          isAnonymous: pollIsAnonymous,
+          allowsMultiple: pollAllowsMultiple,
+          closesAt: pollClosesAt ? new Date(pollClosesAt).toISOString() : null,
+          hideResultsUntilClose: pollHideResults
+        })
+      });
+      if (res.ok) {
+        setShowPollModal(false);
+        setPollQuestion('');
+        setPollOptions(['', '']);
+        setPollIsAnonymous(false);
+        setPollAllowsMultiple(false);
+        setPollClosesAt('');
+        setPollHideResults(false);
+      }
+    } catch (err) {
+      console.error('Ошибка создания опроса:', err);
+    } finally {
+      setPollLoading(false);
+    }
+  };
+
+  const handlePollVote = async (pollId, optionIndex) => {
+    if (!currentUser) return;
+    try {
+      const res = await fetch(`${SOCKET_URL}/api/polls/${pollId}/vote`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: currentUser.id, optionIndex })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.poll) {
+          setMessages(prev => prev.map(msg =>
+            msg.poll && msg.poll.id === pollId
+              ? { ...msg, poll: data.poll }
+              : msg
+          ));
+        }
+      }
+    } catch (err) {
+      console.error('Ошибка голосования:', err);
+    }
+  };
+
+  // Объявления
+  const fetchAnnouncements = async () => {
+    if (!currentUser) return;
+    try {
+      const res = await fetch(`${SOCKET_URL}/api/announcements?userId=${currentUser.id}`);
+      if (res.ok) {
+        const data = await res.json();
+        setAnnouncements(data.announcements || []);
+      }
+    } catch (err) {
+      console.error('Ошибка загрузки объявлений:', err);
+    }
+  };
+
+  const handleCreateAnnouncement = async () => {
+    if (!currentUser || !announcementTitle.trim() || !announcementContent.trim()) return;
+    setAnnouncementLoading(true);
+    try {
+      const res = await fetch(`${SOCKET_URL}/api/announcements`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: currentUser.id,
+          title: announcementTitle.trim(),
+          content: announcementContent.trim(),
+          priority: announcementPriority
+        })
+      });
+      if (res.ok) {
+        setShowCreateAnnouncement(false);
+        setAnnouncementTitle('');
+        setAnnouncementContent('');
+        setAnnouncementPriority('normal');
+        fetchAnnouncements();
+      }
+    } catch (err) {
+      console.error('Ошибка создания объявления:', err);
+    } finally {
+      setAnnouncementLoading(false);
+    }
+  };
+
+  const handleMarkAnnouncementRead = async (announcementId) => {
+    if (!currentUser) return;
+    try {
+      await fetch(`${SOCKET_URL}/api/announcements/${announcementId}/read`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: currentUser.id })
+      });
+      setAnnouncements(prev => prev.map(a =>
+        a.id === announcementId ? { ...a, isRead: true, myReadAt: new Date().toISOString() } : a
+      ));
+    } catch (err) {
+      console.error('Ошибка отметки прочтения:', err);
+    }
+  };
+
+  // Wiki / База знаний
+  const loadWikiData = async () => {
+    try {
+      const [catRes, artRes] = await Promise.all([
+        fetch(`${SOCKET_URL}/api/wiki/categories`),
+        fetch(`${SOCKET_URL}/api/wiki/articles?userId=${currentUser?.id}`)
+      ]);
+      if (catRes.ok) {
+        const catData = await catRes.json();
+        setWikiCategories(catData.categories || []);
+      }
+      if (artRes.ok) {
+        const artData = await artRes.json();
+        setWikiArticles(artData.articles || []);
+      }
+    } catch (err) {
+      console.error('Ошибка загрузки Wiki:', err);
+    }
+  };
+
+  const wikiSaveArticle = async () => {
+    if (!currentUser || !wikiEditTitle.trim()) return;
+    try {
+      if (wikiActiveArticle) {
+        await fetch(`${SOCKET_URL}/api/wiki/articles/${wikiActiveArticle.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: wikiEditTitle.trim(),
+            content: wikiEditContent,
+            categoryId: wikiEditCategory || null,
+            userId: currentUser.id
+          })
+        });
+      } else {
+        await fetch(`${SOCKET_URL}/api/wiki/articles`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: wikiEditTitle.trim(),
+            content: wikiEditContent,
+            categoryId: wikiEditCategory || null,
+            userId: currentUser.id
+          })
+        });
+      }
+      setWikiEditMode(false);
+      setWikiActiveArticle(null);
+      loadWikiData();
+    } catch (err) {
+      console.error('Ошибка сохранения статьи:', err);
+    }
+  };
+
+  const wikiDeleteArticle = async (articleId) => {
+    try {
+      await fetch(`${SOCKET_URL}/api/wiki/articles/${articleId}`, { method: 'DELETE' });
+      setWikiActiveArticle(null);
+      loadWikiData();
+    } catch (err) {
+      console.error('Ошибка удаления статьи:', err);
+    }
+  };
+
+  const wikiLoadFiles = async (articleId) => {
+    try {
+      const res = await fetch(`${SOCKET_URL}/api/wiki/articles/${articleId}/files`);
+      const data = await res.json();
+      if (data.success) setWikiFiles(data.files || []);
+    } catch (err) {
+      console.error('Ошибка загрузки файлов:', err);
+    }
+  };
+
+  const wikiUploadFile = async (articleId, file) => {
+    setWikiFileUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await fetch(`${SOCKET_URL}/api/wiki/articles/${articleId}/files`, {
+        method: 'POST',
+        body: formData
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        try { const j = JSON.parse(text); alert('Ошибка: ' + (j.error || text)); } catch { alert('Ошибка: ' + text.substring(0, 200)); }
+        setWikiFileUploading(false);
+        return;
+      }
+      const data = await res.json();
+      if (data.success) {
+        setWikiFiles(prev => [...prev, data.file]);
+      } else {
+        alert('Ошибка загрузки: ' + (data.error || 'Неизвестная ошибка'));
+      }
+    } catch (err) {
+      console.error('Ошибка загрузки файла:', err);
+      try {
+        const text = await err.text?.() || '';
+        alert('Ошибка загрузки файла' + (text ? ': ' + text.substring(0, 100) : ''));
+      } catch {
+        alert('Ошибка загрузки файла');
+      }
+    } finally {
+      setWikiFileUploading(false);
+    }
+  };
+
+  const wikiOpenArticle = async (article) => {
+    setWikiActiveArticle(article);
+    await wikiLoadFiles(article.id);
+  };
+
+  const wikiDeleteFile = async (articleId, fileId) => {
+    try {
+      const res = await fetch(`${SOCKET_URL}/api/wiki/articles/${articleId}/files/${fileId}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (data.success) {
+        setWikiFiles(prev => prev.filter(f => f.id !== fileId));
+      }
+    } catch (err) {
+      console.error('Ошибка удаления файла:', err);
+    }
+  };
+
+  const wikiCreateCategory = async () => {
+    if (!wikiCategoryName.trim()) return;
+    try {
+      await fetch(`${SOCKET_URL}/api/wiki/categories`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: wikiCategoryName.trim(),
+          description: wikiCategoryDesc.trim()
+        })
+      });
+      setShowWikiCategoryModal(false);
+      setWikiCategoryName('');
+      setWikiCategoryDesc('');
+      loadWikiData();
+    } catch (err) {
+      console.error('Ошибка создания категории:', err);
+    }
+  };
+
+  // HR / Заявления
+  const loadHrRequests = async () => {
+    if (!currentUser) return;
+    try {
+      const res = await fetch(`${SOCKET_URL}/api/hr/requests?userId=${currentUser.id}`);
+      if (res.ok) {
+        const data = await res.json();
+        setHrRequests(data.requests || []);
+      }
+    } catch (err) {
+      console.error('Ошибка загрузки заявлений:', err);
+    }
+  };
+
+  const handleCreateHrRequest = async () => {
+    if (!currentUser || !hrForm.startDate || !hrForm.endDate) return;
+    setHrLoading(true);
+    try {
+      const res = await fetch(`${SOCKET_URL}/api/hr/requests`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...hrForm, userId: currentUser.id })
+      });
+      if (res.ok) {
+        setShowHRCreate(false);
+        setHrForm({ type: 'vacation', startDate: '', endDate: '', reason: '' });
+        loadHrRequests();
+      }
+    } catch (err) {
+      console.error('Ошибка создания заявления:', err);
+    } finally {
+      setHrLoading(false);
+    }
+  };
+
+  const handleApproveHrRequest = async (requestId, status, comment) => {
+    if (!currentUser) return;
+    try {
+      await fetch(`${SOCKET_URL}/api/hr/requests/${requestId}/approve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: currentUser.id, status, comment: comment || '' })
+      });
+      loadHrRequests();
+    } catch (err) {
+      console.error('Ошибка обработки заявления:', err);
     }
   };
 
@@ -4825,6 +5287,48 @@ function App() {
     setShowDocuments(true);
     setShowChatMenu(false);
   };
+
+  const handleToggleE2EE = async () => {
+    if (!activeChatId) return;
+    const newVal = !e2eeEnabled[activeChatId];
+    setE2eeEnabled(prev => ({ ...prev, [activeChatId]: newVal }));
+    if (newVal && activeChat?.type === 'group' && myKeyPairRef.current) {
+      try {
+        const participants = activeChat.participantsDetails?.filter(p => p.username !== currentUser?.username) || [];
+        if (participants.length === 0) return;
+        const groupKey = await generateGroupKey();
+        const keys = [];
+        for (const p of participants) {
+          const pubKeyB64 = await getPeerPublicKey(p.id);
+          if (!pubKeyB64) continue;
+          const result = await encryptGroupKeyForMember(groupKey, myKeyPairRef.current.privateKey, pubKeyB64);
+          if (result) {
+            keys.push({
+              userId: p.id,
+              encryptedKey: JSON.stringify({
+                encryptedKey: result.encryptedKey,
+                nonce: result.nonce,
+                encryptedBy: currentUser.id
+              })
+            });
+          }
+        }
+        if (keys.length > 0) {
+          await fetch(`${SOCKET_URL}/api/e2ee/group-key`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chatId: activeChatId, keys })
+          });
+          cacheGroupKey(activeChatId, groupKey);
+        }
+      } catch (err) {
+        console.error('[E2EE] group key init error:', err);
+        setE2eeEnabled(prev => ({ ...prev, [activeChatId]: false }));
+      }
+    }
+    setShowChatMenu(false);
+  };
+
   const handleDeleteMessage = (message) => {
     setMessageToDelete(message);
     setShowDeleteConfirm(true);
@@ -5592,7 +6096,15 @@ function App() {
               {updateStatus === 'available' && browserUpdateInfo && (
                 <>
                   <strong>Доступно обновление v{browserUpdateInfo.latestVersion}</strong>
-                  <p>Текущая версия: v{browserUpdateInfo.currentVersion}.</p>
+                  <p>
+                    {browserUpdateInfo.releaseName
+                      ? browserUpdateInfo.releaseName
+                      : `Версия v${browserUpdateInfo.latestVersion}`}
+                    {browserUpdateInfo.publishedAt && (
+                      <> · {new Date(browserUpdateInfo.publishedAt).toLocaleDateString('ru-RU', { year: 'numeric', month: 'long', day: 'numeric' })}</>
+                    )}
+                  </p>
+                  <p>Текущая версия: v{browserUpdateInfo.currentVersion}. </p>
                 </>
               )}
               {updateStatus === 'downloading' && (
@@ -5647,10 +6159,16 @@ function App() {
                     setShowUpdateBanner(false);
                   }}
                 >
-                  Обновить
+                  Скачать
+                </button>
+                <button
+                  className="update-banner-btn-link"
+                  onClick={() => window.open(browserUpdateInfo.releaseUrl, '_blank')}
+                >
+                  Что нового
                 </button>
                 <button className="update-banner-dismiss" onClick={() => setShowUpdateBanner(false)}>
-                  Отмена
+                  Позже
                 </button>
               </>
             )}
@@ -5783,10 +6301,33 @@ function App() {
             <span className="nav-btn-label">Календарь</span>
           </button>
 
+          {/* База знаний */}
+          <button
+            className={`nav-sidebar-btn ${activeView === 'wiki' ? 'active' : ''}`}
+            onClick={async () => {
+              await loadWikiData();
+              setActiveView('wiki');
+            }}
+            title="База знаний"
+          >
+            <div className="nav-btn-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+                <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+                <line x1="8" y1="7" x2="16" y2="7"/>
+                <line x1="8" y1="11" x2="14" y2="11"/>
+              </svg>
+            </div>
+            <span className="nav-btn-label">База знаний</span>
+          </button>
+
+          {/* HR / Заявления — скрыто */}
+          {/* Объявления — скрыто */}
+
           {/* Настройки */}
           <button
             className={`nav-sidebar-btn ${activeView === 'settings' ? 'active' : ''}`}
-            onClick={handleOpenSettings}
+            onClick={() => setActiveView('settings')}
             title="Настройки"
           >
             <div className="nav-btn-icon">
@@ -6652,6 +7193,7 @@ function App() {
                     <div className="chat-name-row">
                       <span className="chat-name">
                         {getChatDisplayName(chat)}
+                        {e2eeEnabled[chat.id] && <span className="e2ee-chat-badge" title="E2EE включено">🔒</span>}
                         {chat.type === 'direct' && chat.participantsDetails && (() => {
                           const otherUser = chat.participantsDetails.find(p => p.username !== currentUser?.username);
                           if (otherUser && birthdaysToday.some(b => b.id === otherUser.id)) {
@@ -6882,20 +7424,7 @@ function App() {
                   </span>
                 </div>
               </div>
-              {activeChat?.type === 'direct' && (
-                <button
-                  className={`e2ee-toggle-btn ${e2eeEnabled[activeChatId] ? 'active' : ''}`}
-                  onClick={() => {
-                    setE2eeEnabled(prev => ({
-                      ...prev,
-                      [activeChatId]: !prev[activeChatId]
-                    }));
-                  }}
-                  title={e2eeEnabled[activeChatId] ? 'E2EE включено' : 'Включить E2EE'}
-                >
-                  {e2eeEnabled[activeChatId] ? '🔒' : '🔓'}
-                </button>
-              )}
+
               <button
                 className="chat-menu-btn"
                 onClick={handleOpenChatMenu}
@@ -7003,6 +7532,7 @@ function App() {
                             <div className="message-time-inline">
                               <span className="message-time-main">{formatTime(message.timestamp)}</span>
                               {message.edited && <span className="message-edited-indicator" title="Отредактировано">ред.</span>}
+                              {message.expires_at && <span className="self-destruct-indicator" title={`Самоуничтожение: ${formatTimeRemaining(message.expires_at)}`}>🔥</span>}
                               {renderMessageStatus(message)}
                             </div>
                           </div>
@@ -7040,6 +7570,50 @@ function App() {
                               })}
                             </div>
                           )}
+                        </div>
+                      )}
+                      {/* Poll UI */}
+                      {!isBotMessage(message) && message.poll && (
+                        <div className="poll-container">
+                          <div className="poll-question">
+                            {message.poll.question}
+                            {message.poll.isClosed && <span className="poll-closed-badge">🔒 Закрыт</span>}
+                            {message.poll.closesAt && !message.poll.isClosed && (
+                              <span className="poll-closes-badge">⏳ до {formatTime(message.poll.closesAt)}</span>
+                            )}
+                          </div>
+                          <div className="poll-options">
+                            {message.poll.options.map((opt, idx) => {
+                              const voteCount = message.poll.optionVotes[idx] || 0;
+                              const pct = message.poll.totalVotes > 0 ? Math.round((voteCount / message.poll.totalVotes) * 100) : 0;
+                              const isVoted = message.poll.votedIndices && message.poll.votedIndices.includes(idx);
+                              const canVote = !message.poll.isClosed && (!message.poll.votesHidden || isVoted);
+                              return (
+                                <button key={idx} className={`poll-option ${isVoted ? 'poll-option-voted' : ''} ${message.poll.isClosed ? 'poll-option-closed' : ''} ${message.poll.votesHidden && !isVoted ? 'poll-option-hidden' : ''}`}
+                                  onClick={() => canVote && handlePollVote(message.poll.id, idx)}
+                                  disabled={!canVote}
+                                  title={message.poll.votesHidden && !isVoted ? 'Результаты скрыты до окончания' : `${opt}: ${voteCount} голос(а/ов)`}>
+                                  <span className="poll-option-text">{opt}</span>
+                                  {!message.poll.votesHidden && (
+                                    <>
+                                      <span className="poll-option-bar-track">
+                                        <span className="poll-option-bar-fill" style={{ width: `${pct}%` }} />
+                                      </span>
+                                      <span className="poll-option-pct">{pct}%</span>
+                                      {!message.poll.isAnonymous && <span className="poll-option-count">{voteCount}</span>}
+                                    </>
+                                  )}
+                                  {message.poll.votesHidden && !isVoted && <span className="poll-hidden-label">🔒</span>}
+                                </button>
+                              );
+                            })}
+                          </div>
+                          <div className="poll-footer">
+                            {!message.poll.votesHidden && <span className="poll-total-votes">{message.poll.totalVotes} голос(а/ов)</span>}
+                            {message.poll.votesHidden && <span className="poll-hidden-info">🔒 Результаты будут показаны после завершения</span>}
+                            {message.poll.isAnonymous && <span className="poll-anon-badge">Анонимно</span>}
+                            {message.poll.allowsMultiple && <span className="poll-multi-badge">Множественный выбор</span>}
+                          </div>
                         </div>
                       )}
                     </div>
@@ -7218,6 +7792,15 @@ function App() {
                     <line x1="15" y1="9" x2="15.01" y2="9"/>
                   </svg>
                 </button>
+
+                <button type="button" className="poll-btn-send" onClick={(e) => { e.preventDefault(); setShowPollModal(true); }} title="Создать опрос">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                    <line x1="7" y1="7" x2="17" y2="7"/>
+                    <line x1="7" y1="12" x2="17" y2="12"/>
+                    <line x1="7" y1="17" x2="12" y2="17"/>
+                  </svg>
+                </button>
                 <button type="submit" disabled={isUploading || (!hasInputContent() && !selectedFile)}>
                   {isUploading ? '⏳' : '➤'}
                 </button>
@@ -7260,6 +7843,17 @@ function App() {
                   <span className="menu-icon"><span className="emoji-animated">📄</span></span>
                   <span>Документы</span>
                 </div>
+                {(activeChat?.type === 'direct' || activeChat?.type === 'group') && (
+                  <div className={`chat-menu-item ${e2eeEnabled[activeChatId] ? 'active-e2ee' : ''}`} onClick={handleToggleE2EE}>
+                    <span className="menu-icon">
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ verticalAlign: 'middle' }}>
+                        <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                        <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                      </svg>
+                    </span>
+                    <span>{e2eeEnabled[activeChatId] ? '🔒 E2EE включено' : '🔓 E2EE шифрование'}</span>
+                  </div>
+                )}
                 <div className="chat-menu-divider"></div>
                 <div className="chat-menu-item danger" onClick={handleDeleteChat}>
                   <span className="menu-icon"><span className="emoji-animated">❌</span></span>
@@ -7794,6 +8388,176 @@ function App() {
       )}
 
       {/* Вкладка настроек */}
+      {activeView === 'wiki' && (
+        <div className="wiki-view">
+          <aside className="wiki-sidebar">
+            <div className="wiki-sidebar-header">
+              <h3>📚 База знаний</h3>
+              {isAdmin && (
+                <button className="wiki-new-article-btn" onClick={() => {
+                  setWikiActiveArticle(null);
+                  setWikiEditMode(true);
+                  setWikiEditTitle('');
+                  setWikiEditContent('');
+                  setWikiEditCategory(wikiActiveCategory || '');
+                }}>+ Статья</button>
+              )}
+              {isAdmin && (
+                <button className="wiki-new-cat-btn" onClick={() => setShowWikiCategoryModal(true)}>+ Категория</button>
+              )}
+            </div>
+            <div className="wiki-category-list">
+              <div className={`wiki-cat-item ${!wikiActiveCategory ? 'active' : ''}`}
+                onClick={() => { setWikiActiveCategory(null); setWikiActiveArticle(null); setWikiEditMode(false); }}>
+                📋 Все статьи
+              </div>
+              {wikiCategories.map(cat => (
+                <div key={cat.id} className={`wiki-cat-item ${wikiActiveCategory === cat.id ? 'active' : ''}`}
+                  onClick={() => { setWikiActiveCategory(cat.id); setWikiActiveArticle(null); setWikiEditMode(false); }}>
+                  📂 {cat.name}
+                </div>
+              ))}
+            </div>
+          </aside>
+          <main className="wiki-main">
+            {wikiEditMode ? (
+              <div className="wiki-editor">
+                <input type="text" className="wiki-edit-title" placeholder="Заголовок статьи..."
+                  value={wikiEditTitle} onChange={e => setWikiEditTitle(e.target.value)} />
+                <select className="wiki-edit-category" value={wikiEditCategory}
+                  onChange={e => setWikiEditCategory(e.target.value)}>
+                  <option value="">Без категории</option>
+                  {wikiCategories.map(cat => (
+                    <option key={cat.id} value={cat.id}>{cat.name}</option>
+                  ))}
+                </select>
+                <textarea className="wiki-edit-content" placeholder="Текст статьи (поддерживает Markdown)..."
+                  value={wikiEditContent} onChange={e => setWikiEditContent(e.target.value)} rows={20} />
+                {isAdmin && (
+                  <div className="wiki-edit-files">
+                    <label className="wiki-file-upload-btn">
+                      {wikiFileUploading ? '⏳ Загрузка...' : '📎 Прикрепить файл'}
+                      <input type="file" style={{ display: 'none' }} onChange={e => {
+                        const file = e.target.files[0];
+                        if (file && wikiActiveArticle) {
+                          wikiUploadFile(wikiActiveArticle.id, file);
+                        }
+                        e.target.value = '';
+                      }} disabled={wikiFileUploading || !wikiActiveArticle} />
+                    </label>
+                    {wikiFiles.length > 0 && (
+                      <div className="wiki-file-list">
+                        {wikiFiles.map(f => (
+                          <div key={f.id} className="wiki-file-item">
+                            <a href={`${SOCKET_URL}/uploads/${f.file_path}`} target="_blank" rel="noopener noreferrer" className="wiki-file-link">{f.file_name}</a>
+                            <span className="wiki-file-size">({(f.file_size / 1024).toFixed(1)} KB)</span>
+                            <button className="wiki-file-remove" onClick={() => wikiDeleteFile(wikiActiveArticle.id, f.id)} title="Удалить">✕</button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+                <div className="wiki-editor-actions">
+                  <button className="cancel-btn" onClick={() => { setWikiEditMode(false); setWikiActiveArticle(null); }}>Отмена</button>
+                  <button className="save-btn" onClick={wikiSaveArticle} disabled={!wikiEditTitle.trim()}>💾 Сохранить</button>
+                </div>
+              </div>
+            ) : wikiActiveArticle ? (
+              <div className="wiki-article-view">
+                <div className="wiki-article-header">
+                  <h2>{wikiActiveArticle.title}</h2>
+                  <div className="wiki-article-meta">
+                    <span>Автор: {wikiActiveArticle.creatorName}</span>
+                    <span>Обновлено: {formatDate(wikiActiveArticle.updated_at)}</span>
+                  </div>
+                  {isAdmin && (
+                    <div className="wiki-article-actions">
+                      <button onClick={() => {
+                        setWikiEditTitle(wikiActiveArticle.title);
+                        setWikiEditContent(wikiActiveArticle.content);
+                        setWikiEditCategory(wikiActiveArticle.category_id || '');
+                        setWikiEditMode(true);
+                        wikiLoadFiles(wikiActiveArticle.id);
+                      }}>✏️ Редактировать</button>
+                      <button className="delete-btn" onClick={() => {
+                        if (confirm('Удалить статью?')) wikiDeleteArticle(wikiActiveArticle.id);
+                      }}>🗑️ Удалить</button>
+                    </div>
+                  )}
+                </div>
+                <div className="wiki-article-content">{wikiActiveArticle.content}</div>
+                {wikiFiles.length > 0 && (
+                  <div className="wiki-article-files">
+                    <h4>📎 Прикреплённые файлы</h4>
+                    {wikiFiles.map(f => (
+                      <div key={f.id} className="wiki-file-item">
+                        <a href={`${SOCKET_URL}/uploads/${f.file_path}`} target="_blank" rel="noopener noreferrer" className="wiki-file-link">{f.file_name}</a>
+                        <span className="wiki-file-size">({(f.file_size / 1024).toFixed(1)} KB)</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="wiki-article-list">
+                <h3>{wikiActiveCategory ? wikiCategories.find(c => c.id === wikiActiveCategory)?.name : 'Все статьи'}</h3>
+                <input type="text" className="wiki-search-input" placeholder="🔍 Поиск по статьям..."
+                  value={wikiSearch} onChange={e => setWikiSearch(e.target.value)} />
+                {(() => {
+                  const q = wikiSearch.toLowerCase().trim();
+                  const filtered = wikiArticles.filter(a =>
+                    (!wikiActiveCategory || a.category_id === wikiActiveCategory) &&
+                    (!q || a.title.toLowerCase().includes(q) || a.content.toLowerCase().includes(q))
+                  );
+                  return filtered.length === 0 ? (
+                    <div className="wiki-empty">{wikiSearch ? 'Ничего не найдено.' : (isAdmin ? 'Нет статей. Нажмите "+ Статья" чтобы создать.' : 'Нет статей.')}</div>
+                  ) : (
+                    filtered.map(article => (
+                      <div key={article.id} className="wiki-article-card"
+                        onClick={() => wikiOpenArticle(article)}>
+                        <div className="wiki-article-card-title">{article.title}</div>
+                        <div className="wiki-article-card-meta">
+                          {article.creatorName} · {formatDate(article.updated_at)}
+                        </div>
+                      </div>
+                    ))
+                  );
+                })()}
+              </div>
+            )}
+          </main>
+        </div>
+      )}
+
+      {/* Modal for creating wiki category */}
+      {showWikiCategoryModal && (
+        <div className="modal-overlay" onClick={() => setShowWikiCategoryModal(false)}>
+          <div className="modal-content" style={{ maxWidth: 400 }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>📂 Новая категория</h3>
+              <button onClick={() => setShowWikiCategoryModal(false)}>✕</button>
+            </div>
+            <div className="modal-body">
+              <div className="ann-form-group">
+                <label>Название</label>
+                <input type="text" className="ann-input" placeholder="Название категории..."
+                  value={wikiCategoryName} onChange={e => setWikiCategoryName(e.target.value)} />
+              </div>
+              <div className="ann-form-group">
+                <label>Описание</label>
+                <input type="text" className="ann-input" placeholder="Описание (необязательно)..."
+                  value={wikiCategoryDesc} onChange={e => setWikiCategoryDesc(e.target.value)} />
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="cancel-btn" onClick={() => setShowWikiCategoryModal(false)}>Отмена</button>
+              <button className="save-btn" onClick={wikiCreateCategory} disabled={!wikiCategoryName.trim()}>Создать</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {activeView === 'settings' && (
         <main className="full-page-view">
           <div className="full-page-header">
@@ -8166,12 +8930,26 @@ function App() {
                       {updateStatus === 'available' && browserUpdateInfo && (
                         <div className="update-available">
                           <p className="update-message">📥 Доступно обновление v{browserUpdateInfo.latestVersion}</p>
-                          <button
-                            className="btn-check-update"
-                            onClick={() => window.open(browserUpdateInfo.releaseUrl, '_blank')}
-                          >
-                            Скачать с GitHub
-                          </button>
+                          <p className="update-release-name">
+                            {browserUpdateInfo.releaseName || `Версия v${browserUpdateInfo.latestVersion}`}
+                            {browserUpdateInfo.publishedAt && (
+                              <> · {new Date(browserUpdateInfo.publishedAt).toLocaleDateString('ru-RU', { year: 'numeric', month: 'long', day: 'numeric' })}</>
+                            )}
+                          </p>
+                          <div className="update-available-actions">
+                            <button
+                              className="btn-check-update"
+                              onClick={() => window.open(browserUpdateInfo.releaseUrl, '_blank')}
+                            >
+                              Скачать с GitHub
+                            </button>
+                            <button
+                              className="btn-check-update-secondary"
+                              onClick={() => window.open(browserUpdateInfo.releaseUrl, '_blank')}
+                            >
+                              Что нового
+                            </button>
+                          </div>
                         </div>
                       )}
 
@@ -8199,7 +8977,8 @@ function App() {
 
                       {updateStatus === 'no-update' && (
                         <div className="update-no-update">
-                          <p>✅ У вас установлена последняя версия</p>
+                          <p>✅ У вас установлена последняя версия (v{appVersion})</p>
+                          <p className="update-subtitle">Обновлений не найдено.</p>
                           <button
                             className="btn-check-update-secondary"
                             onClick={checkForUpdates}
@@ -8220,6 +8999,39 @@ function App() {
                           </button>
                         </div>
                       )}
+                    </div>
+
+                    <div className="security-section">
+                      <h3>🔐 E2EE шифрование</h3>
+                      <p className="settings-description">Ваши ключи шифрования хранятся локально в этом браузере. При сбросе ключей старые зашифрованные сообщения станут недоступны.</p>
+                      <button
+                        className="btn-danger"
+                        onClick={async () => {
+                          if (!window.confirm('Сбросить ключи E2EE?\n\nВсе старые зашифрованные сообщения станут недоступны для расшифровки. Собеседникам нужно будет заново установить защищённое соединение.')) return;
+                          try {
+                            const { deleteE2EEKeys, clearPeerKeyCache, clearGroupKeyCache, generateKeyPair, saveE2EEKeys } = await import('./crypto');
+                            await deleteE2EEKeys(currentUser.id);
+                            await clearPeerKeyCache();
+                            clearGroupKeyCache();
+                            const keyPair = await generateKeyPair();
+                            await saveE2EEKeys(currentUser.id, keyPair);
+                            const { exportPublicKeyBase64 } = await import('./crypto');
+                            const pubBase64 = await exportPublicKeyBase64(keyPair.publicKey);
+                            await fetch(`${SOCKET_URL}/api/e2ee/key`, {
+                              method: 'PUT',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ userId: currentUser.id, publicKey: pubBase64 })
+                            });
+                            setE2eeEnabled({});
+                            window.__e2eeKeysRefreshed = true;
+                            alert('✅ Ключи E2EE успешно перегенерированы');
+                          } catch (err) {
+                            alert('❌ Ошибка при сбросе ключей: ' + err.message);
+                          }
+                        }}
+                      >
+                        🔄 Сбросить ключи E2EE
+                      </button>
                     </div>
 
                     <div className="about-app-footer">
@@ -9660,7 +10472,267 @@ function App() {
         </div>
       )}
 
+      {/* Модальное окно создания объявления (admin) */}
+      {showCreateAnnouncement && (
+        <div className="modal-overlay" onClick={() => { if (!announcementLoading) setShowCreateAnnouncement(false); }}>
+          <div className="modal-content announcement-create-modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>📢 Создать объявление</h3>
+              <button onClick={() => setShowCreateAnnouncement(false)} disabled={announcementLoading}>✕</button>
+            </div>
+            <div className="modal-body">
+              <div className="ann-form-group">
+                <label>Приоритет</label>
+                <select className="ann-input" value={announcementPriority}
+                  onChange={e => setAnnouncementPriority(e.target.value)} disabled={announcementLoading}>
+                  <option value="normal">📢 Обычное</option>
+                  <option value="high">🟡 Важное</option>
+                  <option value="urgent">🔴 Срочное</option>
+                </select>
+              </div>
+              <div className="ann-form-group">
+                <label>Заголовок</label>
+                <input type="text" className="ann-input" placeholder="Заголовок объявления..."
+                  value={announcementTitle} onChange={e => setAnnouncementTitle(e.target.value)}
+                  maxLength={200} disabled={announcementLoading} />
+              </div>
+              <div className="ann-form-group">
+                <label>Текст объявления</label>
+                <textarea className="ann-input ann-textarea" placeholder="Текст объявления..."
+                  value={announcementContent} onChange={e => setAnnouncementContent(e.target.value)}
+                  rows={5} disabled={announcementLoading} />
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="cancel-btn" onClick={() => setShowCreateAnnouncement(false)} disabled={announcementLoading}>Отмена</button>
+              <button className="save-btn" onClick={handleCreateAnnouncement}
+                disabled={announcementLoading || !announcementTitle.trim() || !announcementContent.trim()}>
+                {announcementLoading ? '⏳ Публикация...' : '📢 Опубликовать'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Модальное окно списка объявлений */}
+      {showAnnouncements && (
+        <div className="modal-overlay" onClick={() => setShowAnnouncements(false)}>
+          <div className="modal-content announcements-modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>📢 Объявления</h3>
+              <button onClick={() => setShowAnnouncements(false)}>✕</button>
+            </div>
+            <div className="modal-body announcements-body">
+              {isAdmin && (
+                <button className="ann-create-btn" onClick={() => setShowCreateAnnouncement(true)}>
+                  + Создать объявление
+                </button>
+              )}
+              {announcements.length === 0 ? (
+                <div className="ann-empty">
+                  <span className="ann-empty-icon">📢</span>
+                  <p>Нет объявлений</p>
+                </div>
+              ) : (
+                announcements.map(ann => (
+                  <div key={ann.id} className={`ann-item ${ann.priority === 'urgent' ? 'ann-urgent' : ann.priority === 'high' ? 'ann-high' : ''}`}
+                    onClick={() => !ann.isRead && handleMarkAnnouncementRead(ann.id)}>
+                    <div className="ann-item-header">
+                      <span className="ann-priority-badge">
+                        {ann.priority === 'urgent' ? '🔴' : ann.priority === 'high' ? '🟡' : '📢'}
+                      </span>
+                      <span className="ann-item-title">{ann.title}</span>
+                      {!ann.isRead && <span className="ann-unread-dot">●</span>}
+                    </div>
+                    <div className="ann-item-meta">
+                      <span className="ann-item-author">{ann.creatorName}</span>
+                      <span className="ann-item-date">{formatDate(ann.createdAt)}</span>
+                      <span className="ann-item-reads">
+                        {ann.readCount}/{ann.totalUsers}
+                      </span>
+                    </div>
+                    <div className="ann-item-content">{ann.content}</div>
+                    {ann.isRead && ann.myReadAt && (
+                      <div className="ann-item-read-at">✅ Прочитано {formatTime(ann.myReadAt)}</div>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Модальное окно заявлений */}
+      {showHR && (
+        <div className="modal-overlay" onClick={() => setShowHR(false)}>
+          <div className="modal-content hr-modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>📋 Заявления</h3>
+              <button onClick={() => setShowHR(false)}>✕</button>
+            </div>
+            <div className="modal-body hr-body">
+              {isAdmin && (
+                <div className="hr-view-toggle">
+                  <button className={`hr-toggle-btn ${hrViewMode === 'my' ? 'active' : ''}`} onClick={() => setHrViewMode('my')}>Мои</button>
+                  <button className={`hr-toggle-btn ${hrViewMode === 'pending' ? 'active' : ''}`} onClick={() => setHrViewMode('pending')}>На согласование</button>
+                </div>
+              )}
+              <button className="ann-create-btn" onClick={() => setShowHRCreate(true)}>+ Новое заявление</button>
+              {hrRequests.length === 0 && hrViewMode === 'my' ? (
+                <div className="ann-empty"><p>Нет заявлений</p></div>
+              ) : hrViewMode === 'pending' ? (
+                hrRequests.filter(r => r.status === 'pending').map(r => (
+                  <div key={r.id} className="hr-card">
+                    <div className="hr-card-header">
+                      <span className="hr-type-badge">
+                        {r.type === 'vacation' ? '🏖️ Отпуск' : r.type === 'sick' ? '🤒 Больничный' : '📅 Отгул'}
+                      </span>
+                      <span className="hr-status pending">⏳ Ожидает</span>
+                    </div>
+                    <div className="hr-card-user">{r.userName}</div>
+                    <div className="hr-card-dates">{r.start_date} — {r.end_date}</div>
+                    {r.reason && <div className="hr-card-reason">{r.reason}</div>}
+                    {isAdmin && (
+                      <div className="hr-card-actions">
+                        <input className="hr-comment-input" placeholder="Комментарий..." id={`hr-comment-${r.id}`} />
+                        <button className="hr-approve-btn" onClick={() => handleApproveHrRequest(r.id, 'approved', document.getElementById(`hr-comment-${r.id}`).value)}>✅ Одобрить</button>
+                        <button className="hr-reject-btn" onClick={() => handleApproveHrRequest(r.id, 'rejected', document.getElementById(`hr-comment-${r.id}`).value)}>❌ Отклонить</button>
+                      </div>
+                    )}
+                  </div>
+                ))
+              ) : (
+                hrRequests.map(r => (
+                  <div key={r.id} className="hr-card">
+                    <div className="hr-card-header">
+                      <span className="hr-type-badge">
+                        {r.type === 'vacation' ? '🏖️ Отпуск' : r.type === 'sick' ? '🤒 Больничный' : '📅 Отгул'}
+                      </span>
+                      <span className={`hr-status ${r.status}`}>
+                        {r.status === 'pending' ? '⏳ Ожидает' : r.status === 'approved' ? '✅ Одобрено' : r.status === 'rejected' ? '❌ Отклонено' : '🚫 Отменено'}
+                      </span>
+                    </div>
+                    {r.userName && <div className="hr-card-user">{r.userName}</div>}
+                    <div className="hr-card-dates">{r.start_date} — {r.end_date}</div>
+                    {r.reason && <div className="hr-card-reason">{r.reason}</div>}
+                    <div className="hr-card-created">{formatDate(r.created_at)}</div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Модальное окно создания заявления */}
+      {showHRCreate && (
+        <div className="modal-overlay" onClick={() => { if (!hrLoading) setShowHRCreate(false); }}>
+          <div className="modal-content" style={{ maxWidth: 450 }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>📋 Новое заявление</h3>
+              <button onClick={() => setShowHRCreate(false)} disabled={hrLoading}>✕</button>
+            </div>
+            <div className="modal-body">
+              <div className="ann-form-group">
+                <label>Тип заявления</label>
+                <select className="ann-input" value={hrForm.type} onChange={e => setHrForm({ ...hrForm, type: e.target.value })} disabled={hrLoading}>
+                  <option value="vacation">🏖️ Отпуск</option>
+                  <option value="sick">🤒 Больничный</option>
+                  <option value="day_off">📅 Отгул</option>
+                </select>
+              </div>
+              <div className="ann-form-group">
+                <label>Дата начала</label>
+                <input type="date" className="ann-input" value={hrForm.startDate} onChange={e => setHrForm({ ...hrForm, startDate: e.target.value })} disabled={hrLoading} />
+              </div>
+              <div className="ann-form-group">
+                <label>Дата окончания</label>
+                <input type="date" className="ann-input" value={hrForm.endDate} onChange={e => setHrForm({ ...hrForm, endDate: e.target.value })} disabled={hrLoading} />
+              </div>
+              <div className="ann-form-group">
+                <label>Причина</label>
+                <textarea className="ann-input ann-textarea" placeholder="Причина (необязательно)..." value={hrForm.reason} onChange={e => setHrForm({ ...hrForm, reason: e.target.value })} rows={3} disabled={hrLoading} />
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="cancel-btn" onClick={() => setShowHRCreate(false)} disabled={hrLoading}>Отмена</button>
+              <button className="save-btn" onClick={handleCreateHrRequest} disabled={hrLoading || !hrForm.startDate || !hrForm.endDate}>
+                {hrLoading ? '⏳ Отправка...' : '📋 Отправить'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Модальное окно закреплённых сообщений */}
+      {/* Модальное окно создания опроса */}
+      {showPollModal && (
+        <div className="modal-overlay" onClick={() => { if (!pollLoading) setShowPollModal(false); }}>
+          <div className="modal-content poll-modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>📊 Создать опрос</h3>
+              <button onClick={() => setShowPollModal(false)} disabled={pollLoading}>✕</button>
+            </div>
+            <div className="modal-body">
+              <div className="poll-form-group">
+                <label>Вопрос</label>
+                <input type="text" className="poll-input" placeholder="Задайте вопрос..." value={pollQuestion}
+                  onChange={e => setPollQuestion(e.target.value)} maxLength={200} disabled={pollLoading} />
+              </div>
+              <div className="poll-form-group">
+                <label>Варианты ответа (минимум 2, максимум 10)</label>
+                {pollOptions.map((opt, idx) => (
+                  <div key={idx} className="poll-option-row">
+                    <input type="text" className="poll-input poll-option-input" placeholder={`Вариант ${idx + 1}...`}
+                      value={opt} onChange={e => {
+                        const newOpts = [...pollOptions];
+                        newOpts[idx] = e.target.value;
+                        setPollOptions(newOpts);
+                      }} maxLength={100} disabled={pollLoading} />
+                    {pollOptions.length > 2 && (
+                      <button className="poll-remove-option" onClick={() => {
+                        if (pollOptions.length > 2) setPollOptions(pollOptions.filter((_, i) => i !== idx));
+                      }} disabled={pollLoading}>✕</button>
+                    )}
+                  </div>
+                ))}
+                {pollOptions.length < 10 && (
+                  <button className="poll-add-option" onClick={() => setPollOptions([...pollOptions, ''])} disabled={pollLoading}>
+                    + Добавить вариант
+                  </button>
+                )}
+              </div>
+              <div className="poll-settings">
+                <label className="poll-toggle">
+                  <input type="checkbox" checked={pollIsAnonymous} onChange={e => setPollIsAnonymous(e.target.checked)} disabled={pollLoading} />
+                  <span>Анонимное голосование</span>
+                </label>
+                <label className="poll-toggle">
+                  <input type="checkbox" checked={pollAllowsMultiple} onChange={e => setPollAllowsMultiple(e.target.checked)} disabled={pollLoading} />
+                  <span>Множественный выбор</span>
+                </label>
+                <label className="poll-toggle">
+                  <input type="checkbox" checked={pollHideResults} onChange={e => setPollHideResults(e.target.checked)} disabled={pollLoading} />
+                  <span>Скрывать результаты до окончания</span>
+                </label>
+              </div>
+              <div className="poll-form-group" style={{ marginTop: 8 }}>
+                <label>Автоматическое завершение (необязательно)</label>
+                <input type="datetime-local" className="poll-input" value={pollClosesAt}
+                  onChange={e => setPollClosesAt(e.target.value)} disabled={pollLoading} />
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="cancel-btn" onClick={() => setShowPollModal(false)} disabled={pollLoading}>Отмена</button>
+              <button className="save-btn" onClick={handleCreatePoll} disabled={pollLoading || pollQuestion.trim().length < 1 || pollOptions.filter(o => o.trim()).length < 2}>
+                {pollLoading ? '⏳ Создание...' : '📊 Создать опрос'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showPinnedModal && (
         <div className="modal-overlay" onClick={() => setShowPinnedModal(false)}>
           <div className="modal-content pinned-modal" onClick={e => e.stopPropagation()}>

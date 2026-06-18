@@ -1316,6 +1316,14 @@
   background: #ffe6e6;
 }
 
+.chat-menu-item.active-e2ee {
+  color: #2ed573;
+}
+
+.chat-menu-item.active-e2ee:hover {
+  background: #e8f8ee;
+}
+
 .chat-menu-divider {
   height: 1px;
   background: #e0e0e0;
@@ -5585,5 +5593,400 @@
 [data-theme="dark"] .notifications-footer {
   border-top-color: rgba(255, 255, 255, 0.1);
   background: rgba(255, 255, 255, 0.03);
+}
+
+/* ===== Announcements Styles ===== */
+.announcements-modal {
+  max-width: 600px;
+  max-height: 80vh;
+}
+.announcements-body {
+  padding: 16px;
+}
+.ann-create-btn {
+  width: 100%;
+  padding: 10px;
+  margin-bottom: 12px;
+  background: var(--primary-gradient, linear-gradient(135deg, #667eea 0%, #764ba2 100%));
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  cursor: pointer;
+  font-weight: 600;
+  transition: opacity 0.2s;
+}
+.ann-create-btn:hover {
+  opacity: 0.9;
+}
+.ann-empty {
+  text-align: center;
+  padding: 40px 20px;
+  color: var(--text-muted, #888);
+}
+.ann-empty-icon {
+  font-size: 48px;
+  display: block;
+  margin-bottom: 12px;
+}
+.ann-item {
+  padding: 12px 14px;
+  background: var(--bg-secondary, rgba(255,255,255,0.05));
+  border: 1px solid var(--border-color, rgba(255,255,255,0.1));
+  border-radius: 10px;
+  margin-bottom: 10px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.ann-item:hover {
+  border-color: var(--primary-color, #667eea);
+}
+.ann-urgent {
+  border-left: 4px solid #e74c3c;
+  background: rgba(231,76,60,0.08);
+}
+.ann-high {
+  border-left: 4px solid #f39c12;
+  background: rgba(243,156,18,0.08);
+}
+.ann-item-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.ann-priority-badge {
+  font-size: 16px;
+}
+.ann-item-title {
+  font-weight: 600;
+  font-size: 15px;
+  flex: 1;
+  color: var(--text-primary, #fff);
+}
+.ann-unread-dot {
+  color: var(--primary-color, #667eea);
+  font-size: 10px;
+}
+.ann-item-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--text-muted, #888);
+  margin-bottom: 6px;
+}
+.ann-item-content {
+  font-size: 13px;
+  color: var(--text-secondary, #ccc);
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+.ann-item-read-at {
+  font-size: 11px;
+  color: #27ae60;
+  margin-top: 6px;
+}
+
+/* Create announcement modal */
+.announcement-create-modal {
+  max-width: 500px;
+}
+.ann-form-group {
+  margin-bottom: 14px;
+}
+.ann-form-group label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 5px;
+  color: var(--text-secondary, #aaa);
+}
+.ann-input {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--input-bg, rgba(255,255,255,0.08));
+  border: 1px solid var(--border-color, rgba(255,255,255,0.15));
+  border-radius: 8px;
+  color: var(--text-primary, #fff);
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.2s;
+  box-sizing: border-box;
+}
+.ann-input:focus {
+  border-color: var(--primary-color, #667eea);
+}
+.ann-textarea {
+  resize: vertical;
+  min-height: 80px;
+  font-family: inherit;
+}
+.ann-input select {
+  appearance: auto;
+}
+
+/* Light theme announcements */
+[data-theme="light"] .ann-item {
+  background: #f8f9fa;
+  border-color: #e0e0e0;
+}
+[data-theme="light"] .ann-item-title {
+  color: #222;
+}
+[data-theme="light"] .ann-item-content {
+  color: #555;
+}
+[data-theme="light"] .ann-input {
+  background: #f5f5f5;
+  border-color: #ddd;
+  color: #333;
+}
+[data-theme="light"] .ann-input:focus {
+  border-color: #667eea;
+}
+[data-theme="light"] .ann-form-group label {
+  color: #666;
+}
+
+/* ===== HR / Заявления ===== */
+.hr-modal {
+  max-width: 550px;
+  max-height: 80vh;
+}
+.hr-body {
+  padding: 16px;
+}
+.hr-view-toggle {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.hr-toggle-btn {
+  flex: 1;
+  padding: 8px;
+  border: 1px solid var(--border-color, rgba(255,255,255,0.15));
+  background: var(--bg-secondary, rgba(255,255,255,0.05));
+  color: var(--text-secondary, #ccc);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.2s;
+}
+.hr-toggle-btn.active {
+  background: var(--primary-gradient, linear-gradient(135deg, #667eea, #764ba2));
+  color: #fff;
+  border-color: transparent;
+}
+.hr-card {
+  padding: 12px 14px;
+  background: var(--bg-secondary, rgba(255,255,255,0.05));
+  border: 1px solid var(--border-color, rgba(255,255,255,0.1));
+  border-radius: 10px;
+  margin-bottom: 10px;
+}
+.hr-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.hr-type-badge {
+  font-size: 13px;
+  font-weight: 600;
+}
+.hr-status {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+.hr-status.pending {
+  background: rgba(243,156,18,0.15);
+  color: #f39c12;
+}
+.hr-status.approved {
+  background: rgba(39,174,96,0.15);
+  color: #27ae60;
+}
+.hr-status.rejected {
+  background: rgba(231,76,60,0.15);
+  color: #e74c3c;
+}
+.hr-card-user {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary, #fff);
+  margin-bottom: 2px;
+}
+.hr-card-dates {
+  font-size: 12px;
+  color: var(--text-muted, #888);
+  margin-bottom: 4px;
+}
+.hr-card-reason {
+  font-size: 12px;
+  color: var(--text-secondary, #ccc);
+  margin-bottom: 4px;
+  font-style: italic;
+}
+.hr-card-created {
+  font-size: 11px;
+  color: var(--text-muted, #888);
+}
+.hr-card-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+.hr-comment-input {
+  flex: 1;
+  min-width: 120px;
+  padding: 6px 8px;
+  background: var(--input-bg, rgba(255,255,255,0.08));
+  border: 1px solid var(--border-color, rgba(255,255,255,0.15));
+  border-radius: 6px;
+  color: var(--text-primary, #fff);
+  font-size: 12px;
+  outline: none;
+}
+.hr-approve-btn, .hr-reject-btn {
+  padding: 6px 12px;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  transition: opacity 0.2s;
+}
+.hr-approve-btn {
+  background: #27ae60;
+  color: #fff;
+}
+.hr-reject-btn {
+  background: #e74c3c;
+  color: #fff;
+}
+.hr-approve-btn:hover, .hr-reject-btn:hover {
+  opacity: 0.85;
+}
+
+/* Light theme */
+[data-theme="light"] .hr-card {
+  background: #f8f9fa;
+  border-color: #e0e0e0;
+}
+[data-theme="light"] .hr-card-user {
+  color: #333;
+}
+[data-theme="light"] .hr-toggle-btn {
+  background: #f0f0f0;
+  color: #666;
+}
+[data-theme="light"] .hr-comment-input {
+  background: #fff;
+  border-color: #ddd;
+  color: #333;
+}
+
+/* ===== Poll Modal Styles ===== */
+.poll-modal {
+  max-width: 480px;
+}
+.poll-form-group {
+  margin-bottom: 16px;
+}
+.poll-form-group label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: var(--text-secondary, #aaa);
+}
+.poll-input {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--input-bg, rgba(255,255,255,0.08));
+  border: 1px solid var(--border-color, rgba(255,255,255,0.15));
+  border-radius: 8px;
+  color: var(--text-primary, #fff);
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.2s;
+  box-sizing: border-box;
+}
+.poll-input:focus {
+  border-color: var(--primary-color, #667eea);
+}
+.poll-option-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.poll-option-input {
+  flex: 1;
+}
+.poll-remove-option {
+  background: none;
+  border: none;
+  color: #e74c3c;
+  cursor: pointer;
+  font-size: 16px;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+.poll-remove-option:hover {
+  background: rgba(231,76,60,0.15);
+}
+.poll-add-option {
+  background: none;
+  border: 1px dashed var(--border-color, rgba(255,255,255,0.3));
+  color: var(--primary-color, #667eea);
+  cursor: pointer;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  width: 100%;
+  transition: all 0.2s;
+}
+.poll-add-option:hover {
+  background: rgba(102,126,234,0.1);
+  border-color: var(--primary-color, #667eea);
+}
+.poll-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+.poll-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-primary, #fff);
+  cursor: pointer;
+}
+.poll-toggle input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--primary-color, #667eea);
+}
+
+/* Light theme */
+[data-theme="light"] .poll-input {
+  background: #f5f5f5;
+  border-color: #ddd;
+  color: #333;
+}
+[data-theme="light"] .poll-input:focus {
+  border-color: #667eea;
+}
+[data-theme="light"] .poll-form-group label {
+  color: #666;
+}
+[data-theme="light"] .poll-toggle {
+  color: #333;
 }
 

@@ -58,6 +58,23 @@
             </intent-filter>
         </activity>
 
+        <service
+            android:name=".data.notification.ChatFirebaseMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
+        <receiver
+            android:name=".data.notification.NotificationActionReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.chatursa.app.MARK_READ" />
+                <action android:name="com.chatursa.app.REPLY" />
+            </intent-filter>
+        </receiver>
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

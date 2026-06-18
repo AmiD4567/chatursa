@@ -100,6 +100,20 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun logout() {
+        viewModelScope.launch {
+            try {
+                val fcmToken = prefs.getString("fcm_token", null)
+                if (fcmToken != null) {
+                    com.chatursa.app.data.network.RetrofitClient.apiService
+                        .registerFcmToken(mapOf("token" to fcmToken, "unregister" to "true"))
+                }
+            } catch (_: Exception) {}
+        }
+        getApplication<android.app.Application>()
+            .getSharedPreferences("chat_prefs", 0)
+            .edit()
+            .clear()
+            .apply()
         prefs.edit().clear().apply()
         _uiState.value = AuthUiState()
     }
@@ -115,5 +129,10 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     fun saveUser(user: User) {
         val gson = com.google.gson.Gson()
         prefs.edit().putString("user_data", gson.toJson(user)).apply()
+        getApplication<android.app.Application>()
+            .getSharedPreferences("chat_prefs", 0)
+            .edit()
+            .putString("user_id", user.id)
+            .apply()
     }
 }

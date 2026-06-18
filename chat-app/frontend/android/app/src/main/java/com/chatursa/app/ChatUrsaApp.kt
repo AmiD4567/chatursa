@@ -4,6 +4,7 @@ import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Build
+import androidx.lifecycle.ProcessLifecycleOwner
 import coil.Coil
 import coil.ImageLoader
 import coil.disk.DiskCache
@@ -14,6 +15,7 @@ class ChatUrsaApp : Application() {
         super.onCreate()
         createNotificationChannels()
         setupImageLoader()
+        ProcessLifecycleOwner.get().lifecycle.addObserver(AppLifecycleObserver)
     }
 
     private fun setupImageLoader() {

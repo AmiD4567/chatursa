@@ -13,8 +13,8 @@ android {
         applicationId "com.chatursa.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 9
-        versionName "1.18"
+        versionCode 10
+        versionName "1.19"
     }
 
     buildTypes {

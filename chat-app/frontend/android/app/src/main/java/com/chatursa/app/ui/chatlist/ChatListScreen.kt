@@ -1,5 +1,6 @@
 package com.chatursa.app.ui.chatlist
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -40,7 +41,6 @@ fun ChatListScreen(
     var showUsersDialog by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // Top Bar
         TopAppBar(
             title = {
                 if (showSearch) {
@@ -88,7 +88,6 @@ fun ChatListScreen(
             )
         )
 
-        // Content
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -171,14 +170,51 @@ fun ChatListScreen(
                         modifier = Modifier.fillMaxSize()
                     ) {
                         items(filteredChats, key = { it.id }) { chat ->
-                            ChatListItem(
-                                chat = chat,
-                                isTyping = uiState.typingUsers[chat.id]?.isNotEmpty() == true,
-                                typingText = uiState.typingUsers[chat.id]?.let {
-                                    "${it.joinToString(", ")} печатает..."
-                                },
-                                onClick = { onChatClick(chat) }
+                            val dismissState = rememberSwipeToDismissBoxState(
+                                confirmValueChange = { dismissValue ->
+                                    if (dismissValue == SwipeToDismissBoxValue.EndToStart) {
+                                        viewModel.pendingDeleteChat = chat
+                                        false
+                                    } else false
+                                }
                             )
+                            SwipeToDismissBox(
+                                state = dismissState,
+                                backgroundContent = {
+                                    val color by animateColorAsState(
+                                        targetValue = when (dismissState.currentValue) {
+                                            SwipeToDismissBoxValue.EndToStart -> ErrorRed
+                                            else -> Color.Transparent
+                                        },
+                                        label = "swipe_bg"
+                                    )
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .background(color)
+                                            .padding(horizontal = 24.dp),
+                                        contentAlignment = Alignment.CenterEnd
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Delete,
+                                            contentDescription = "Удалить",
+                                            tint = Color.White,
+                                            modifier = Modifier.size(28.dp)
+                                        )
+                                    }
+                                },
+                                enableDismissFromStartToEnd = false,
+                                enableDismissFromEndToStart = true
+                            ) {
+                                ChatListItem(
+                                    chat = chat,
+                                    isTyping = uiState.typingUsers[chat.id]?.isNotEmpty() == true,
+                                    typingText = uiState.typingUsers[chat.id]?.let {
+                                        "${it.joinToString(", ")} печатает..."
+                                    },
+                                    onClick = { onChatClick(chat) }
+                                )
+                            }
                         }
                     }
                 }
@@ -194,6 +230,32 @@ fun ChatListScreen(
                 showUsersDialog = false
             },
             onDismiss = { showUsersDialog = false }
+        )
+    }
+
+    if (uiState.pendingDeleteChat != null) {
+        AlertDialog(
+            onDismissRequest = { viewModel.cancelDeleteChat() },
+            title = { Text("Удалить чат") },
+            text = {
+                Text("Удалить чат «${uiState.pendingDeleteChat?.name}»? Сообщения будут удалены безвозвратно.")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    uiState.pendingDeleteChat?.let { chat ->
+                        viewModel.deleteChat(chat.id)
+                    }
+                    viewModel.cancelDeleteChat()
+                }) {
+                    Text("Удалить", color = ErrorRed)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.cancelDeleteChat() }) {
+                    Text("Отмена")
+                }
+            },
+            containerColor = MaterialTheme.colorScheme.surface
         )
     }
 }

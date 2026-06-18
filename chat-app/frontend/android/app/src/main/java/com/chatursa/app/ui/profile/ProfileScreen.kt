@@ -1,13 +1,17 @@
 package com.chatursa.app.ui.profile
 
+import android.app.KeyguardManager
+import android.content.Context
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -25,6 +29,7 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.chatursa.app.AppConfig
 import com.chatursa.app.avatarUrl
+import com.chatursa.app.data.BiometricLockManager
 import com.chatursa.app.data.model.User
 import com.chatursa.app.data.network.UpdateManager
 import com.chatursa.app.data.network.UpdateInfo
@@ -100,6 +105,7 @@ fun ProfileScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
+            .verticalScroll(rememberScrollState())
     ) {
         // Header
         Box(
@@ -212,7 +218,54 @@ fun ProfileScreen(
             }
         }
 
-        Spacer(modifier = Modifier.weight(1f))
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Biometric lock toggle
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.Default.Lock,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(16.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Блокировка приложения",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = if (BiometricLockManager.isAvailable(context)) "Защита отпечатком пальца"
+                               else "Биометрия недоступна",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = BiometricLockManager.isEnabled(context),
+                    onCheckedChange = { enabled ->
+                        BiometricLockManager.setEnabled(context, enabled)
+                    },
+                    enabled = BiometricLockManager.isAvailable(context),
+                    colors = SwitchDefaults.colors(checkedTrackColor = Purple500)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
 
         // Update section
         Card(

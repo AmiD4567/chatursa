@@ -40,4 +40,7 @@ interface ApiService {
 
     @GET("api/link-preview")
     suspend fun getLinkPreview(@Query("url") url: String): Response<LinkPreview>
+
+    @POST("api/push/fcm/register")
+    suspend fun registerFcmToken(@Body body: Map<String, String>): Response<Map<String, Any>>
 }

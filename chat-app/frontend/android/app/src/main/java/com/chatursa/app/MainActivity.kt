@@ -3,22 +3,81 @@ package com.chatursa.app
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
-import androidx.activity.ComponentActivity
+import android.os.Handler
+import android.os.Looper
+import android.widget.Toast
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.chatursa.app.data.BiometricLockManager
 import com.chatursa.app.ui.navigation.AppNavGraph
 import com.chatursa.app.ui.theme.ChatUrsaTheme
 import com.chatursa.app.ui.theme.ThemeViewModel
 
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
+
+    private var biometricPending = false
+    private var contentReady = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
         val sharedText = extractSharedText(intent)
         val sharedImageUri = extractSharedImageUri(intent)
+
+        if (BiometricLockManager.isEnabled(this)) {
+            biometricPending = true
+            showBiometricGate {
+                biometricPending = false
+                contentReady = true
+                setAppContent(sharedText, sharedImageUri)
+            }
+        } else {
+            contentReady = true
+            setAppContent(sharedText, sharedImageUri)
+        }
+
+        lifecycle.addObserver(LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_STOP -> {
+                    if (BiometricLockManager.isEnabled(this) && contentReady) {
+                        biometricPending = true
+                    }
+                }
+                Lifecycle.Event.ON_START -> {
+                    if (BiometricLockManager.isEnabled(this) && biometricPending && contentReady) {
+                        showBiometricGate {
+                            biometricPending = false
+                        }
+                    }
+                }
+                else -> {}
+            }
+        })
+    }
+
+    private fun showBiometricGate(onAuth: () -> Unit) {
+        BiometricLockManager.authenticate(
+            activity = this,
+            onSuccess = {
+                onAuth()
+            },
+            onError = { error ->
+                Toast.makeText(this, "Ошибка: $error", Toast.LENGTH_SHORT).show()
+                Handler(Looper.getMainLooper()).postDelayed({
+                    showBiometricGate(onAuth)
+                }, 1000)
+            }
+        )
+    }
+
+    private fun setAppContent(sharedText: String?, sharedImageUri: Uri?) {
         setContent {
             val themeViewModel: ThemeViewModel = viewModel()
             ChatUrsaTheme(themeViewModel = themeViewModel) {

@@ -76,21 +76,21 @@
 ## 🔄 Phase 1 (MVP) — Без этого запускаться нельзя
 
 ### Push-уведомления
-- [ ] **FCM для Android (Capacitor)** — настроить Firebase Cloud Messaging
+- [x] **Web Push (VAPID)** — бэкенд (web-push, БД, API), клиент (подписка после логина), SW (push/notificationclick)
+- [x] **FCM для Android** — Firebase Admin SDK (backend), FCM-сервис (Android), токен endpoints, интеграция с sendPushNotification
 - [ ] **APNs для iOS** — настроить Apple Push Notification service
-- [ ] Web Push (VAPID) — есть черновик, донастроить
 
 ### Инфраструктура
 - [ ] **SQLite → PostgreSQL** (или SQLite WAL2 с репликацией) — для 50+ concurrent users
 - [x] **Docker Compose** — `Dockerfile` (multi-stage: frontend build + backend), `docker-compose.yml` (persistent volume для SQLite + uploads, restart policy), env vars через `CHAT_APP_*`
 
 ### E2EE — доработки Phase 1
-- [ ] **Индикатор E2EE в списке чатов** — значок замка рядом с lastMessage
+- [x] **Индикатор E2EE в списке чатов** — значок 🔒 рядом с названием чата (App.js + chat.css)
 - [ ] **Групповые E2EE чаты** — Sender Keys протокол
 - [ ] **Perfect Forward Secrecy** — Double Ratchet / смена ключей при каждом N сообщений
 - [ ] **Self-destruct сообщения** — таймер самоуничтожения для E2EE-чатов
 - [ ] **Аудит безопасности E2EE** — утечки plaintext в IndexedDB, очистка ключей при logout
-- [ ] **Отзыв/сброс ключей** — перегенерация через UI
+- [x] **Отзыв/сброс ключей** — кнопка в Настройки → О приложении, перегенерация ключей, очистка кэша, загрузка на сервер
 
 ---
 

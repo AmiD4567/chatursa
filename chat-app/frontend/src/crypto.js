@@ -248,6 +248,127 @@ export async function ensureSharedKey(chatId, peerUserId, myPrivateKey) {
   }
 }
 
+// ---- Group E2EE (общий групповой ключ) ----
+
+// Кэш групповых ключей: Map<chatId, CryptoKey>
+const groupKeyCache = new Map();
+
+export function getCachedGroupKey(chatId) {
+  return groupKeyCache.get(chatId) || null;
+}
+
+export function cacheGroupKey(chatId, key) {
+  groupKeyCache.set(chatId, key);
+}
+
+export function clearGroupKeyCache() {
+  groupKeyCache.clear();
+}
+
+/**
+ * Генерирует новый AES-256-GCM ключ для группы.
+ */
+export async function generateGroupKey() {
+  return crypto.subtle.generateKey(SYMMETRIC_ALGORITHM, true, ['encrypt', 'decrypt']);
+}
+
+/**
+ * Экспортирует AES-ключ в raw-формате (base64).
+ */
+export async function exportGroupKey(key) {
+  const raw = await crypto.subtle.exportKey('raw', key);
+  return btoa(String.fromCharCode(...new Uint8Array(raw)));
+}
+
+/**
+ * Импортирует AES-ключ из raw-формата (base64).
+ */
+export async function importGroupKey(base64) {
+  const raw = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+  return crypto.subtle.importKey('raw', raw, SYMMETRIC_ALGORITHM, false, ['encrypt', 'decrypt']);
+}
+
+/**
+ * Шифрует групповой ключ для участника через ECDH shared key.
+ * @param {CryptoKey} groupKey - AES-256 Group Key
+ * @param {CryptoKey} myPrivateKey - ECDH приватный ключ текущего пользователя
+ * @param {string} memberPublicKeyB64 - публичный ключ участника (base64)
+ * @returns {{ encryptedKey: string, nonce: string }|null}
+ */
+export async function encryptGroupKeyForMember(groupKey, myPrivateKey, memberPublicKeyB64) {
+  try {
+    const memberPubKey = await importPublicKeyBase64(memberPublicKeyB64);
+    const sharedKey = await deriveSharedKey(myPrivateKey, memberPubKey);
+    const raw = await crypto.subtle.exportKey('raw', groupKey);
+    const nonce = crypto.getRandomValues(new Uint8Array(12));
+    const encrypted = await crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv: nonce },
+      sharedKey,
+      raw
+    );
+    return {
+      encryptedKey: btoa(String.fromCharCode(...new Uint8Array(encrypted))),
+      nonce: btoa(String.fromCharCode(...nonce))
+    };
+  } catch (err) {
+    console.error('[E2EE] encryptGroupKeyForMember error:', err.message);
+    return null;
+  }
+}
+
+/**
+ * Расшифровывает групповой ключ из зашифрованного блоба.
+ * @param {CryptoKey} myPrivateKey - ECDH приватный ключ текущего пользователя
+ * @param {string} encryptedKeyB64 - зашифрованный ключ (base64)
+ * @param {string} nonceB64 - nonce (base64)
+ * @param {string} peerUserId - ID участника, который зашифровал
+ * @returns {CryptoKey|null} - расшифрованный AES-ключ
+ */
+export async function decryptGroupKey(myPrivateKey, encryptedKeyB64, nonceB64, peerUserId) {
+  const peerPubB64 = await getPeerPublicKey(peerUserId);
+  if (!peerPubB64) return null;
+  try {
+    const peerPubKey = await importPublicKeyBase64(peerPubB64);
+    const sharedKey = await deriveSharedKey(myPrivateKey, peerPubKey);
+    const encrypted = Uint8Array.from(atob(encryptedKeyB64), c => c.charCodeAt(0));
+    const nonce = Uint8Array.from(atob(nonceB64), c => c.charCodeAt(0));
+    const decrypted = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: nonce },
+      sharedKey,
+      encrypted
+    );
+    return crypto.subtle.importKey('raw', decrypted, SYMMETRIC_ALGORITHM, false, ['encrypt', 'decrypt']);
+  } catch (err) {
+    console.error('[E2EE] decryptGroupKey error:', err.message);
+    return null;
+  }
+}
+
+// ---- Сброс/перегенерация ключей ----
+
+export async function deleteE2EEKeys(userId) {
+  const db = await openE2EEDB();
+  const tx = db.transaction(E2EE_KEY_STORE, 'readwrite');
+  tx.objectStore(E2EE_KEY_STORE).delete(userId);
+  await new Promise((resolve, reject) => {
+    tx.oncomplete = resolve;
+    tx.onerror = (e) => reject(e.target.error);
+  });
+  db.close();
+  sharedKeyCache.clear();
+}
+
+export async function clearPeerKeyCache() {
+  const db = await openE2EEDB();
+  const tx = db.transaction(E2EE_PEER_STORE, 'readwrite');
+  tx.objectStore(E2EE_PEER_STORE).clear();
+  await new Promise((resolve, reject) => {
+    tx.oncomplete = resolve;
+    tx.onerror = (e) => reject(e.target.error);
+  });
+  db.close();
+}
+
 // ---- Вспомогательные ----
 
 function openE2EEDB() {

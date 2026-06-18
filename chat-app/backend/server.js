@@ -470,6 +470,10 @@ function initDatabase() {
     { table: 'calendar_tasks', column: 'reminder_time', type: 'TEXT' },
     { table: 'chats', column: 'avatar', type: 'TEXT' },
     { table: 'user_sessions', column: 'last_seen', type: 'TEXT DEFAULT CURRENT_TIMESTAMP' },
+    { table: 'messages', column: 'poll_id', type: 'TEXT' },
+    { table: 'polls', column: 'closes_at', type: 'TEXT' },
+    { table: 'polls', column: 'hide_results_until_close', type: 'INTEGER DEFAULT 0' },
+    { table: 'announcements', column: 'priority', type: 'TEXT DEFAULT \'normal\'' },
     { table: 'user_device_sessions', column: 'device_id', type: 'TEXT' },
     { table: 'user_device_sessions', column: 'device_name', type: 'TEXT DEFAULT \'\'' },
     { table: 'user_device_sessions', column: 'ip_address', type: 'TEXT DEFAULT \'\'' },
@@ -653,6 +657,27 @@ function initDatabase() {
     );
     CREATE INDEX IF NOT EXISTS idx_push_user ON push_subscriptions(user_id);
 
+    CREATE TABLE IF NOT EXISTS hr_requests (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      type TEXT NOT NULL CHECK(type IN ('vacation', 'sick', 'day_off')),
+      start_date TEXT NOT NULL,
+      end_date TEXT NOT NULL,
+      reason TEXT DEFAULT '',
+      status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'approved', 'rejected', 'cancelled')),
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS hr_approvals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      request_id TEXT NOT NULL,
+      approver_id TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('approved', 'rejected')),
+      comment TEXT DEFAULT '',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE TABLE IF NOT EXISTS fcm_tokens (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
@@ -661,6 +686,76 @@ function initDatabase() {
       FOREIGN KEY (user_id) REFERENCES users(id)
     );
     CREATE INDEX IF NOT EXISTS idx_fcm_user ON fcm_tokens(user_id);
+
+    CREATE TABLE IF NOT EXISTS wiki_categories (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT DEFAULT '',
+      parent_id TEXT,
+      sort_order INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS wiki_articles (
+      id TEXT PRIMARY KEY,
+      category_id TEXT,
+      title TEXT NOT NULL,
+      content TEXT DEFAULT '',
+      created_by TEXT,
+      updated_by TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS wiki_article_files (
+      id TEXT PRIMARY KEY,
+      article_id TEXT NOT NULL,
+      file_name TEXT NOT NULL,
+      file_path TEXT NOT NULL,
+      file_size INTEGER DEFAULT 0,
+      mime_type TEXT DEFAULT '',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS announcements (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_by TEXT NOT NULL,
+      priority TEXT DEFAULT 'normal',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS announcement_reads (
+      announcement_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      read_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(announcement_id, user_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_ann_read_user ON announcement_reads(user_id);
+
+    CREATE TABLE IF NOT EXISTS polls (
+      id TEXT PRIMARY KEY,
+      chat_id TEXT NOT NULL,
+      creator_id TEXT NOT NULL,
+      question TEXT NOT NULL,
+      options TEXT NOT NULL,
+      is_anonymous INTEGER DEFAULT 0,
+      allows_multiple INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS poll_votes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      poll_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      option_index INTEGER NOT NULL,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(poll_id, user_id, option_index),
+      FOREIGN KEY (poll_id) REFERENCES polls(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_poll_votes_poll ON poll_votes(poll_id);
 
     CREATE INDEX IF NOT EXISTS idx_messages_chat_id ON messages(chat_id);
     CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
@@ -3061,7 +3156,7 @@ app.get('/api/messages/:chatId', (req, res) => {
   try {
     const rows = db.prepare(`
       SELECT m.id, m.chat_id, m.sender_id, m.text, m.file_data, m.reply_to, m.timestamp, m.read_at,
-             m.e2ee, m.e2ee_nonce, m.e2ee_ephemeral,
+             m.e2ee, m.e2ee_nonce, m.e2ee_ephemeral, m.poll_id,
              u.username as senderName, u.avatar as senderAvatar
       FROM messages m
       LEFT JOIN users u ON m.sender_id = u.id
@@ -3080,12 +3175,18 @@ app.get('/api/messages/:chatId', (req, res) => {
         }
       }
 
+      let poll = null;
+      if (row.poll_id) {
+        poll = getPollWithVotes(row.poll_id, userId);
+      }
+
       return {
         id: row.id,
         chatId: row.chat_id,
         senderId: row.sender_id,
         text: isE2EE ? (row.text || '') : (decryptText(row.text) || ''),
         file: file,
+        poll: poll,
         reply_to: row.reply_to ? (() => { try { return JSON.parse(row.reply_to); } catch { return null; } })() : null,
         timestamp: row.timestamp,
         read_at: row.read_at || null,
@@ -3708,6 +3809,535 @@ app.get('/api/bot/today/:userId', (req, res) => {
   }
 });
 
+// ============================================
+// Wiki API
+// ============================================
+
+// Categories
+
+app.get('/api/wiki/categories', (req, res) => {
+  try {
+    const rows = db.prepare('SELECT * FROM wiki_categories ORDER BY sort_order ASC, name ASC').all();
+    res.json({ success: true, categories: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/wiki/categories', (req, res) => {
+  const { name, description, parentId } = req.body;
+  if (!name) return res.status(400).json({ error: 'name обязателен' });
+  try {
+    const id = uuidv4();
+    db.prepare('INSERT INTO wiki_categories (id, name, description, parent_id) VALUES (?, ?, ?, ?)')
+      .run(id, name, description || '', parentId || null);
+    res.json({ success: true, category: db.prepare('SELECT * FROM wiki_categories WHERE id = ?').get(id) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/wiki/categories/:id', (req, res) => {
+  const { name, description, parentId, sortOrder } = req.body;
+  try {
+    db.prepare('UPDATE wiki_categories SET name = ?, description = ?, parent_id = ?, sort_order = ? WHERE id = ?')
+      .run(name, description || '', parentId || null, sortOrder || 0, req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/wiki/categories/:id', (req, res) => {
+  try {
+    db.prepare('DELETE FROM wiki_articles WHERE category_id = ?').run(req.params.id);
+    db.prepare('DELETE FROM wiki_categories WHERE id = ?').run(req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Articles
+
+app.get('/api/wiki/articles', (req, res) => {
+  const { categoryId, userId } = req.query;
+  try {
+    let sql = `SELECT a.*, u1.username as creatorName, u2.username as updaterName
+               FROM wiki_articles a
+               LEFT JOIN users u1 ON a.created_by = u1.id
+               LEFT JOIN users u2 ON a.updated_by = u2.id`;
+    const params = [];
+    if (categoryId) {
+      sql += ' WHERE a.category_id = ?';
+      params.push(categoryId);
+    }
+    sql += ' ORDER BY a.updated_at DESC';
+    const rows = db.prepare(sql).all(...params);
+    res.json({ success: true, articles: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/wiki/articles/:id', (req, res) => {
+  try {
+    const row = db.prepare(`SELECT a.*, u1.username as creatorName, u2.username as updaterName
+      FROM wiki_articles a
+      LEFT JOIN users u1 ON a.created_by = u1.id
+      LEFT JOIN users u2 ON a.updated_by = u2.id
+      WHERE a.id = ?`).get(req.params.id);
+    if (!row) return res.status(404).json({ error: 'Статья не найдена' });
+    const files = db.prepare('SELECT * FROM wiki_article_files WHERE article_id = ? ORDER BY created_at').all(req.params.id);
+    res.json({ success: true, article: { ...row, files } });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/wiki/articles', (req, res) => {
+  const { categoryId, title, content, userId } = req.body;
+  if (!title || !userId) return res.status(400).json({ error: 'title и userId обязательны' });
+  try {
+    const id = uuidv4();
+    const now = new Date().toISOString();
+    db.prepare('INSERT INTO wiki_articles (id, category_id, title, content, created_by, updated_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(id, categoryId || null, title, content || '', userId, userId, now, now);
+    const article = db.prepare('SELECT * FROM wiki_articles WHERE id = ?').get(id);
+    res.json({ success: true, article });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/wiki/articles/:id', (req, res) => {
+  const { title, content, categoryId, userId } = req.body;
+  if (!title || !userId) return res.status(400).json({ error: 'title и userId обязательны' });
+  try {
+    const now = new Date().toISOString();
+    db.prepare('UPDATE wiki_articles SET title = ?, content = ?, category_id = ?, updated_by = ?, updated_at = ? WHERE id = ?')
+      .run(title, content || '', categoryId || null, userId, now, req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/wiki/articles/:id', (req, res) => {
+  try {
+    const files = db.prepare('SELECT file_path FROM wiki_article_files WHERE article_id = ?').all(req.params.id);
+    for (const f of files) {
+      const fullPath = path.join(UPLOADS_PATH, f.file_path);
+      if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
+    }
+    db.prepare('DELETE FROM wiki_article_files WHERE article_id = ?').run(req.params.id);
+    db.prepare('DELETE FROM wiki_articles WHERE id = ?').run(req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Wiki article files
+app.get('/api/wiki/articles/:id/files', (req, res) => {
+  try {
+    const rows = db.prepare('SELECT * FROM wiki_article_files WHERE article_id = ? ORDER BY created_at').all(req.params.id);
+    res.json({ success: true, files: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/wiki/articles/:id/files', upload.single('file'), (req, res) => {
+  const articleId = req.params.id;
+  if (!req.file) return res.status(400).json({ error: 'Файл не загружен' });
+  try {
+    const article = db.prepare('SELECT id FROM wiki_articles WHERE id = ?').get(articleId);
+    if (!article) {
+      fs.unlink(req.file.path, () => {});
+      return res.status(404).json({ error: 'Статья не найдена' });
+    }
+    const id = uuidv4();
+    db.prepare('INSERT INTO wiki_article_files (id, article_id, file_name, file_path, file_size, mime_type) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(id, articleId, req.file.originalname, req.file.filename, req.file.size, req.file.mimetype);
+    const row = db.prepare('SELECT * FROM wiki_article_files WHERE id = ?').get(id);
+    res.json({ success: true, file: row });
+  } catch (err) {
+    fs.unlink(req.file.path, () => {});
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/wiki/articles/:id/files/:fileId', (req, res) => {
+  try {
+    const file = db.prepare('SELECT * FROM wiki_article_files WHERE id = ? AND article_id = ?').get(req.params.fileId, req.params.id);
+    if (!file) return res.status(404).json({ error: 'Файл не найден' });
+    const fullPath = path.join(UPLOADS_PATH, file.file_path);
+    if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
+    db.prepare('DELETE FROM wiki_article_files WHERE id = ?').run(req.params.fileId);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================
+// HR API
+// ============================================
+
+app.post('/api/hr/requests', (req, res) => {
+  const { userId, type, startDate, endDate, reason } = req.body;
+  if (!userId || !type || !startDate || !endDate) {
+    return res.status(400).json({ error: 'userId, type, startDate, endDate обязательны' });
+  }
+  if (!['vacation', 'sick', 'day_off'].includes(type)) {
+    return res.status(400).json({ error: 'Неверный тип заявления' });
+  }
+  try {
+    const id = uuidv4();
+    const now = new Date().toISOString();
+    db.prepare('INSERT INTO hr_requests (id, user_id, type, start_date, end_date, reason, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(id, userId, type, startDate, endDate, reason || '', now, now);
+    const request = db.prepare('SELECT * FROM hr_requests WHERE id = ?').get(id);
+    res.json({ success: true, request });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/hr/requests', (req, res) => {
+  const { userId } = req.query;
+  if (!userId) return res.status(400).json({ error: 'userId обязателен' });
+  try {
+    const isAdmin = checkAdmin(userId);
+    let rows;
+    if (isAdmin) {
+      rows = db.prepare(`SELECT r.*, u.username as userName FROM hr_requests r LEFT JOIN users u ON r.user_id = u.id ORDER BY r.created_at DESC`).all();
+    } else {
+      rows = db.prepare(`SELECT r.*, u.username as userName FROM hr_requests r LEFT JOIN users u ON r.user_id = u.id WHERE r.user_id = ? ORDER BY r.created_at DESC`).all(userId);
+    }
+    res.json({ success: true, requests: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/hr/requests/pending', (req, res) => {
+  const { userId } = req.query;
+  if (!userId) return res.status(400).json({ error: 'userId обязателен' });
+  if (!checkAdmin(userId)) return res.status(403).json({ error: 'Только для администраторов' });
+  try {
+    const rows = db.prepare(`SELECT r.*, u.username as userName FROM hr_requests r LEFT JOIN users u ON r.user_id = u.id WHERE r.status = 'pending' ORDER BY r.created_at ASC`).all();
+    res.json({ success: true, requests: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/hr/requests/:id/approve', (req, res) => {
+  const { id } = req.params;
+  const { userId, status, comment } = req.body;
+  if (!userId || !status) return res.status(400).json({ error: 'userId и status обязательны' });
+  if (!checkAdmin(userId)) return res.status(403).json({ error: 'Только для администраторов' });
+  if (!['approved', 'rejected'].includes(status)) return res.status(400).json({ error: 'Статус должен быть approved или rejected' });
+  try {
+    const now = new Date().toISOString();
+    db.prepare("UPDATE hr_requests SET status = ?, updated_at = ? WHERE id = ?").run(status, now, id);
+    db.prepare("INSERT INTO hr_approvals (request_id, approver_id, status, comment) VALUES (?, ?, ?, ?)")
+      .run(id, userId, status, comment || '');
+
+    // Уведомление автору
+    const request = db.prepare('SELECT * FROM hr_requests WHERE id = ?').get(id);
+    if (request) {
+      const label = status === 'approved' ? '✅ Заявление одобрено' : '❌ Заявление отклонено';
+      sendFcmNotification(request.user_id, label, `${request.type}: ${request.start_date} - ${request.end_date}`, { requestId: id, type: 'hr_approval' });
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================
+// Announcements API
+// ============================================
+
+// Создать объявление (admin only)
+app.post('/api/announcements', (req, res) => {
+  const { userId, title, content, priority } = req.body;
+  if (!userId || !title || !content) {
+    return res.status(400).json({ error: 'userId, title и content обязательны' });
+  }
+  if (!checkAdmin(userId)) {
+    return res.status(403).json({ error: 'Только администратор может создавать объявления' });
+  }
+  try {
+    const id = uuidv4();
+    const timestamp = new Date().toISOString();
+    const prio = ['normal', 'high', 'urgent'].includes(priority) ? priority : 'normal';
+    db.prepare('INSERT INTO announcements (id, title, content, created_by, priority, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(id, title, content, userId, prio, timestamp);
+
+    // Отправляем push-уведомление всем
+    const sender = db.prepare('SELECT username FROM users WHERE id = ?').get(userId);
+    const allUsers = db.prepare('SELECT id FROM users WHERE id != ?').all(userId);
+    allUsers.forEach(row => {
+      const label = prio === 'urgent' ? '🔴 СРОЧНО' : prio === 'high' ? '🟡 Важно' : '📢 Объявление';
+      sendFcmNotification(row.id, label, title, { announcementId: id, type: 'announcement' });
+    });
+
+    const announcement = { id, title, content, createdBy: userId, creatorName: sender?.username || '', priority: prio, createdAt: timestamp };
+
+    // Broadcast to all online users
+    io.emit('new_announcement', { announcement });
+
+    res.json({ success: true, announcement });
+  } catch (err) {
+    console.error('Ошибка создания объявления:', err);
+    res.status(500).json({ error: 'Ошибка при создании объявления' });
+  }
+});
+
+// Получить список объявлений (с статусом прочтения для пользователя)
+app.get('/api/announcements', (req, res) => {
+  const { userId } = req.query;
+  if (!userId) return res.status(400).json({ error: 'userId обязателен' });
+  try {
+    const rows = db.prepare(`
+      SELECT a.*, u.username as creatorName,
+             (SELECT COUNT(*) FROM announcement_reads WHERE announcement_id = a.id) as readCount,
+             (SELECT read_at FROM announcement_reads WHERE announcement_id = a.id AND user_id = ?) as myReadAt
+      FROM announcements a
+      LEFT JOIN users u ON a.created_by = u.id
+      ORDER BY a.created_at DESC
+    `).all(userId);
+
+    const totalUsers = db.prepare('SELECT COUNT(*) as cnt FROM users').get().cnt;
+    const announcements = rows.map(row => ({
+      id: row.id,
+      title: row.title,
+      content: row.content,
+      createdBy: row.created_by,
+      creatorName: row.creatorName || '',
+      priority: row.priority || 'normal',
+      readCount: row.readCount || 0,
+      totalUsers,
+      isRead: !!row.myReadAt,
+      myReadAt: row.myReadAt || null,
+      createdAt: row.created_at
+    }));
+
+    res.json({ success: true, announcements });
+  } catch (err) {
+    console.error('Ошибка получения объявлений:', err);
+    res.status(500).json({ error: 'Ошибка при получении объявлений' });
+  }
+});
+
+// Отметить объявление как прочитанное
+app.post('/api/announcements/:id/read', (req, res) => {
+  const { id } = req.params;
+  const { userId } = req.body;
+  if (!userId) return res.status(400).json({ error: 'userId обязателен' });
+  try {
+    db.prepare('INSERT OR IGNORE INTO announcement_reads (announcement_id, user_id, read_at) VALUES (?, ?, ?)')
+      .run(id, userId, new Date().toISOString());
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Ошибка отметки прочтения:', err);
+    res.status(500).json({ error: 'Ошибка при отметке прочтения' });
+  }
+});
+
+// ============================================
+// Polls API
+// ============================================
+
+function getPollWithVotes(pollId, userId) {
+  const poll = db.prepare('SELECT * FROM polls WHERE id = ?').get(pollId);
+  if (!poll) return null;
+  const votes = db.prepare('SELECT * FROM poll_votes WHERE poll_id = ?').all(pollId);
+  const options = JSON.parse(poll.options);
+  const totalVotes = votes.length;
+  const optionVotes = options.map((_, idx) => votes.filter(v => v.option_index === idx).length);
+  const userVotes = db.prepare('SELECT option_index FROM poll_votes WHERE poll_id = ? AND user_id = ?').all(pollId, userId);
+
+  const isClosed = poll.closes_at && new Date(poll.closes_at) < new Date();
+  const hideResults = poll.hide_results_until_close && !isClosed;
+
+  return {
+    id: poll.id,
+    chatId: poll.chat_id,
+    creatorId: poll.creator_id,
+    question: poll.question,
+    options,
+    isAnonymous: !!poll.is_anonymous,
+    allowsMultiple: !!poll.allows_multiple,
+    totalVotes: isClosed || !hideResults ? totalVotes : 0,
+    optionVotes: isClosed || !hideResults ? optionVotes : options.map(() => 0),
+    votedIndices: userVotes.map(v => v.option_index),
+    createdAt: poll.created_at,
+    closesAt: poll.closes_at || null,
+    isClosed,
+    hideResultsUntilClose: !!poll.hide_results_until_close,
+    votesHidden: hideResults
+  };
+}
+
+// Создать опрос
+app.post('/api/polls', (req, res) => {
+  const { chatId, userId, question, options, isAnonymous, allowsMultiple, closesAt, hideResultsUntilClose } = req.body;
+  if (!chatId || !userId || !question || !options || !Array.isArray(options) || options.length < 2) {
+    return res.status(400).json({ error: 'chatId, userId, question и options (min 2) обязательны' });
+  }
+  if (options.length > 10) {
+    return res.status(400).json({ error: 'Максимум 10 вариантов ответа' });
+  }
+  try {
+    const pollId = uuidv4();
+    db.prepare(`
+      INSERT INTO polls (id, chat_id, creator_id, question, options, is_anonymous, allows_multiple, closes_at, hide_results_until_close)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(pollId, chatId, userId, question, JSON.stringify(options), isAnonymous ? 1 : 0, allowsMultiple ? 1 : 0, closesAt || null, hideResultsUntilClose ? 1 : 0);
+
+    // Создаём сообщение в чате с poll_id
+    const messageId = uuidv4();
+    const timestamp = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO messages (id, chat_id, sender_id, text, poll_id, timestamp)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(messageId, chatId, userId, '📊 ' + question, pollId, timestamp);
+
+    // Unread for all except creator
+    const partRows = db.prepare('SELECT user_id FROM chat_participants WHERE chat_id = ?').all(chatId);
+    partRows.forEach(row => {
+      if (row.user_id !== userId) {
+        db.prepare('INSERT OR IGNORE INTO unread_messages (user_id, message_id, chat_id) VALUES (?, ?, ?)').run(row.user_id, messageId, chatId);
+      }
+    });
+
+    markDbActivity();
+
+    const pollData = getPollWithVotes(pollId, userId);
+
+    // Get sender info for broadcast
+    const sender = db.prepare('SELECT id, username, avatar FROM users WHERE id = ?').get(userId);
+
+    // Broadcast to chat room (без votedIndices — каждый клиент получает свои через getPollWithVotes)
+    const broadcastPoll = { ...pollData };
+    delete broadcastPoll.votedIndices;
+    const newMessage = {
+      id: messageId,
+      chatId,
+      senderId: userId,
+      senderName: sender?.username || '',
+      senderAvatar: sender?.avatar || '',
+      text: '📊 ' + question,
+      file: null,
+      reply_to: null,
+      replyCount: 0,
+      timestamp,
+      read_at: null,
+      readBy: [],
+      forwarded_from: null,
+      e2ee: 0,
+      poll: broadcastPoll,
+      expires_at: null
+    };
+
+    io.to(chatId).emit('new_message', { message: newMessage, chat: { id: chatId, unreadCount: 0 } });
+
+    res.json({ success: true, poll: pollData, messageId, message: newMessage });
+  } catch (err) {
+    console.error('Ошибка создания опроса:', err);
+    res.status(500).json({ error: 'Ошибка при создании опроса' });
+  }
+});
+
+// Получить опрос
+app.get('/api/polls/:pollId', (req, res) => {
+  const { pollId } = req.params;
+  const { userId } = req.query;
+  if (!userId) return res.status(400).json({ error: 'userId обязателен' });
+  try {
+    const pollData = getPollWithVotes(pollId, userId);
+    if (!pollData) return res.status(404).json({ error: 'Опрос не найден' });
+    res.json({ success: true, poll: pollData });
+  } catch (err) {
+    console.error('Ошибка получения опроса:', err);
+    res.status(500).json({ error: 'Ошибка при получении опроса' });
+  }
+});
+
+// Проголосовать в опросе
+app.post('/api/polls/:pollId/vote', (req, res) => {
+  const { pollId } = req.params;
+  const { userId, optionIndex } = req.body;
+  if (!userId || optionIndex === undefined || optionIndex === null) {
+    return res.status(400).json({ error: 'userId и optionIndex обязательны' });
+  }
+  try {
+    const poll = db.prepare('SELECT * FROM polls WHERE id = ?').get(pollId);
+    if (!poll) return res.status(404).json({ error: 'Опрос не найден' });
+    const options = JSON.parse(poll.options);
+    if (optionIndex < 0 || optionIndex >= options.length) {
+      return res.status(400).json({ error: 'Неверный индекс варианта' });
+    }
+
+    if (!poll.allows_multiple) {
+      // Single choice: remove previous votes, insert new one
+      db.prepare('DELETE FROM poll_votes WHERE poll_id = ? AND user_id = ?').run(pollId, userId);
+    }
+    db.prepare('INSERT OR IGNORE INTO poll_votes (poll_id, user_id, option_index) VALUES (?, ?, ?)').run(pollId, userId, optionIndex);
+
+    const pollData = getPollWithVotes(pollId, userId);
+
+    // Broadcast to chat room (без votedIndices — каждый клиент получает свои при загрузке)
+    const broadcastPoll = { ...pollData };
+    delete broadcastPoll.votedIndices;
+    io.to(poll.chat_id).emit('poll_vote', { poll: broadcastPoll });
+
+    res.json({ success: true, poll: pollData });
+  } catch (err) {
+    console.error('Ошибка голосования:', err);
+    res.status(500).json({ error: 'Ошибка при голосовании' });
+  }
+});
+
+// Отменить голос (снять все голоса пользователя в опросе)
+app.post('/api/polls/:pollId/revoke', (req, res) => {
+  const { pollId } = req.params;
+  const { userId } = req.body;
+  if (!userId) return res.status(400).json({ error: 'userId обязателен' });
+  try {
+    const poll = db.prepare('SELECT * FROM polls WHERE id = ?').get(pollId);
+    if (!poll) return res.status(404).json({ error: 'Опрос не найден' });
+    db.prepare('DELETE FROM poll_votes WHERE poll_id = ? AND user_id = ?').run(pollId, userId);
+    const pollData = getPollWithVotes(pollId, userId);
+    io.to(poll.chat_id).emit('poll_vote', { poll: pollData });
+    res.json({ success: true, poll: pollData });
+  } catch (err) {
+    console.error('Ошибка отзыва голоса:', err);
+    res.status(500).json({ error: 'Ошибка при отзыве голоса' });
+  }
+});
+
+// Получить опросы чата
+app.get('/api/chats/:chatId/polls', (req, res) => {
+  const { chatId } = req.params;
+  const { userId } = req.query;
+  if (!userId) return res.status(400).json({ error: 'userId обязателен' });
+  try {
+    const pollRows = db.prepare('SELECT id FROM polls WHERE chat_id = ? ORDER BY created_at DESC').all(chatId);
+    const polls = pollRows.map(r => getPollWithVotes(r.id, userId)).filter(Boolean);
+    res.json({ success: true, polls });
+  } catch (err) {
+    console.error('Ошибка получения опросов чата:', err);
+    res.status(500).json({ error: 'Ошибка при получении опросов' });
+  }
+});
+
 // Получение IP адреса клиента
 function getClientIp(req) {
   return req.headers['x-forwarded-for']?.split(',')[0] ||
@@ -3886,12 +4516,15 @@ function getUserChats(userId) {
   });
 }
 
-function getChatMessages(chatId, limit = 100) {
+function getChatMessages(chatId, limit = 100, userId = null) {
   try {
     // Сначала получаем последние N сообщений в обратном порядке (новые первые)
     // Исключаем просроченные self-destruct сообщения
     const messagesReversed = db.prepare(`
-      SELECT m.*, u.username as senderName, u.avatar as senderAvatar
+      SELECT m.id, m.chat_id, m.sender_id, m.text, m.file_data, m.reply_to, m.timestamp, m.read_at,
+             m.forwarded_from, m.e2ee, m.e2ee_nonce, m.e2ee_ephemeral, m.expires_at, m.edited, m.edited_at,
+             m.poll_id,
+             u.username as senderName, u.avatar as senderAvatar
       FROM messages m
       JOIN users u ON m.sender_id = u.id
       WHERE m.chat_id = ?
@@ -3946,6 +4579,10 @@ function getChatMessages(chatId, limit = 100) {
       }
 
       const isE2EE = row.e2ee === 1 || row.e2ee === true;
+      let poll = null;
+      if (row.poll_id) {
+        poll = getPollWithVotes(row.poll_id, userId || '');
+      }
       messages.push({
         id: row.id,
         chatId: row.chat_id,
@@ -3954,6 +4591,7 @@ function getChatMessages(chatId, limit = 100) {
         senderAvatar: row.senderAvatar,
         text: isE2EE ? (row.text || '') : (decryptText(row.text) || ''),
         file: row.file_data && !isBotMessage ? (() => { try { return JSON.parse(row.file_data); } catch { return null; } })() : null,
+        poll: poll,
         reply_to: row.reply_to ? (() => { try { return JSON.parse(row.reply_to); } catch { return null; } })() : null,
         timestamp: row.timestamp,
         read_at: row.read_at,
@@ -4500,7 +5138,7 @@ io.on('connection', (socket) => {
 
     
     // Отправляем историю сообщений
-    const chatMessages = getChatMessages(chatId);
+    const chatMessages = getChatMessages(chatId, 100, onlineUser.id);
     const chat = getChatWithDetails(chatId);
 
     socket.emit('chat_history', {
@@ -5609,6 +6247,15 @@ try {
   } catch (e) {
     console.error('Ошибка восстановления сессий:', e.message);
   }
+
+  // Global error handler — returns JSON instead of HTML
+  app.use((err, req, res, next) => {
+    if (err instanceof multer.MulterError) {
+      return res.status(400).json({ error: `Ошибка загрузки файла: ${err.message}` });
+    }
+    console.error('Unhandled error:', err);
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
+  });
 
   server.listen(PORT, HOST, () => {
     const displayHost = HOST === '0.0.0.0' ? getLocalIP() : HOST;

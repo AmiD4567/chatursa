@@ -13,21 +13,19 @@ let birthdaysCache = { data: [], expires: 0 };
  * @param {Object} onlineUser - объект пользователя из onlineUsers Map
  * @param {string} chatId - ID чата с ботом
  */
-function handleTodayCommand({ db, sendBotMessage }, onlineUser, chatId) {
+function handleTodayCommand({ db, sendBotMessage, socket, chatId }, onlineUser) {
   setTimeout(() => {
     try {
       const today = new Date();
       const todayStr = today.toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' });
       const todayIso = today.toISOString().split('T')[0];
 
-      // Задачи на сегодня
       const tasksRows = db.prepare(`
         SELECT title, task_time FROM calendar_tasks
         WHERE user_id = ? AND task_date LIKE ?
       `).all(onlineUser.id, todayIso + '%');
       const tasks = tasksRows.map(row => ({ title: row.title, time: row.task_time }));
 
-      // Дни рождения сегодня (с кэшем 60 сек)
       const now = Date.now();
       if (now - birthdaysCache.expires > 60000) {
         const allBirthdays = db.prepare('SELECT username, birth_date FROM users WHERE birth_date IS NOT NULL').all();
@@ -43,7 +41,6 @@ function handleTodayCommand({ db, sendBotMessage }, onlineUser, chatId) {
         })
         .map(row => row.username) || [];
 
-      // Встречи сегодня
       const meetingsRows = db.prepare(`
         SELECT title, start_time, end_time FROM meeting_room_bookings
         WHERE meeting_date LIKE ? AND organizer_id = ?
@@ -53,7 +50,6 @@ function handleTodayCommand({ db, sendBotMessage }, onlineUser, chatId) {
         time: `${row.start_time} - ${row.end_time}`
       }));
 
-      // Формируем ответ
       let responseText = `📅 *${todayStr}*\n\n`;
 
       if (tasks.length > 0) {
@@ -85,13 +81,13 @@ function handleTodayCommand({ db, sendBotMessage }, onlineUser, chatId) {
 
       responseText += '\n💡 *Совет:* Начинайте день с проверки этой команды!';
 
-      sendBotMessage(chatId, responseText, [
+      sendBotMessage(socket, chatId, responseText, [
         { label: '📅 Календарь', action: '/календарь' },
         { label: '🔔 Напоминания', action: '/уведомления' }
       ]);
     } catch (err) {
       console.error('Ошибка команды /сегодня:', err);
-      sendBotMessage(chatId, '😕 Произошла ошибка при получении данных. Попробуйте позже.', []);
+      sendBotMessage(socket, chatId, '😕 Произошла ошибка при получении данных. Попробуйте позже.', []);
     }
   }, 500);
 };
@@ -103,7 +99,7 @@ function handleTodayCommand({ db, sendBotMessage }, onlineUser, chatId) {
  * @param {Function} deps.sendBotMessage - отправка сообщения бота
  * @param {string} chatId - ID чата с ботом
  */
-function handleContactsCommand({ db, sendBotMessage }, chatId) {
+function handleContactsCommand({ db, sendBotMessage, socket, chatId }) {
   setTimeout(() => {
     try {
       const users = db.prepare(`
@@ -121,7 +117,7 @@ function handleContactsCommand({ db, sendBotMessage }, chatId) {
       const contacts = users;
 
       if (contacts.length === 0) {
-        sendBotMessage(chatId, '📞 *Контакты:*\n\nСписок контактов пуст.', []);
+        sendBotMessage(socket, chatId, '📞 *Контакты:*\n\nСписок контактов пуст.', []);
         return;
       }
 
@@ -135,13 +131,13 @@ function handleContactsCommand({ db, sendBotMessage }, chatId) {
         responseText += '\n';
       });
 
-      sendBotMessage(chatId, responseText, [
+      sendBotMessage(socket, chatId, responseText, [
         { label: '👤 Профиль', action: '/профиль' },
         { label: '🔙 Назад', action: '/помощь' }
       ]);
     } catch (err) {
       console.error('Ошибка команды /контакты:', err);
-      sendBotMessage(chatId, '😕 Произошла ошибка при получении контактов.', []);
+      sendBotMessage(socket, chatId, '😕 Произошла ошибка при получении контактов.', []);
     }
   }, 500);
 };

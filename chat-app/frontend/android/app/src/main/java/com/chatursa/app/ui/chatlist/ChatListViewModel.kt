@@ -3,18 +3,24 @@ package com.chatursa.app.ui.chatlist
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.chatursa.app.AppConfig
 import com.chatursa.app.data.model.Chat
 import com.chatursa.app.data.model.Message
 import com.chatursa.app.data.model.User
 import com.chatursa.app.data.network.SocketEvent
 import com.chatursa.app.data.network.SocketManager
 import com.chatursa.app.data.notification.NotificationHelper
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import java.util.concurrent.TimeUnit
 
 data class ChatListUiState(
     val chats: List<Chat> = emptyList(),
@@ -25,7 +31,8 @@ data class ChatListUiState(
     val error: String? = null,
     val searchQuery: String = "",
     val typingUsers: Map<String, List<String>> = emptyMap(),
-    val createdChatId: String? = null
+    val createdChatId: String? = null,
+    val pendingDeleteChat: Chat? = null
 )
 
 class ChatListViewModel(application: Application) : AndroidViewModel(application) {
@@ -37,6 +44,9 @@ class ChatListViewModel(application: Application) : AndroidViewModel(application
 
     private var collectJob: Job? = null
     private var isConnecting = false
+    var pendingDeleteChat: Chat?
+        get() = _uiState.value.pendingDeleteChat
+        set(value) { _uiState.value = _uiState.value.copy(pendingDeleteChat = value) }
 
     fun connect(user: User) {
         if (isConnecting || _uiState.value.isConnected) {
@@ -167,6 +177,35 @@ class ChatListViewModel(application: Application) : AndroidViewModel(application
             chat.name.lowercase().contains(query) ||
             chat.lastMessage?.text?.lowercase()?.contains(query) == true
         }
+    }
+
+    fun deleteChat(chatId: String) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                try {
+                    val client = OkHttpClient.Builder()
+                        .connectTimeout(10, TimeUnit.SECONDS)
+                        .readTimeout(10, TimeUnit.SECONDS)
+                        .build()
+
+                    val request = Request.Builder()
+                        .url("${AppConfig.SERVER_URL}/api/chats/$chatId")
+                        .delete()
+                        .build()
+
+                    client.newCall(request).execute()
+                } catch (e: Exception) {
+                    android.util.Log.e("ChatListVM", "Delete chat failed", e)
+                }
+            }
+            _uiState.value = _uiState.value.copy(
+                chats = _uiState.value.chats.filter { it.id != chatId }
+            )
+        }
+    }
+
+    fun cancelDeleteChat() {
+        _uiState.value = _uiState.value.copy(pendingDeleteChat = null)
     }
 
     private fun updateChatWithNewMessage(message: Message) {
