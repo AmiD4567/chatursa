@@ -8,6 +8,8 @@ import { useReactionParticles } from './ReactionParticlesManager';
 import emojiData from './emojiData.json';
 import { saveMessages, getMessages, saveChats, getChats, queueOutgoing, getOutbox, removeFromOutbox } from './db';
 import { initE2EEForUser, ensureSharedKey, encryptMessage, decryptMessage, getCachedSharedKey, setE2EEApiBase, getCachedGroupKey, cacheGroupKey, decryptGroupKey, generateGroupKey, encryptGroupKeyForMember, getPeerPublicKey } from './crypto';
+import { marked } from 'marked';
+import DOMPurify from 'dompurify';
 import DisconnectedOverlay from './DisconnectedOverlay';
 
 const SOCKET_URL = 'http://192.168.210.48:3001';
@@ -170,6 +172,7 @@ function App() {
 
   const [chats, setChats] = useState([]);
   const [activeChatId, setActiveChatId] = useState(null);
+  const [botTypingChatId, setBotTypingChatId] = useState(null);
   const [messages, setMessages] = useState([]);
   const [users, setUsers] = useState([]);
 
@@ -260,6 +263,7 @@ function App() {
     statusText: ''
   });
   const [isSaving, setIsSaving] = useState(false);
+  const [previewAvatar, setPreviewAvatar] = useState(null);
   const [newChatType, setNewChatType] = useState('direct');
   const [newChatName, setNewChatName] = useState('');
   const [selectedUsers, setSelectedUsers] = useState([]);
@@ -459,6 +463,10 @@ function App() {
 
   const [isAdmin, setIsAdmin] = useState(false);
   const [adminStats, setAdminStats] = useState(null);
+  const [botAnalyticsData, setBotAnalyticsData] = useState(null);
+  const [botSettings, setBotSettings] = useState(null);
+  const [supportRequests, setSupportRequests] = useState([]);
+  const [supportActiveFilter, setSupportActiveFilter] = useState('open');
   const [adminUsers, setAdminUsers] = useState([]);
   const [activeAdminTab, setActiveAdminTab] = useState('dashboard');
   const [showCreateUserModal, setShowCreateUserModal] = useState(false);
@@ -1321,6 +1329,17 @@ function App() {
       }
     });
 
+    newSocket.on('bot_typing', ({ chatId, isTyping }) => {
+      setBotTypingChatId(isTyping ? chatId : null);
+    });
+
+    newSocket.on('admin_notification', ({ type, title, message, requestId }) => {
+      if (type === 'support_request') {
+        alert(`📞 Новое обращение в поддержку\n\n${title}\n${message}`);
+        if (activeAdminTab === 'support') loadSupportRequests(supportActiveFilter || 'open');
+      }
+    });
+
     newSocket.on('new_message', async ({ message, chat, isOwnMessage }) => {
       // Расшифровываем E2EE сообщение
       if (message.e2ee && message.e2ee_nonce) {
@@ -1543,7 +1562,6 @@ function App() {
 
     newSocket.on('chat_avatar_updated', ({ chatId, avatar }) => {
       setChats(prev => prev.map(c => c.id === chatId ? { ...c, avatar } : c));
-      setActiveChat(prev => prev?.id === chatId ? { ...prev, avatar } : prev);
     });
 
     newSocket.on('users_list', (usersList) => {
@@ -2328,6 +2346,45 @@ function App() {
       }
     } catch (err) {
       console.error('Ошибка загрузки статистики:', err);
+    }
+  };
+
+  const loadBotAnalytics = async () => {
+    if (!currentUser) return;
+    try {
+      const response = await fetch(`${SOCKET_URL}/api/bot/analytics?userId=${currentUser.id}`);
+      if (response.ok) {
+        const data = await response.json();
+        setBotAnalyticsData(data.analytics);
+      }
+    } catch (err) {
+      console.error('Ошибка загрузки аналитики бота:', err);
+    }
+  };
+
+  const loadBotSettings = async () => {
+    if (!currentUser) return;
+    try {
+      const response = await fetch(`${SOCKET_URL}/api/bot/settings`);
+      if (response.ok) {
+        const data = await response.json();
+        setBotSettings(data.settings);
+      }
+    } catch (err) {
+      console.error('Ошибка загрузки настроек бота:', err);
+    }
+  };
+
+  const loadSupportRequests = async (status = 'open') => {
+    if (!currentUser) return;
+    try {
+      const response = await fetch(`${SOCKET_URL}/api/admin/support-requests?userId=${currentUser.id}&status=${status}`);
+      if (response.ok) {
+        const data = await response.json();
+        setSupportRequests(data.requests);
+      }
+    } catch (err) {
+      console.error('Ошибка загрузки обращений:', err);
     }
   };
 
@@ -5719,6 +5776,18 @@ function App() {
   };
 
   // Форматирование текста бота (поддержка markdown-подобного синтаксиса)
+  // Конфигурация marked для wiki
+  marked.setOptions({
+    breaks: true,
+    gfm: true
+  });
+
+  const renderMarkdown = (text) => {
+    if (!text) return '';
+    const raw = marked.parse(text);
+    return DOMPurify.sanitize(raw);
+  };
+
   const formatBotText = (text) => {
     if (!text) return text;
     
@@ -5908,6 +5977,7 @@ function App() {
                     }
                     setPassword('');
                     setShowLoginForm(true);
+                    setShowAuthForm(true);
                   }}
                 >
                   Войти
@@ -6661,6 +6731,18 @@ function App() {
               >
                 🎨 Настройки
               </button>
+              <button
+                className={`admin-tab ${activeAdminTab === 'bot' ? 'active' : ''}`}
+                onClick={() => { setActiveAdminTab('bot'); loadBotAnalytics(); loadBotSettings(); }}
+              >
+                🤖 Бот
+              </button>
+              <button
+                className={`admin-tab ${activeAdminTab === 'support' ? 'active' : ''}`}
+                onClick={() => { setActiveAdminTab('support'); loadSupportRequests('open'); }}
+              >
+                📞 Поддержка
+              </button>
             </div>
 
             <div className="admin-content">
@@ -7013,6 +7095,245 @@ function App() {
                         {isSavingUiSettings ? 'Сохранение...' : 'Сохранить настройки'}
                       </button>
                     </div>
+                  </div>
+                )}
+
+                {activeAdminTab === 'bot' && (
+                  <div className="admin-bot-section">
+                    <h4>🤖 Аналитика бота Помощник</h4>
+                    {botAnalyticsData ? (
+                      <div className="admin-dashboard">
+                        <div className="admin-stat-card">
+                          <div className="stat-icon">💬</div>
+                          <div className="stat-info">
+                            <div className="stat-value">{botAnalyticsData.totalInteractions}</div>
+                            <div className="stat-label">Всего взаимодействий</div>
+                          </div>
+                        </div>
+                        <div className="admin-stat-card">
+                          <div className="stat-icon">❌</div>
+                          <div className="stat-info">
+                            <div className="stat-value">{botAnalyticsData.fallbackCount}</div>
+                            <div className="stat-label">Нераспознанных запросов</div>
+                          </div>
+                        </div>
+                        <div className="admin-stat-card">
+                          <div className="stat-icon">📊</div>
+                          <div className="stat-info">
+                            <div className="stat-value">{botAnalyticsData.fallbackRate}</div>
+                            <div className="stat-label">% нераспознанных</div>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <p>Загрузка...</p>
+                    )}
+
+                    {botAnalyticsData && botAnalyticsData.topCommands && botAnalyticsData.topCommands.length > 0 && (
+                      <div className="admin-section">
+                        <h4>🏆 Популярные команды</h4>
+                        <table className="admin-table">
+                          <thead>
+                            <tr>
+                              <th>Команда</th>
+                              <th>Использований</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {botAnalyticsData.topCommands.map(([cmd, count], i) => (
+                              <tr key={i}>
+                                <td>{cmd}</td>
+                                <td>{count}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    {botAnalyticsData && botAnalyticsData.recentFallbacks && botAnalyticsData.recentFallbacks.length > 0 && (
+                      <div className="admin-section">
+                        <h4>❌ Последние нераспознанные запросы</h4>
+                        <ul className="fallback-list">
+                          {botAnalyticsData.recentFallbacks.map((phrase, i) => (
+                            <li key={i} className="fallback-item">{phrase}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    <button
+                      className="btn-danger"
+                      onClick={async () => {
+                        if (!confirm('Сбросить всю аналитику бота?')) return;
+                        try {
+                          await fetch(`${SOCKET_URL}/api/bot/analytics/reset`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ userId: currentUser.id })
+                          });
+                          setBotAnalyticsData(null);
+                        } catch (e) {
+                          console.error(e);
+                        }
+                      }}
+                      style={{ marginTop: '16px' }}
+                    >
+                      🗑️ Сбросить аналитику
+                    </button>
+
+                    <div className="admin-section" style={{ marginTop: '24px' }}>
+                      <h4>⚙️ Настройки функций бота</h4>
+                      {botSettings ? (
+                        <div className="settings-form">
+                          <div className="form-group">
+                            <label className="remember-me-label">
+                              <input type="checkbox" checked={botSettings.wiki_search_enabled} onChange={(e) => setBotSettings({...botSettings, wiki_search_enabled: e.target.checked})} />
+                              <span>Поиск по wiki-статьям</span>
+                            </label>
+                          </div>
+                          <div className="form-group">
+                            <label className="remember-me-label">
+                              <input type="checkbox" checked={botSettings.file_search_enabled} onChange={(e) => setBotSettings({...botSettings, file_search_enabled: e.target.checked})} />
+                              <span>Поиск файлов</span>
+                            </label>
+                          </div>
+                          <div className="form-group">
+                            <label className="remember-me-label">
+                              <input type="checkbox" checked={botSettings.task_creation_enabled} onChange={(e) => setBotSettings({...botSettings, task_creation_enabled: e.target.checked})} />
+                              <span>Создание задач</span>
+                            </label>
+                          </div>
+                          <div className="form-group">
+                            <label className="remember-me-label">
+                              <input type="checkbox" checked={botSettings.booking_enabled} onChange={(e) => setBotSettings({...botSettings, booking_enabled: e.target.checked})} />
+                              <span>Бронирование переговорок</span>
+                            </label>
+                          </div>
+                          <div className="form-group">
+                            <label className="remember-me-label">
+                              <input type="checkbox" checked={botSettings.poll_creation_enabled} onChange={(e) => setBotSettings({...botSettings, poll_creation_enabled: e.target.checked})} />
+                              <span>Создание опросов</span>
+                            </label>
+                          </div>
+                          <div className="form-group">
+                            <label className="remember-me-label">
+                              <input type="checkbox" checked={botSettings.support_enabled} onChange={(e) => setBotSettings({...botSettings, support_enabled: e.target.checked})} />
+                              <span>Обращения в поддержку</span>
+                            </label>
+                          </div>
+                          <div className="form-group">
+                            <label className="remember-me-label">
+                              <input type="checkbox" checked={botSettings.birthday_notifications_enabled} onChange={(e) => setBotSettings({...botSettings, birthday_notifications_enabled: e.target.checked})} />
+                              <span>Уведомления о днях рождения</span>
+                            </label>
+                          </div>
+                          <button
+                            className="btn-primary"
+                            onClick={async () => {
+                              try {
+                                await fetch(`${SOCKET_URL}/api/bot/settings`, {
+                                  method: 'POST',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({ userId: currentUser.id, settings: botSettings })
+                                });
+                                alert('Настройки сохранены');
+                              } catch (e) {
+                                console.error(e);
+                                alert('Ошибка сохранения');
+                              }
+                            }}
+                          >
+                            💾 Сохранить настройки
+                          </button>
+                        </div>
+                      ) : (
+                        <p>Загрузка...</p>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {activeAdminTab === 'support' && (
+                  <div className="admin-support-section">
+                    <div className="admin-users-header">
+                      <h4>📞 Обращения в поддержку</h4>
+                      <div>
+                        <button
+                          className={`admin-tab ${supportActiveFilter === 'open' ? 'active' : ''}`}
+                          onClick={() => { setSupportActiveFilter('open'); loadSupportRequests('open'); }}
+                          style={{ marginRight: '8px', padding: '4px 12px' }}
+                        >
+                          Открытые
+                        </button>
+                        <button
+                          className={`admin-tab ${supportActiveFilter === 'closed' ? 'active' : ''}`}
+                          onClick={() => { setSupportActiveFilter('closed'); loadSupportRequests('closed'); }}
+                          style={{ marginRight: '8px', padding: '4px 12px' }}
+                        >
+                          Закрытые
+                        </button>
+                        <button
+                          className={`admin-tab ${supportActiveFilter === 'all' ? 'active' : ''}`}
+                          onClick={() => { setSupportActiveFilter('all'); loadSupportRequests('all'); }}
+                          style={{ padding: '4px 12px' }}
+                        >
+                          Все
+                        </button>
+                      </div>
+                    </div>
+                    {supportRequests.length === 0 ? (
+                      <p>Нет обращений</p>
+                    ) : (
+                      <table className="admin-table">
+                        <thead>
+                          <tr>
+                            <th>ID</th>
+                            <th>Пользователь</th>
+                            <th>Проблема</th>
+                            <th>Статус</th>
+                            <th>Дата</th>
+                            <th>Действия</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {supportRequests.map(req => (
+                            <tr key={req.id}>
+                              <td>#{req.id.substring(0, 8)}</td>
+                              <td>{req.username}</td>
+                              <td style={{ maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis' }}>{req.problem}</td>
+                              <td>
+                                <span className={`status-badge ${req.status === 'open' ? 'status-open' : 'status-closed'}`}>
+                                  {req.status === 'open' ? '🟢 Открыто' : '🔴 Закрыто'}
+                                </span>
+                              </td>
+                              <td>{new Date(req.created_at).toLocaleString('ru-RU')}</td>
+                              <td>
+                                {req.status === 'open' && (
+                                  <button
+                                    className="btn-small"
+                                    onClick={async () => {
+                                      try {
+                                        await fetch(`${SOCKET_URL}/api/admin/support-requests/${req.id}/close`, {
+                                          method: 'POST',
+                                          headers: { 'Content-Type': 'application/json' },
+                                          body: JSON.stringify({ userId: currentUser.id })
+                                        });
+                                        loadSupportRequests(supportActiveFilter || 'open');
+                                      } catch (e) {
+                                        console.error(e);
+                                      }
+                                    }}
+                                  >
+                                    ✅ Закрыть
+                                  </button>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
                   </div>
                 )}
               </div>
@@ -7416,11 +7737,11 @@ function App() {
                     )}
                   </div>
                 ) : activeChat.type === 'group' ? (
-                  <div onClick={() => document.getElementById(`group-avatar-${activeChat.id}`).click()} style={{ cursor: 'pointer' }} title="Сменить аватар">
+                  <div style={{ cursor: 'pointer' }} title="Просмотр аватара">
                     {activeChat.avatar ? (
-                      <img src={activeChat.avatar} alt={activeChat.name} className="chat-header-avatar" />
+                      <img src={activeChat.avatar} alt={activeChat.name} className="chat-header-avatar" onClick={() => setPreviewAvatar({ src: activeChat.avatar, chatId: activeChat.id })} />
                     ) : (
-                      <span className="chat-icon-large">{getChatIcon(activeChat)}</span>
+                      <span className="chat-icon-large" onClick={() => document.getElementById(`group-avatar-${activeChat.id}`).click()}>{getChatIcon(activeChat)}</span>
                     )}
                     <input id={`group-avatar-${activeChat.id}`} type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => handleUploadGroupChatAvatar(e, activeChat.id)} />
                   </div>
@@ -7439,6 +7760,16 @@ function App() {
                             {arr.length > 1 && idx < arr.length - 1 ? ', ' : ''}
                           </span>
                         ))}
+                        <span className="typing-dots">
+                          <span>.</span><span>.</span><span>.</span>
+                        </span>
+                      </span>
+                    )}
+
+                    {/* Индикатор "Бот печатает..." */}
+                    {botTypingChatId === activeChat?.id && activeChat?.id?.startsWith('bot-chat-') && (
+                      <span className="typing-indicator">
+                        🤖 Помощник печатает
                         <span className="typing-dots">
                           <span>.</span><span>.</span><span>.</span>
                         </span>
@@ -8510,6 +8841,108 @@ function App() {
                     <option key={cat.id} value={cat.id}>{cat.name}</option>
                   ))}
                 </select>
+                <div className="wiki-md-toolbar">
+                  <button type="button" className="wiki-md-btn" onClick={() => {
+                    const ta = document.querySelector('.wiki-edit-content');
+                    const start = ta.selectionStart;
+                    const end = ta.selectionEnd;
+                    const selected = wikiEditContent.substring(start, end);
+                    const before = wikiEditContent.substring(0, start);
+                    const after = wikiEditContent.substring(end);
+                    setWikiEditContent(before + '**' + selected + '**' + after);
+                    setTimeout(() => { ta.focus(); ta.selectionStart = start + 2; ta.selectionEnd = end + 2; }, 0);
+                  }} title="Жирный"><strong>B</strong></button>
+                  <button type="button" className="wiki-md-btn" onClick={() => {
+                    const ta = document.querySelector('.wiki-edit-content');
+                    const start = ta.selectionStart;
+                    const end = ta.selectionEnd;
+                    const selected = wikiEditContent.substring(start, end);
+                    const before = wikiEditContent.substring(0, start);
+                    const after = wikiEditContent.substring(end);
+                    setWikiEditContent(before + '*' + selected + '*' + after);
+                    setTimeout(() => { ta.focus(); ta.selectionStart = start + 1; ta.selectionEnd = end + 1; }, 0);
+                  }} title="Курсив"><em>I</em></button>
+                  <button type="button" className="wiki-md-btn" onClick={() => {
+                    const ta = document.querySelector('.wiki-edit-content');
+                    const start = ta.selectionStart;
+                    const before = wikiEditContent.substring(0, start);
+                    const after = wikiEditContent.substring(start);
+                    setWikiEditContent(before + '# ' + after);
+                    setTimeout(() => { ta.focus(); ta.selectionStart = start + 2; ta.selectionEnd = start + 2; }, 0);
+                  }} title="Заголовок H1">H1</button>
+                  <button type="button" className="wiki-md-btn" onClick={() => {
+                    const ta = document.querySelector('.wiki-edit-content');
+                    const start = ta.selectionStart;
+                    const before = wikiEditContent.substring(0, start);
+                    const after = wikiEditContent.substring(start);
+                    setWikiEditContent(before + '## ' + after);
+                    setTimeout(() => { ta.focus(); ta.selectionStart = start + 3; ta.selectionEnd = start + 3; }, 0);
+                  }} title="Заголовок H2">H2</button>
+                  <button type="button" className="wiki-md-btn" onClick={() => {
+                    const ta = document.querySelector('.wiki-edit-content');
+                    const start = ta.selectionStart;
+                    const before = wikiEditContent.substring(0, start);
+                    const after = wikiEditContent.substring(start);
+                    setWikiEditContent(before + '### ' + after);
+                    setTimeout(() => { ta.focus(); ta.selectionStart = start + 4; ta.selectionEnd = start + 4; }, 0);
+                  }} title="Заголовок H3">H3</button>
+                  <span className="wiki-md-sep">|</span>
+                  <button type="button" className="wiki-md-btn" onClick={() => {
+                    const ta = document.querySelector('.wiki-edit-content');
+                    const start = ta.selectionStart;
+                    const before = wikiEditContent.substring(0, start);
+                    const after = wikiEditContent.substring(start);
+                    setWikiEditContent(before + '- ' + after);
+                    setTimeout(() => { ta.focus(); ta.selectionStart = start + 2; ta.selectionEnd = start + 2; }, 0);
+                  }} title="Маркированный список">•</button>
+                  <button type="button" className="wiki-md-btn" onClick={() => {
+                    const ta = document.querySelector('.wiki-edit-content');
+                    const start = ta.selectionStart;
+                    const before = wikiEditContent.substring(0, start);
+                    const after = wikiEditContent.substring(start);
+                    setWikiEditContent(before + '1. ' + after);
+                    setTimeout(() => { ta.focus(); ta.selectionStart = start + 3; ta.selectionEnd = start + 3; }, 0);
+                  }} title="Нумерованный список">1.</button>
+                  <span className="wiki-md-sep">|</span>
+                  <button type="button" className="wiki-md-btn" onClick={() => {
+                    const ta = document.querySelector('.wiki-edit-content');
+                    const start = ta.selectionStart;
+                    const end = ta.selectionEnd;
+                    const selected = wikiEditContent.substring(start, end);
+                    const before = wikiEditContent.substring(0, start);
+                    const after = wikiEditContent.substring(end);
+                    setWikiEditContent(before + '`' + selected + '`' + after);
+                    setTimeout(() => { ta.focus(); ta.selectionStart = start + 1; ta.selectionEnd = end + 1; }, 0);
+                  }} title="Код"><code>&lt;/&gt;</code></button>
+                  <button type="button" className="wiki-md-btn" onClick={() => {
+                    const ta = document.querySelector('.wiki-edit-content');
+                    const start = ta.selectionStart;
+                    const end = ta.selectionEnd;
+                    const selected = wikiEditContent.substring(start, end);
+                    const before = wikiEditContent.substring(0, start);
+                    const after = wikiEditContent.substring(end);
+                    setWikiEditContent(before + '[text](url)' + after);
+                    setTimeout(() => { ta.focus(); ta.selectionStart = start + 1; ta.selectionEnd = start + 1; }, 0);
+                  }} title="Ссылка">🔗</button>
+                  <button type="button" className="wiki-md-btn" onClick={() => {
+                    const ta = document.querySelector('.wiki-edit-content');
+                    const start = ta.selectionStart;
+                    const before = wikiEditContent.substring(0, start);
+                    const after = wikiEditContent.substring(start);
+                    setWikiEditContent(before + '```\n' + after);
+                    setTimeout(() => { ta.focus(); ta.selectionStart = start + 4; ta.selectionEnd = start + 4; }, 0);
+                  }} title="Блок кода">```</button>
+                  <button type="button" className="wiki-md-btn" onClick={() => {
+                    const ta = document.querySelector('.wiki-edit-content');
+                    const start = ta.selectionStart;
+                    const end = ta.selectionEnd;
+                    const selected = wikiEditContent.substring(start, end);
+                    const before = wikiEditContent.substring(0, start);
+                    const after = wikiEditContent.substring(end);
+                    setWikiEditContent(before + '> ' + selected.replace(/\n/g, '\n> ') + after);
+                    setTimeout(() => { ta.focus(); ta.selectionStart = start + 2; ta.selectionEnd = end + 2; }, 0);
+                  }} title="Цитата">❝</button>
+                </div>
                 <textarea className="wiki-edit-content" placeholder="Текст статьи (поддерживает Markdown)..."
                   value={wikiEditContent} onChange={e => setWikiEditContent(e.target.value)} rows={20} />
                 {(isAdmin || canEditWiki) && (
@@ -8575,7 +9008,7 @@ function App() {
                     )}
                   </div>
                 </div>
-                <div className="wiki-article-content">{wikiActiveArticle.content}</div>
+                <div className="wiki-article-content markdown-body" dangerouslySetInnerHTML={{ __html: renderMarkdown(wikiActiveArticle.content) }} />
                 {wikiFiles.length > 0 && (
                   <div className="wiki-article-files">
                     <h4>📎 Прикреплённые файлы</h4>
@@ -10521,6 +10954,25 @@ function App() {
               >
                 Переслать
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {previewAvatar && (
+        <div className="modal-overlay" onClick={() => setPreviewAvatar(null)}>
+          <div className="modal-content avatar-preview-modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>🖼️ Аватар группы</h3>
+              <button onClick={() => setPreviewAvatar(null)}>✕</button>
+            </div>
+            <div className="modal-body" style={{ textAlign: 'center', padding: '20px' }}>
+              <img src={previewAvatar.src} alt="Аватар" className="avatar-preview-img" />
+              <div style={{ marginTop: '16px' }}>
+                <button className="btn-primary" onClick={() => { const chatId = previewAvatar.chatId; setPreviewAvatar(null); setTimeout(() => document.getElementById(`group-avatar-${chatId}`)?.click(), 100); }}>
+                  📷 Сменить аватар
+                </button>
+              </div>
             </div>
           </div>
         </div>

@@ -79,7 +79,8 @@ function logError(message) {
 
 // Настройка автообновлений
 autoUpdater.autoDownload = true;        // скачивать автоматически
-autoUpdater.autoInstallOnAppQuit = true; // устанавливать при закрытии приложения
+autoUpdater.autoInstallOnAppQuit = false; // управляем установкой сами (нужен isSilent)
+autoUpdater.autoRunAppAfterInstall = true; // автозапуск после установки
 autoUpdater.allowDowngrade = false;     // запрещены откаты версии
 
 autoUpdater.on('checking-for-update', () => {
@@ -499,6 +500,17 @@ app.whenReady().then(() => {
 // Обработка закрытия приложения
 app.on('before-quit', (event) => {
   logToFile('Закрытие приложения (before-quit)...');
+
+  // Если загружено обновление — устанавливаем его тихо и с автозапуском
+  if (autoUpdater.isUpdateDownloaded) {
+    logToFile('before-quit: обнаружено загруженное обновление, запускаю тихую установку...');
+    app.isQuiting = true;
+    stopBackend();
+    globalShortcut.unregisterAll();
+    autoUpdater.quitAndInstall(true, true); // isSilent=true, isForceRunAfter=true
+    return;
+  }
+
   app.isQuiting = true;
   stopBackend();
 
@@ -1133,8 +1145,8 @@ ipcMain.on('start-update', () => {
 });
 
 ipcMain.on('quit-and-install', () => {
-  logToFile('Пользователь запустил установку обновления');
-  autoUpdater.quitAndInstall();
+  logToFile('Пользователь запустил установку обновления (тихая + автозапуск)');
+  autoUpdater.quitAndInstall(true, true); // isSilent=true, isForceRunAfter=true
 });
 
 // Логирование непредвиденных ошибок

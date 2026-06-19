@@ -494,7 +494,10 @@ function initDatabase() {
     { table: 'user_device_sessions', column: 'socket_ids', type: 'TEXT NOT NULL DEFAULT \'[]\'' },
     { table: 'user_device_sessions', column: 'login_time', type: 'TEXT DEFAULT CURRENT_TIMESTAMP' },
     { table: 'user_device_sessions', column: 'last_seen', type: 'TEXT DEFAULT CURRENT_TIMESTAMP' },
-    { table: 'user_device_sessions', column: 'is_current', type: 'INTEGER DEFAULT 0' }
+    { table: 'user_device_sessions', column: 'is_current', type: 'INTEGER DEFAULT 0' },
+    { table: 'messages', column: 'button_data', type: 'TEXT' },
+    { table: 'users', column: 'onboarding_completed', type: 'INTEGER DEFAULT 0' },
+    { table: 'wiki_articles', column: 'views', type: 'INTEGER DEFAULT 0' }
   ];
 
   migrations.forEach(({ table, column, type }) => {
@@ -772,6 +775,30 @@ function initDatabase() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_poll_votes_poll ON poll_votes(poll_id);
+
+    CREATE TABLE IF NOT EXISTS bot_settings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      setting_key TEXT UNIQUE NOT NULL,
+      setting_value TEXT NOT NULL DEFAULT '1',
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+    INSERT OR IGNORE INTO bot_settings (setting_key, setting_value) VALUES ('wiki_search_enabled', '1');
+    INSERT OR IGNORE INTO bot_settings (setting_key, setting_value) VALUES ('file_search_enabled', '1');
+    INSERT OR IGNORE INTO bot_settings (setting_key, setting_value) VALUES ('task_creation_enabled', '1');
+    INSERT OR IGNORE INTO bot_settings (setting_key, setting_value) VALUES ('booking_enabled', '1');
+    INSERT OR IGNORE INTO bot_settings (setting_key, setting_value) VALUES ('poll_creation_enabled', '1');
+    INSERT OR IGNORE INTO bot_settings (setting_key, setting_value) VALUES ('support_enabled', '1');
+    INSERT OR IGNORE INTO bot_settings (setting_key, setting_value) VALUES ('birthday_notifications_enabled', '1');
+
+    CREATE TABLE IF NOT EXISTS support_requests (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      username TEXT NOT NULL,
+      problem TEXT NOT NULL,
+      status TEXT DEFAULT 'open',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    );
 
     CREATE INDEX IF NOT EXISTS idx_messages_chat_id ON messages(chat_id);
     CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
@@ -3940,6 +3967,177 @@ app.get('/api/bot/today/:userId', (req, res) => {
   }
 });
 
+// Аналитика бота (для админа)
+app.get('/api/bot/analytics', (req, res) => {
+  const { userId } = req.query;
+  if (!checkAdmin(userId)) {
+    return res.status(403).json({ error: 'Доступ запрещён' });
+  }
+  try {
+    const report = botAnalytics.getReport();
+    res.json({ success: true, analytics: report });
+  } catch (err) {
+    console.error('Ошибка получения аналитики бота:', err);
+    res.status(500).json({ error: 'Ошибка при получении аналитики' });
+  }
+});
+
+// Сброс аналитики бота (для админа)
+app.post('/api/bot/analytics/reset', (req, res) => {
+  const { userId } = req.body;
+  if (!checkAdmin(userId)) {
+    return res.status(403).json({ error: 'Доступ запрещён' });
+  }
+  try {
+    botAnalytics.reset();
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Ошибка сброса аналитики:', err);
+    res.status(500).json({ error: 'Ошибка при сбросе' });
+  }
+});
+
+// Получение настроек бота
+app.get('/api/bot/settings', (req, res) => {
+  try {
+    const settings = db.prepare('SELECT setting_key, setting_value FROM bot_settings').all();
+    const result = {};
+    settings.forEach(s => { result[s.setting_key] = s.setting_value === '1'; });
+    res.json({ success: true, settings: result });
+  } catch (err) {
+    console.error('Ошибка получения настроек бота:', err);
+    res.status(500).json({ error: 'Ошибка при получении настроек' });
+  }
+});
+
+// Обновление настроек бота (админ)
+app.post('/api/bot/settings', (req, res) => {
+  const { userId, settings } = req.body;
+  if (!checkAdmin(userId)) {
+    return res.status(403).json({ error: 'Доступ запрещён' });
+  }
+  try {
+    const stmt = db.prepare('UPDATE bot_settings SET setting_value = ?, updated_at = ? WHERE setting_key = ?');
+    const now = new Date().toISOString();
+    Object.entries(settings).forEach(([key, value]) => {
+      stmt.run(value ? '1' : '0', now, key);
+    });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Ошибка обновления настроек бота:', err);
+    res.status(500).json({ error: 'Ошибка при обновлении настроек' });
+  }
+});
+
+// Список обращений в поддержку (для админа)
+app.get('/api/admin/support-requests', (req, res) => {
+  const { userId, status } = req.query;
+  if (!checkAdmin(userId)) {
+    return res.status(403).json({ error: 'Доступ запрещён' });
+  }
+  try {
+    let query = 'SELECT * FROM support_requests';
+    const params = [];
+    if (status && status !== 'all') {
+      query += ' WHERE status = ?';
+      params.push(status);
+    }
+    query += ' ORDER BY created_at DESC LIMIT 100';
+    const requests = db.prepare(query).all(...params);
+    res.json({ success: true, requests });
+  } catch (err) {
+    console.error('Ошибка получения обращений:', err);
+    res.status(500).json({ error: 'Ошибка при получении обращений' });
+  }
+});
+
+// Закрыть обращение в поддержку
+app.post('/api/admin/support-requests/:id/close', (req, res) => {
+  const { userId } = req.body;
+  if (!checkAdmin(userId)) {
+    return res.status(403).json({ error: 'Доступ запрещён' });
+  }
+  try {
+    const { id } = req.params;
+    db.run("UPDATE support_requests SET status = 'closed' WHERE id = ?", [id]);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Ошибка закрытия обращения:', err);
+    res.status(500).json({ error: 'Ошибка при закрытии обращения' });
+  }
+});
+
+// Поиск по wiki-статьям (для бота и пользователей)
+app.get('/api/wiki/search', (req, res) => {
+  const { q, limit = 5 } = req.query;
+  if (!q || q.trim().length < 2) {
+    return res.json({ success: true, results: [] });
+  }
+  try {
+    const results = db.prepare(`
+      SELECT id, title, content, category_id,
+             (SELECT name FROM wiki_categories WHERE id = wiki_articles.category_id) as category_name
+      FROM wiki_articles
+      WHERE title LIKE ? OR content LIKE ?
+      ORDER BY views DESC
+      LIMIT ?
+    `).all(`%${q}%`, `%${q}%`, parseInt(limit) || 5);
+    res.json({ success: true, results });
+  } catch (err) {
+    console.error('Ошибка поиска wiki:', err);
+    res.status(500).json({ error: 'Ошибка поиска' });
+  }
+});
+
+// Поиск файлов
+app.get('/api/search/files', (req, res) => {
+  const { q, limit = 20 } = req.query;
+  if (!q || q.trim().length < 2) {
+    return res.json({ success: true, results: [] });
+  }
+  try {
+    const results = db.prepare(`
+      SELECT m.id, m.chat_id, m.file_data, m.timestamp, m.sender_id, u.username as sender_name,
+             c.name as chat_name, c.type as chat_type
+      FROM messages m
+      JOIN users u ON m.sender_id = u.id
+      LEFT JOIN chats c ON m.chat_id = c.id
+      WHERE m.file_data IS NOT NULL AND (m.file_data LIKE ? OR m.text LIKE ?)
+      ORDER BY m.timestamp DESC
+      LIMIT ?
+    `).all(`%${q}%`, `%${q}%`, parseInt(limit) || 20);
+
+    const files = results.map(row => {
+      try {
+        const parsed = JSON.parse(row.file_data);
+        return { ...row, file_info: parsed, file_data: undefined };
+      } catch {
+        return { ...row, file_info: null, file_data: undefined };
+      }
+    });
+
+    res.json({ success: true, results: files });
+  } catch (err) {
+    console.error('Ошибка поиска файлов:', err);
+    res.status(500).json({ error: 'Ошибка поиска файлов' });
+  }
+});
+
+// Получение wiki-статьи (для бота)
+app.get('/api/wiki/article/:id', (req, res) => {
+  try {
+    const { id } = req.params;
+    const article = db.prepare('SELECT * FROM wiki_articles WHERE id = ?').get(id);
+    if (!article) {
+      return res.status(404).json({ error: 'Статья не найдена' });
+    }
+    res.json({ success: true, article });
+  } catch (err) {
+    console.error('Ошибка получения статьи:', err);
+    res.status(500).json({ error: 'Ошибка получения статьи' });
+  }
+});
+
 // ============================================
 // Wiki API
 // ============================================
@@ -4824,7 +5022,7 @@ function sendPushNotification(userId, title, body, icon, data) {
 }
 
 function sendFcmNotification(userId, title, body, data) {
-  if (!admin.apps.length) return;
+  if (typeof admin.getApps !== 'function' || !admin.getApps().length) return;
   try {
     const rows = db.prepare('SELECT token FROM fcm_tokens WHERE user_id = ?').all(userId);
     if (!rows.length) return;
@@ -5506,8 +5704,16 @@ io.on('connection', (socket) => {
 
       const command = text.trim().toLowerCase().split(' ')[0];
 
+      // Проверяем настройки бота
+      const getBotSetting = (key) => {
+        try {
+          const row = db.prepare('SELECT setting_value FROM bot_settings WHERE setting_key = ?').get(key);
+          return row ? row.setting_value === '1' : true;
+        } catch (e) { return true; }
+      };
+
       // State machine: проверяем контекст разговора
-      const stateResult = processConversationState(conversationStates, sendBotMessage, socket, chatId, text);
+      const stateResult = processConversationState(conversationStates, sendBotMessage, socket, chatId, text, { db, uuidv4, io });
 
       if (stateResult.handled) {
         return;
@@ -5516,6 +5722,16 @@ io.on('connection', (socket) => {
       // Если это команда начала нового диалога
       if (isDialogStartCommand(text)) {
         const cleanCommand = text.trim().toLowerCase();
+        // Проверяем, включена ли функция
+        let featureEnabled = true;
+        if (cleanCommand === '/создать задачу') featureEnabled = getBotSetting('task_creation_enabled');
+        else if (cleanCommand === '/забронировать переговорку') featureEnabled = getBotSetting('booking_enabled');
+        else if (cleanCommand === '/создать опрос') featureEnabled = getBotSetting('poll_creation_enabled');
+        else if (cleanCommand === '/обратиться в поддержку') featureEnabled = getBotSetting('support_enabled');
+        if (!featureEnabled) {
+          sendBotMessage(socket, chatId, '😕 Эта функция временно отключена администратором.', []);
+          return;
+        }
         startConversation(conversationStates, sendBotMessage, socket, chatId, cleanCommand);
         botAnalytics.recordCommand(cleanCommand);
         return;
@@ -5534,6 +5750,76 @@ io.on('connection', (socket) => {
         return;
       }
 
+      // Поиск по wiki
+      if ((command === '/поиск_вики' || text.toLowerCase().includes('поиск вики') || text.toLowerCase().includes('найди в базе знаний')) && getBotSetting('wiki_search_enabled')) {
+        const query = text.replace(/\/\w+\s*/, '').trim();
+        if (query.length < 2) {
+          sendBotMessage(socket, chatId, '🔍 *Поиск по базе знаний*\n\nНапишите, что ищете, после команды.\n\nНапример: *найди в базе знаний как создать чат*', []);
+        } else {
+          try {
+            const results = db.prepare(`
+              SELECT id, title, content, category_id,
+                     (SELECT name FROM wiki_categories WHERE id = wiki_articles.category_id) as category_name
+              FROM wiki_articles
+              WHERE title LIKE ? OR content LIKE ?
+              ORDER BY views DESC LIMIT 5
+            `).all(`%${query}%`, `%${query}%`);
+            if (results.length === 0) {
+              sendBotMessage(socket, chatId, `🔍 По запросу "${query}" ничего не найдено в базе знаний.`, []);
+            } else {
+              let response = `🔍 *Результаты поиска по запросу:* "${query}"\n\n`;
+              results.forEach((r, i) => {
+                const snippet = r.content.replace(/<[^>]*>/g, '').substring(0, 100);
+                response += `${i+1}. *${r.title}*${r.category_name ? ` (${r.category_name})` : ''}\n   ${snippet}...\n\n`;
+              });
+              sendBotMessage(socket, chatId, response, [{ label: '📚 База знаний', action: '/база_знаний' }]);
+            }
+          } catch (e) {
+            sendBotMessage(socket, chatId, '😕 Ошибка поиска по базе знаний.', []);
+          }
+        }
+        botAnalytics.recordCommand('/поиск_вики');
+        return;
+      }
+
+      // Поиск файлов
+      if ((command === '/поиск_файлов' || text.toLowerCase().includes('поиск файл') || text.toLowerCase().includes('найди файл')) && getBotSetting('file_search_enabled')) {
+        const query = text.replace(/\/\w+\s*/, '').trim();
+        if (query.length < 2) {
+          sendBotMessage(socket, chatId, '🔍 *Поиск файлов*\n\nНапишите название файла после команды.\n\nНапример: *найди файл отчёт*', []);
+        } else {
+          try {
+            const results = db.prepare(`
+              SELECT m.id, m.chat_id, m.file_data, m.timestamp, m.sender_id, u.username as sender_name,
+                     c.name as chat_name
+              FROM messages m
+              JOIN users u ON m.sender_id = u.id
+              LEFT JOIN chats c ON m.chat_id = c.id
+              WHERE m.file_data IS NOT NULL AND m.file_data LIKE ?
+              ORDER BY m.timestamp DESC LIMIT 10
+            `).all(`%${query}%`);
+            if (results.length === 0) {
+              sendBotMessage(socket, chatId, `🔍 Файлы по запросу "${query}" не найдены.`, []);
+            } else {
+              let response = `🔍 *Найдено файлов:* ${results.length}\n\n`;
+              results.forEach((r, i) => {
+                let fileName = r.file_data;
+                try {
+                  const parsed = JSON.parse(r.file_data);
+                  fileName = parsed.name || parsed.fileName || r.file_data;
+                } catch (e) {}
+                response += `${i+1}. 📎 ${fileName}\n   Отправил: ${r.sender_name}\n   Чат: ${r.chat_name || '—'}\n   ${new Date(r.timestamp).toLocaleString('ru-RU')}\n\n`;
+              });
+              sendBotMessage(socket, chatId, response, []);
+            }
+          } catch (e) {
+            sendBotMessage(socket, chatId, '😕 Ошибка поиска файлов.', []);
+          }
+        }
+        botAnalytics.recordCommand('/поиск_файлов');
+        return;
+      }
+
       // Обычные команды через базу знаний
       const botResponse = getBotResponse(text);
 
@@ -5545,10 +5831,22 @@ io.on('connection', (socket) => {
         botAnalytics.recordCommand(command);
       }
 
+      // Показываем индикатор печати бота
+      socket.emit('bot_typing', { chatId, isTyping: true });
+
       // Отправляем ответ с небольшой задержкой для естественности
       setTimeout(() => {
+        socket.emit('bot_typing', { chatId, isTyping: false });
         sendBotMessage(socket, chatId, botResponse.text, botResponse.buttons || []);
       }, 500);
+    }
+
+    // Онбординг: отмечаем завершение
+    if (command === '/онбординг_финиш') {
+      try {
+        const userId = chatId.replace('bot-chat-', '');
+        db.run('UPDATE users SET onboarding_completed = 1 WHERE id = ?', [userId]);
+      } catch (e) {}
     }
   } catch (err) {
     console.error('=== ОШИБКА ПРИ ОТПРАВКЕ СООБЩЕНИЯ ===', err);
@@ -6395,6 +6693,74 @@ function restorePendingReminders() {
 
 // Запускаем восстановление напоминаний после старта сервера
 setTimeout(restorePendingReminders, 8000);
+
+/**
+ * Планировщик уведомлений о днях рождения
+ * Проверяет каждое утро в 8:00 и отправляет поздравления через бота
+ */
+function scheduleBirthdayChecker() {
+  const checkBirthdays = () => {
+    try {
+      // Проверяем, включены ли уведомления
+      const bdSetting = db.prepare("SELECT setting_value FROM bot_settings WHERE setting_key = 'birthday_notifications_enabled'").get();
+      if (bdSetting && bdSetting.setting_value !== '1') return;
+
+      const today = new Date();
+      const todayDay = today.getDate();
+      const todayMonth = today.getMonth() + 1;
+
+      const birthdayUsers = db.prepare(`
+        SELECT id, username, birth_date FROM users
+        WHERE birth_date IS NOT NULL
+      `).all().filter(row => {
+        const bd = new Date(row.birth_date);
+        return bd.getDate() === todayDay && (bd.getMonth() + 1) === todayMonth;
+      });
+
+      if (birthdayUsers.length === 0) return;
+
+      const botUser = db.prepare("SELECT id FROM users WHERE username = 'Помощник'").get();
+      if (!botUser) return;
+
+      // Отправляем каждому пользователю уведомление о сегодняшних именинниках
+      const allUsers = db.prepare("SELECT id FROM users WHERE username != 'Помощник'").all();
+      allUsers.forEach(user => {
+        const botChatId = `bot-chat-${user.id}`;
+        const names = birthdayUsers.map(u => `  • ${u.username}`).join('\n');
+        const messageId = uuidv4();
+        const text = `🎉 *Сегодня день рождения!*\n\nПоздравляем:\n${names}\n\nНе забудьте поздравить коллег! 🎂`;
+        const encryptedText = encryptText(text);
+        db.run(`INSERT INTO messages (id, chat_id, sender_id, text, timestamp) VALUES (?, ?, ?, ?, ?)`,
+          [messageId, botChatId, botUser.id, encryptedText, new Date().toISOString()]);
+        const socketItem = Array.from(onlineUsers.entries()).find(([sid, u]) => u.id === user.id);
+        if (socketItem) {
+          const userSocket = io.sockets.sockets.get(socketItem[0]);
+          if (userSocket) {
+            userSocket.emit('new_message', {
+              message: {
+                id: messageId, chatId: botChatId, senderId: botUser.id,
+                senderName: 'Помощник',
+                senderAvatar: 'https://ui-avatars.com/api/?name=🤖&background=667eea&color=fff',
+                text, timestamp: new Date().toISOString()
+              },
+              chat: { id: botChatId }
+            });
+          }
+        }
+      });
+    } catch (err) {
+      console.error('Ошибка проверки дней рождений:', err);
+    }
+  };
+
+  // Запускаем проверку сразу при старте
+  checkBirthdays();
+
+  // И далее каждые 6 часов
+  setInterval(checkBirthdays, 6 * 60 * 60 * 1000);
+}
+
+setTimeout(scheduleBirthdayChecker, 10000);
 
 // Закрытие и сохранение БД при завершении
 process.on('SIGINT', () => {

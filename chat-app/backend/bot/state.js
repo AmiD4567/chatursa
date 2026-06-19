@@ -119,11 +119,23 @@ const DIALOG_DEFINITIONS = {
         extract: (state, text) => {
           state.context.confirmed = text.toLowerCase() === 'да' || text.toLowerCase() === 'yes';
         },
-        onConfirm: (state, sendBotMessage, socket, chatId) => {
-          sendBotMessage(socket, chatId,
-            `✅ *Задача создана!*\n\n📌 ${state.context.title}\n⏰ ${state.context.time || '—'}\n📅 ${state.context.date}`,
-            []
-          );
+        onConfirm: (state, sendBotMessage, socket, chatId, deps) => {
+          const { db, uuidv4 } = deps;
+          try {
+            const taskId = uuidv4();
+            const userId = chatId.replace('bot-chat-', '');
+            db.run(`
+              INSERT INTO calendar_tasks (id, user_id, title, task_date, task_time, created_at)
+              VALUES (?, ?, ?, ?, ?, ?)
+            `, [taskId, userId, state.context.title, state.context.date, state.context.time || null, new Date().toISOString()]);
+            sendBotMessage(socket, chatId,
+              `✅ *Задача создана!*\n\n📌 ${state.context.title}\n⏰ ${state.context.time || '—'}\n📅 ${state.context.date}`,
+              [{ label: '📅 Календарь', action: '/календарь' }]
+            );
+          } catch (err) {
+            console.error('Ошибка создания задачи через бота:', err);
+            sendBotMessage(socket, chatId, '😕 Не удалось создать задачу. Попробуйте позже.', []);
+          }
         },
         onCancel: (state, sendBotMessage, socket, chatId) => {
           sendBotMessage(socket, chatId, '❌ Создание задачи отменено.', [
@@ -169,11 +181,23 @@ const DIALOG_DEFINITIONS = {
         extract: (state, text) => {
           state.context.confirmed = text.toLowerCase() === 'да' || text.toLowerCase() === 'yes';
         },
-        onConfirm: (state, sendBotMessage, socket, chatId) => {
-          sendBotMessage(socket, chatId,
-            `✅ *Бронирование создано!*\n\n🏢 ${state.context.title}\n📅 ${state.context.date}\n⏰ ${state.context.timeStart} — ${state.context.timeEnd}\n\nОткройте Календарь → Переговорка, чтобы увидеть бронь.`,
-            [{ label: '📅 Календарь', action: '/календарь' }]
-          );
+        onConfirm: (state, sendBotMessage, socket, chatId, deps) => {
+          const { db } = deps;
+          try {
+            const userId = chatId.replace('bot-chat-', '');
+            const user = db.prepare('SELECT username FROM users WHERE id = ?').get(userId);
+            db.run(`
+              INSERT INTO meeting_room_bookings (title, meeting_date, start_time, end_time, organizer_id, organizer_name, created_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?)
+            `, [state.context.title, state.context.date, state.context.timeStart, state.context.timeEnd, userId, user?.username || 'Пользователь', new Date().toISOString()]);
+            sendBotMessage(socket, chatId,
+              `✅ *Бронирование создано!*\n\n🏢 ${state.context.title}\n📅 ${state.context.date}\n⏰ ${state.context.timeStart} — ${state.context.timeEnd}\n\nОткройте Календарь → Переговорка, чтобы увидеть бронь.`,
+              [{ label: '📅 Календарь', action: '/календарь' }]
+            );
+          } catch (err) {
+            console.error('Ошибка бронирования через бота:', err);
+            sendBotMessage(socket, chatId, '😕 Не удалось забронировать. Попробуйте позже.', []);
+          }
         },
         onCancel: (state, sendBotMessage, socket, chatId) => {
           sendBotMessage(socket, chatId, '❌ Бронирование отменено.', [
@@ -207,11 +231,23 @@ const DIALOG_DEFINITIONS = {
         extract: (state, text) => {
           state.context.confirmed = text.toLowerCase() === 'да' || text.toLowerCase() === 'yes';
         },
-        onConfirm: (state, sendBotMessage, socket, chatId) => {
-          sendBotMessage(socket, chatId,
-            `✅ *Опрос готов к созданию!*\n\n📊 ${state.context.question}\n\nОткройте нужный чат и нажмите 📊 кнопку рядом с полем ввода, чтобы создать опрос прямо в чате.\n\nВарианты: ${state.context.options.join(', ')}`,
-            [{ label: '📊 В чат', action: '/опросы' }]
-          );
+        onConfirm: (state, sendBotMessage, socket, chatId, deps) => {
+          const { db, uuidv4 } = deps;
+          try {
+            const pollId = uuidv4();
+            const userId = chatId.replace('bot-chat-', '');
+            db.run(`
+              INSERT INTO polls (id, chat_id, creator_id, question, options, created_at)
+              VALUES (?, ?, ?, ?, ?, ?)
+            `, [pollId, chatId, userId, state.context.question, JSON.stringify(state.context.options), new Date().toISOString()]);
+            sendBotMessage(socket, chatId,
+              `✅ *Опрос создан!*\n\n📊 ${state.context.question}\n\nВарианты: ${state.context.options.join(', ')}\n\n💡 Вы можете поделиться этим опросом с коллегами, отправив ссылку в групповой чат.`,
+              [{ label: '📊 К опросу', action: `/опрос_${pollId}` }]
+            );
+          } catch (err) {
+            console.error('Ошибка создания опроса через бота:', err);
+            sendBotMessage(socket, chatId, '😕 Не удалось создать опрос. Попробуйте позже.', []);
+          }
         },
         onCancel: (state, sendBotMessage, socket, chatId) => {
           sendBotMessage(socket, chatId, '❌ Создание опроса отменено.', [
@@ -237,11 +273,39 @@ const DIALOG_DEFINITIONS = {
         extract: (state, text) => {
           state.context.confirmed = text.toLowerCase() === 'да' || text.toLowerCase() === 'yes';
         },
-        onConfirm: (state, sendBotMessage, socket, chatId) => {
-          sendBotMessage(socket, chatId,
-            `✅ *Обращение отправлено!*\n\nСлужба поддержки рассмотрит ваш запрос и ответит в ближайшее время.\n\nВаш запрос: "${state.context.problem}"`,
-            [{ label: '🔙 Назад', action: '/помощь' }]
-          );
+        onConfirm: (state, sendBotMessage, socket, chatId, deps) => {
+          const { db, uuidv4 } = deps;
+          try {
+            const requestId = uuidv4();
+            const userId = chatId.replace('bot-chat-', '');
+            const user = db.prepare('SELECT username FROM users WHERE id = ?').get(userId);
+            db.run(`
+              INSERT INTO support_requests (id, user_id, username, problem, status, created_at)
+              VALUES (?, ?, ?, ?, 'open', ?)
+            `, [requestId, userId, user?.username || 'Пользователь', state.context.problem, new Date().toISOString()]);
+            sendBotMessage(socket, chatId,
+              `✅ *Обращение отправлено!*\n\nНомер обращения: #${requestId.substring(0, 8)}\n\nСлужба поддержки рассмотрит ваш запрос и ответит в ближайшее время.\n\nВаш запрос: "${state.context.problem}"`,
+              [{ label: '🔙 Назад', action: '/помощь' }]
+            );
+            // Уведомляем всех админов
+            try {
+              const admins = db.prepare("SELECT id FROM users WHERE is_admin = 1").all();
+              admins.forEach(admin => {
+                const adminSocketEntry = Array.from(io?.sockets?.sockets?.entries() || []).find(([_, s]) => s.userId === admin.id);
+                if (adminSocketEntry) {
+                  adminSocketEntry[1].emit('admin_notification', {
+                    type: 'support_request',
+                    title: 'Новое обращение в поддержку',
+                    message: `${user?.username || 'Пользователь'}: "${state.context.problem}"`,
+                    requestId
+                  });
+                }
+              });
+            } catch (e) {}
+          } catch (err) {
+            console.error('Ошибка создания обращения:', err);
+            sendBotMessage(socket, chatId, '😕 Не удалось отправить обращение. Попробуйте позже.', []);
+          }
         },
         onCancel: (state, sendBotMessage, socket, chatId) => {
           sendBotMessage(socket, chatId, '❌ Обращение отменено.', [
@@ -254,7 +318,7 @@ const DIALOG_DEFINITIONS = {
   }
 };
 
-function processConversationState(conversationStates, sendBotMessage, socket, chatId, text) {
+function processConversationState(conversationStates, sendBotMessage, socket, chatId, text, deps = {}) {
   const state = conversationStates.get(chatId);
 
   if (!state || state.step === 'idle') {
@@ -279,7 +343,7 @@ function processConversationState(conversationStates, sendBotMessage, socket, ch
 
     if (!stepConfig.nextStep) {
       if (state.context.confirmed && stepConfig.onConfirm) {
-        stepConfig.onConfirm(state, sendBotMessage, socket, chatId);
+        stepConfig.onConfirm(state, sendBotMessage, socket, chatId, deps);
       } else if (!state.context.confirmed && stepConfig.onCancel) {
         stepConfig.onCancel(state, sendBotMessage, socket, chatId);
       }
