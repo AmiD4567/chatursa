@@ -1,6 +1,6 @@
 {
   "name": "chat-app",
-  "version": "1.0.138",
+  "version": "1.0.139",
   "description": "Корпоративный мессенджер",
   "main": "electron/main.js",
   "author": "Pantyuhov DI",
