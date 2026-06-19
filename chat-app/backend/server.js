@@ -400,6 +400,17 @@ function checkAdmin(userId) {
   }
 }
 
+// Вспомогательная функция для проверки прав на редактирование wiki
+function checkWikiEditAccess(userId) {
+  try {
+    const row = db.prepare('SELECT is_admin, can_edit_wiki FROM users WHERE id = ?').get(userId);
+    return row ? (row.is_admin === 1 || row.can_edit_wiki === 1) : false;
+  } catch (e) {
+    console.error('Ошибка проверки прав wiki:', e.message);
+    return false;
+  }
+}
+
 // Инициализация базы данных
 function initDatabase() {
   db = new Database(DB_PATH);
@@ -448,6 +459,7 @@ function initDatabase() {
     { table: 'users', column: 'is_admin', type: 'INTEGER DEFAULT 0' },
     { table: 'users', column: 'has_seen_welcome', type: 'INTEGER DEFAULT 0' },
     { table: 'users', column: 'can_book_meeting_room', type: 'INTEGER DEFAULT 0' },
+    { table: 'users', column: 'can_edit_wiki', type: 'INTEGER DEFAULT 0' },
     { table: 'users', column: 'upload_quota', type: 'INTEGER DEFAULT 524288000' },
     { table: 'users', column: 'totp_secret', type: 'TEXT' },
     { table: 'users', column: 'totp_enabled', type: 'INTEGER DEFAULT 0' },
@@ -471,6 +483,8 @@ function initDatabase() {
     { table: 'chats', column: 'avatar', type: 'TEXT' },
     { table: 'user_sessions', column: 'last_seen', type: 'TEXT DEFAULT CURRENT_TIMESTAMP' },
     { table: 'messages', column: 'poll_id', type: 'TEXT' },
+    { table: 'polls', column: 'is_anonymous', type: 'INTEGER DEFAULT 0' },
+    { table: 'polls', column: 'allows_multiple', type: 'INTEGER DEFAULT 0' },
     { table: 'polls', column: 'closes_at', type: 'TEXT' },
     { table: 'polls', column: 'hide_results_until_close', type: 'INTEGER DEFAULT 0' },
     { table: 'announcements', column: 'priority', type: 'TEXT DEFAULT \'normal\'' },
@@ -742,6 +756,8 @@ function initDatabase() {
       options TEXT NOT NULL,
       is_anonymous INTEGER DEFAULT 0,
       allows_multiple INTEGER DEFAULT 0,
+      closes_at TEXT,
+      hide_results_until_close INTEGER DEFAULT 0,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -1228,7 +1244,7 @@ app.get('/api/admin/users', (req, res) => {
     return res.status(403).json({ error: 'Доступ запрещён' });
   }
 
-  const userList = db.prepare('SELECT id, username, email, full_name, status, is_admin, created_at, last_seen, host, ip_address, can_book_meeting_room FROM users ORDER BY username').all().map(row => ({
+  const userList = db.prepare('SELECT id, username, email, full_name, status, is_admin, created_at, last_seen, host, ip_address, can_book_meeting_room, can_edit_wiki FROM users ORDER BY username').all().map(row => ({
     id: row.id,
     username: row.username,
     email: row.email,
@@ -1239,7 +1255,8 @@ app.get('/api/admin/users', (req, res) => {
     last_seen: row.last_seen,
     host: row.host || 'unknown',
     ip_address: row.ip_address || 'unknown',
-    can_book_meeting_room: row.can_book_meeting_room || 0
+    can_book_meeting_room: row.can_book_meeting_room || 0,
+    can_edit_wiki: row.can_edit_wiki || 0
   }));
 
   res.json({ users: userList });
@@ -1385,6 +1402,29 @@ app.put('/api/admin/users/:userId/meeting-room-rights', (req, res) => {
     res.json({ success: true });
   } catch (err) {
     console.error('Ошибка изменения права на бронирование:', err);
+    res.status(500).json({ error: 'Ошибка при изменении права' });
+  }
+});
+
+// API для изменения права на редактирование wiki
+app.put('/api/admin/users/:userId/wiki-rights', (req, res) => {
+  const { userId } = req.params;
+  const { can_edit_wiki, adminId } = req.body;
+
+  if (!checkAdmin(adminId)) {
+    return res.status(403).json({ error: 'Доступ запрещён' });
+  }
+
+  const userCheck = db.prepare('SELECT username FROM users WHERE id = ?').get(userId);
+  if (userCheck && userCheck.username === 'Root') {
+    return res.status(400).json({ error: 'Нельзя изменить права Root' });
+  }
+
+  try {
+    db.run('UPDATE users SET can_edit_wiki = ? WHERE id = ?', [can_edit_wiki ? 1 : 0, userId]);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Ошибка изменения права на wiki:', err);
     res.status(500).json({ error: 'Ошибка при изменении права' });
   }
 });
@@ -1921,7 +1961,7 @@ app.post('/api/login', (req, res) => {
 
 // API для получения профиля пользователя
 app.get('/api/profile/:userId', (req, res) => {
-  const user = db.prepare('SELECT id, username, email, avatar, full_name, birth_date, about, mobile_phone, work_phone, status_text, is_admin FROM users WHERE id = ?').get(req.params.userId);
+  const user = db.prepare('SELECT id, username, email, avatar, full_name, birth_date, about, mobile_phone, work_phone, status_text, is_admin, can_edit_wiki FROM users WHERE id = ?').get(req.params.userId);
   if (!user) {
     return res.status(404).json({ error: 'Пользователь не найден' });
   }
@@ -1960,7 +2000,7 @@ app.put('/api/profile', (req, res) => {
   }
 
   // Сохраняем статус как есть (SQLite поддерживает UTF-8)
-  const safeStatusText = statusText === null || statusText === '' ? null : statusText;
+  const safeStatusText = statusText === null || statusText === undefined ? null : statusText;
 
   const safeUsername = username === undefined || username === '' ? null : username;
   const safeFullName = fullName === undefined || fullName === '' ? null : fullName;
@@ -2347,6 +2387,34 @@ app.post('/api/upload-general-chat-avatar', upload.single('avatar'), (req, res) 
     });
   } catch (err) {
     console.error('Ошибка загрузки аватара общего чата:', err);
+    res.status(500).json({ error: 'Ошибка при загрузке аватара' });
+  }
+});
+
+// API для загрузки аватара группового чата (любой участник)
+app.post('/api/upload-group-chat-avatar', upload.single('avatar'), (req, res) => {
+  const { chatId, userId } = req.body;
+
+  if (!chatId || !userId || !req.file) {
+    return res.status(400).json({ error: 'chatId, userId и файл обязательны' });
+  }
+
+  const isParticipant = db.prepare('SELECT 1 FROM chat_participants WHERE chat_id = ? AND user_id = ?').get(chatId, userId);
+  if (!isParticipant) {
+    fs.unlink(req.file.path, () => {});
+    return res.status(403).json({ error: 'Вы не являетесь участником чата' });
+  }
+
+  const avatarUrl = `${SERVER_URL}/uploads/${req.file.filename}`;
+
+  try {
+    db.run('UPDATE chats SET avatar = ? WHERE id = ?', [avatarUrl, chatId]);
+    const chat = getChatWithDetails(chatId);
+    io.emit('chat_avatar_updated', { chatId, avatar: avatarUrl, chat });
+    res.json({ success: true, avatar: avatarUrl });
+  } catch (err) {
+    fs.unlink(req.file.path, () => {});
+    console.error('Ошибка загрузки аватара группы:', err);
     res.status(500).json({ error: 'Ошибка при загрузке аватара' });
   }
 });
@@ -3215,6 +3283,69 @@ app.get('/api/messages/:chatId', (req, res) => {
   }
 });
 
+// API для поиска сообщений
+app.get('/api/search/messages', (req, res) => {
+  const { userId, query } = req.query;
+  if (!userId || !query || !query.trim()) {
+    return res.status(400).json({ error: 'userId и query обязательны' });
+  }
+
+  try {
+    const searchTerm = `%${query.trim()}%`;
+    const rows = db.prepare(`
+      SELECT m.id, m.chat_id, m.sender_id, m.text, m.file_data, m.reply_to, m.timestamp, m.read_at,
+             m.e2ee, m.e2ee_nonce, m.e2ee_ephemeral, m.poll_id,
+             u.username as senderName, u.avatar as senderAvatar,
+             c.name as chatName, c.title as chatTitle
+      FROM messages m
+      LEFT JOIN users u ON m.sender_id = u.id
+      LEFT JOIN chats c ON m.chat_id = c.id
+      WHERE (m.e2ee IS NULL OR m.e2ee = 0)
+        AND m.text LIKE ?
+        AND m.chat_id IN (
+          SELECT chat_id FROM chat_participants WHERE user_id = ?
+        )
+      ORDER BY m.timestamp DESC
+      LIMIT 100
+    `).all(searchTerm, userId);
+
+    const messages = rows.map(row => {
+      let file = null;
+      if (row.file_data) {
+        try { file = JSON.parse(row.file_data); } catch (e) { file = null; }
+      }
+      let poll = null;
+      if (row.poll_id) {
+        poll = getPollWithVotes(row.poll_id, userId);
+      }
+      let reply_to = null;
+      if (row.reply_to) {
+        try { reply_to = JSON.parse(row.reply_to); } catch { reply_to = null; }
+      }
+      return {
+        id: row.id,
+        chatId: row.chat_id,
+        senderId: row.sender_id,
+        text: decryptText(row.text) || '',
+        file,
+        poll,
+        reply_to,
+        timestamp: row.timestamp,
+        read_at: row.read_at || null,
+        senderName: row.senderName,
+        senderAvatar: row.senderAvatar,
+        chatName: row.chatName || row.chatTitle || 'Чат',
+        e2ee: 0
+      };
+    });
+
+    res.json({ messages });
+  } catch (err) {
+    console.error('Ошибка поиска сообщений:', err);
+    res.status(500).json({ error: 'Ошибка при поиске сообщений' });
+  }
+});
+
 // API для отправки сообщения (через REST, для тредов)
 app.post('/api/messages', (req, res) => {
   const { chatId, senderId, text, replyTo } = req.body;
@@ -3898,6 +4029,7 @@ app.get('/api/wiki/articles/:id', (req, res) => {
 app.post('/api/wiki/articles', (req, res) => {
   const { categoryId, title, content, userId } = req.body;
   if (!title || !userId) return res.status(400).json({ error: 'title и userId обязательны' });
+  if (!checkWikiEditAccess(userId)) return res.status(403).json({ error: 'Доступ запрещён' });
   try {
     const id = uuidv4();
     const now = new Date().toISOString();
@@ -3913,7 +4045,12 @@ app.post('/api/wiki/articles', (req, res) => {
 app.put('/api/wiki/articles/:id', (req, res) => {
   const { title, content, categoryId, userId } = req.body;
   if (!title || !userId) return res.status(400).json({ error: 'title и userId обязательны' });
+  if (!checkWikiEditAccess(userId)) return res.status(403).json({ error: 'Доступ запрещён' });
   try {
+    const article = db.prepare('SELECT created_by FROM wiki_articles WHERE id = ?').get(req.params.id);
+    if (!article) return res.status(404).json({ error: 'Статья не найдена' });
+    const isAdmin = checkAdmin(userId);
+    if (!isAdmin && article.created_by !== userId) return res.status(403).json({ error: 'Нельзя редактировать чужие статьи' });
     const now = new Date().toISOString();
     db.prepare('UPDATE wiki_articles SET title = ?, content = ?, category_id = ?, updated_by = ?, updated_at = ? WHERE id = ?')
       .run(title, content || '', categoryId || null, userId, now, req.params.id);
@@ -3924,6 +4061,8 @@ app.put('/api/wiki/articles/:id', (req, res) => {
 });
 
 app.delete('/api/wiki/articles/:id', (req, res) => {
+  const { userId } = req.body;
+  if (!userId || !checkAdmin(userId)) return res.status(403).json({ error: 'Доступ запрещён' });
   try {
     const files = db.prepare('SELECT file_path FROM wiki_article_files WHERE article_id = ?').all(req.params.id);
     for (const f of files) {
@@ -3950,16 +4089,25 @@ app.get('/api/wiki/articles/:id/files', (req, res) => {
 
 app.post('/api/wiki/articles/:id/files', upload.single('file'), (req, res) => {
   const articleId = req.params.id;
+  const userId = req.body.userId;
   if (!req.file) return res.status(400).json({ error: 'Файл не загружен' });
+  if (!userId || !checkWikiEditAccess(userId)) return res.status(403).json({ error: 'Доступ запрещён' });
   try {
     const article = db.prepare('SELECT id FROM wiki_articles WHERE id = ?').get(articleId);
     if (!article) {
       fs.unlink(req.file.path, () => {});
       return res.status(404).json({ error: 'Статья не найдена' });
     }
+    // multer может испорпить UTF-8 имена — пробуем восстановить
+    let fileName = req.file.originalname;
+    try {
+      // escape() кодирует Latin-1 байты как %XX, decodeURIComponent декодирует их как UTF-8
+      // Если строка уже корректный UTF-8 — escape выдаст %uXXXX, decodeURIComponent кинет ошибку
+      fileName = decodeURIComponent(escape(fileName));
+    } catch (_) {}
     const id = uuidv4();
     db.prepare('INSERT INTO wiki_article_files (id, article_id, file_name, file_path, file_size, mime_type) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(id, articleId, req.file.originalname, req.file.filename, req.file.size, req.file.mimetype);
+      .run(id, articleId, fileName, req.file.filename, req.file.size, req.file.mimetype);
     const row = db.prepare('SELECT * FROM wiki_article_files WHERE id = ?').get(id);
     res.json({ success: true, file: row });
   } catch (err) {
@@ -3969,6 +4117,8 @@ app.post('/api/wiki/articles/:id/files', upload.single('file'), (req, res) => {
 });
 
 app.delete('/api/wiki/articles/:id/files/:fileId', (req, res) => {
+  const { userId } = req.body;
+  if (!userId || !checkAdmin(userId)) return res.status(403).json({ error: 'Доступ запрещён' });
   try {
     const file = db.prepare('SELECT * FROM wiki_article_files WHERE id = ? AND article_id = ?').get(req.params.fileId, req.params.id);
     if (!file) return res.status(404).json({ error: 'Файл не найден' });
@@ -4459,6 +4609,7 @@ function getChatWithDetails(chatId, userId = null) {
     id: String(chat.id || ''),
     type: String(chat.type || ''),
     name: String(chat.name || ''),
+    avatar: chat.avatar || '',
     participants: participants.map(p => p.username),
     participantsDetails: participants,
     unreadCount,
@@ -5579,6 +5730,72 @@ io.on('connection', (socket) => {
         });
       }
 
+  });
+
+  // Отправка статьи из базы знаний
+  socket.on('wiki_share', (data) => {
+    const { articleId, articleTitle, targetUserId } = data;
+    const onlineUser = onlineUsers.get(socket.id);
+
+    if (!onlineUser || !articleId || !articleTitle || !targetUserId) return;
+
+    let chat = getDirectChatBetweenUsers(onlineUser.id, targetUserId);
+
+    if (!chat) {
+      const chatId = uuidv4();
+      db.run(`INSERT INTO chats (id, type, created_at) VALUES (?, 'direct', CURRENT_TIMESTAMP)`, [chatId]);
+      db.run(`INSERT INTO chat_participants (chat_id, user_id) VALUES (?, ?)`, [chatId, onlineUser.id]);
+      db.run(`INSERT INTO chat_participants (chat_id, user_id) VALUES (?, ?)`, [chatId, targetUserId]);
+      markDbActivity();
+      chat = { id: chatId, type: 'direct' };
+    }
+
+    if (!chat || !chat.id) return;
+
+    const newMessageId = uuidv4();
+    const timestamp = new Date().toISOString();
+    const text = `📖 Статья в базе знаний: ${articleTitle}\nwiki://${articleId}`;
+
+    db.prepare(`INSERT INTO messages (id, chat_id, sender_id, text, timestamp) VALUES (?, ?, ?, ?, ?)`)
+      .run(newMessageId, chat.id, onlineUser.id, text, timestamp);
+    markDbActivity();
+
+    const formattedMessage = {
+      id: newMessageId,
+      chatId: chat.id,
+      senderId: onlineUser.id,
+      senderName: onlineUser.username,
+      text,
+      timestamp,
+      file: null
+    };
+
+    emitToUser(targetUserId, 'new_message', {
+      message: formattedMessage,
+      chat: { id: chat.id, type: chat.type, unreadCount: 1 }
+    });
+
+    const chatWithUnread = getChatWithDetails(chat.id, targetUserId);
+    if (chatWithUnread) {
+      emitToUser(targetUserId, 'chat_updated', {
+        chatId: chat.id,
+        chat: chatWithUnread
+      });
+    }
+
+    socket.emit('new_message', {
+      message: formattedMessage,
+      chat: { id: chat.id, type: chat.type, unreadCount: 0 },
+      isOwnMessage: true
+    });
+
+    const senderChatWithUnread = getChatWithDetails(chat.id, onlineUser.id);
+    if (senderChatWithUnread) {
+      socket.emit('chat_updated', {
+        chatId: chat.id,
+        chat: senderChatWithUnread
+      });
+    }
   });
 
   // Редактирование сообщения

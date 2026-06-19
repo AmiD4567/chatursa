@@ -314,7 +314,7 @@ function AdminPanel({
                   ))}
                 </div>
                 {uploadedFiles.length === 0 && (
-                  <p style={{textAlign: 'center', color: '#999', padding: '40px'}}>Нет загруженных файлов</p>
+                  <p style={{textAlign: 'center', color: 'var(--text-tertiary)', padding: '40px'}}>Нет загруженных файлов</p>
                 )}
               </div>
             )}
@@ -368,7 +368,7 @@ function AdminPanel({
             {activeAdminTab === '2fa' && (
               <div className="admin-2fa-settings">
                 <h4>🔐 Двухфакторная аутентификация (TOTP)</h4>
-                <p style={{marginBottom: '16px', color: '#aaa'}}>
+                <p style={{marginBottom: '16px', color: 'var(--text-secondary)'}}>
                   Защитите свой аккаунт с помощью Google Authenticator или аналогичного приложения.
                 </p>
                 <div className="settings-form">
@@ -425,8 +425,7 @@ function AdminPanel({
                   </div>
                   <div style={{marginTop: '24px'}}>
                     <button
-                      className="logout-btn"
-                      style={{background: '#d32f2f', color: '#fff', border: 'none', padding: '8px 16px', borderRadius: '6px', cursor: 'pointer'}}
+                      className="logout-btn danger-btn"
                       onClick={async () => {
                         if (!confirm('Вы уверены, что хотите отключить 2FA?')) return;
                         try {

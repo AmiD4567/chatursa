@@ -2,6 +2,23 @@
    ТЁМНАЯ ТЕМА — календарь задачи и бронирования
    ======================================== */
 
+[data-theme="dark"] {
+  --page-bg: var(--bg-primary);
+  --page-header-bg: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  --page-header-text: #ffffff;
+  --page-content-bg: transparent;
+  --page-card-bg: rgba(30, 30, 50, 0.95);
+  --page-card-border: rgba(102, 126, 234, 0.2);
+  --page-card-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+  --page-card-hover-border: rgba(102, 126, 234, 0.4);
+  --page-text-primary: var(--text-primary);
+  --page-text-secondary: var(--text-secondary);
+  --page-text-tertiary: var(--text-tertiary);
+  --page-tab-bg: rgba(102, 126, 234, 0.12);
+  --page-tab-active-bg: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  --page-divider: var(--border-color);
+}
+
 [data-theme="dark"] .full-page-tasks .selected-day-header,
 [data-theme="dark"] .meeting-room-bookings .selected-day-header {
   background: var(--page-card-bg);
@@ -497,6 +514,19 @@
   text-shadow: 0 0 8px rgba(91, 162, 208, 0.3);
 }
 
+.wiki-link-inline {
+  cursor: pointer;
+  text-decoration: none;
+  border-bottom: 1px dashed rgba(102, 126, 234, 0.3);
+  transition: all var(--transition-fast);
+}
+[data-theme="light"] .wiki-link-inline { color: #667eea; }
+[data-theme="dark"] .wiki-link-inline { color: #8b9cf7; }
+.wiki-link-inline:hover {
+  border-bottom-color: var(--primary-color);
+  text-shadow: 0 0 8px rgba(102, 126, 234, 0.3);
+}
+
 /* Обёртка для превью ссылки под сообщением */
 .message-link-preview-wrapper {
   margin-top: 6px;
@@ -638,6 +668,33 @@
 
 [data-theme="light"] .link-preview-domain {
   color: var(--text-muted);
+}
+
+[data-theme="dark"] .admin-full-page .suspicious-row {
+  background: rgba(243, 156, 18, 0.08);
+}
+
+[data-theme="dark"] .admin-full-page .host-warning {
+  background: rgba(243, 156, 18, 0.08);
+  border-color: rgba(243, 156, 18, 0.25);
+}
+
+[data-theme="dark"] .admin-full-page .admin-table th {
+  background: rgba(102, 126, 234, 0.08);
+}
+
+[data-theme="dark"] .admin-full-page .admin-stat-card:hover {
+  border-color: #667eea;
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.15);
+}
+
+[data-theme="dark"] .admin-full-page .form-group input[type="text"] {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(102, 126, 234, 0.2);
+}
+
+[data-theme="dark"] .admin-full-page .color-picker-group input[type="color"] {
+  background: rgba(255, 255, 255, 0.06);
 }
 
 

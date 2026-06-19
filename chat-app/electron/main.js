@@ -78,7 +78,7 @@ function logError(message) {
 }
 
 // Настройка автообновлений
-autoUpdater.autoDownload = false;       // не скачивать автоматически — ждём подтверждения пользователя
+autoUpdater.autoDownload = true;        // скачивать автоматически
 autoUpdater.autoInstallOnAppQuit = true; // устанавливать при закрытии приложения
 autoUpdater.allowDowngrade = false;     // запрещены откаты версии
 

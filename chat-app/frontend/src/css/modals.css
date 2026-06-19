@@ -1305,7 +1305,7 @@
 }
 
 .chat-menu-item:hover {
-  background: #f5f5ff;
+  background: var(--hover-bg);
 }
 
 .chat-menu-item.danger {
@@ -2619,6 +2619,38 @@
   margin-top: 4px;
 }
 
+/* Toast загрузки обновления */
+.update-progress-toast {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 12px 16px;
+  z-index: 10000;
+  box-shadow: var(--shadow-lg);
+  min-width: 250px;
+  animation: slideUp 0.3s ease;
+}
+.update-progress-toast .update-progress-bar-inline {
+  margin-top: 8px;
+}
+
+/* Модальное окно установки обновления */
+.update-install-modal {
+  max-width: 400px;
+}
+.update-install-modal .modal-body {
+  padding: 24px;
+  text-align: center;
+}
+.update-install-modal .modal-body p {
+  margin: 8px 0;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
 /* Секция ошибки в О приложении */
 .update-error {
   background: rgba(239, 68, 68, 0.1);
@@ -3827,7 +3859,7 @@
 }
 
 .admin-full-page .admin-table th {
-  background: #f5f5f5;
+  background: var(--page-tab-bg);
   font-weight: 600;
   color: var(--page-text-primary);
   font-size: 13px;
@@ -3858,13 +3890,23 @@
 }
 
 .admin-full-page .status-badge.online {
-  background: #d4edda;
-  color: #155724;
+  background: rgba(40, 167, 69, 0.12);
+  color: #28a745;
 }
 
 .admin-full-page .status-badge.offline {
-  background: #e0e0e0;
-  color: #666;
+  background: rgba(108, 117, 125, 0.12);
+  color: #6c757d;
+}
+
+.admin-full-page .status-badge.success {
+  background: rgba(40, 167, 69, 0.12);
+  color: #28a745;
+}
+
+.admin-full-page .status-badge.warning {
+  background: rgba(243, 156, 18, 0.12);
+  color: #e67e22;
 }
 
 .admin-full-page .admin-badge {
@@ -3884,30 +3926,22 @@
   cursor: pointer;
   font-size: 14px;
   transition: all 0.2s;
-}
-
-.admin-full-page .action-btn.edit {
-  background: #e3f2fd;
+  background: var(--page-tab-bg);
 }
 
 .admin-full-page .action-btn.edit:hover {
   background: #2196f3;
-}
-
-.admin-full-page .action-btn.delete {
-  background: #ffebee;
+  color: #fff;
 }
 
 .admin-full-page .action-btn.delete:hover {
   background: #f44336;
-}
-
-.admin-full-page .action-btn.reset {
-  background: #fff3e0;
+  color: #fff;
 }
 
 .admin-full-page .action-btn.reset:hover {
   background: #ff9800;
+  color: #fff;
 }
 
 .admin-full-page .btn-primary,
@@ -3938,12 +3972,203 @@
 }
 
 .admin-full-page .btn-secondary {
-  background: #e0e0e0;
+  background: var(--page-tab-bg);
   color: var(--page-text-primary);
 }
 
 .admin-full-page .btn-secondary:hover {
-  background: #d0d0d0;
+  background: var(--hover-bg);
+}
+
+.admin-full-page .danger-btn {
+  background: #d32f2f;
+  color: #fff;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.admin-full-page .danger-btn:hover {
+  background: #b71c1c;
+}
+
+.admin-full-page .host-warning {
+  background: rgba(243, 156, 18, 0.1);
+  border: 1px solid rgba(243, 156, 18, 0.3);
+  border-radius: 8px;
+  padding: 10px 16px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  color: var(--page-text-primary);
+}
+
+.admin-full-page .host-warning-item {
+  display: inline-block;
+  background: rgba(243, 156, 18, 0.15);
+  padding: 2px 8px;
+  border-radius: 4px;
+  margin: 2px 4px;
+  font-size: 12px;
+  color: #e67e22;
+}
+
+.admin-full-page .no-warning {
+  color: var(--page-text-secondary);
+}
+
+.admin-full-page .suspicious-row {
+  background: rgba(243, 156, 18, 0.05);
+}
+
+.admin-full-page .suspicious-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  background: rgba(243, 156, 18, 0.15);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  color: #e67e22;
+  font-weight: 600;
+}
+
+.admin-full-page .files-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.admin-full-page .file-card {
+  background: var(--page-card-bg);
+  border: 1px solid var(--page-card-border);
+  border-radius: 10px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  transition: all 0.2s;
+}
+
+.admin-full-page .file-card:hover {
+  border-color: var(--page-card-hover-border);
+  box-shadow: var(--page-card-shadow);
+}
+
+.admin-full-page .file-icon {
+  font-size: 32px;
+}
+
+.admin-full-page .file-name {
+  font-size: 13px;
+  color: var(--page-text-primary);
+  text-align: center;
+  word-break: break-all;
+  max-width: 100%;
+}
+
+.admin-full-page .file-info {
+  display: flex;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--page-text-secondary);
+}
+
+.admin-full-page .log-event {
+  font-size: 13px;
+}
+
+.admin-full-page .admin-sessions-list,
+.admin-full-page .admin-files-list,
+.admin-full-page .admin-security-logs,
+.admin-full-page .admin-ui-settings,
+.admin-full-page .admin-2fa-settings {
+  background: var(--page-card-bg);
+  border-radius: 12px;
+  padding: 20px;
+  border: 1px solid var(--page-card-border);
+}
+
+.admin-full-page .admin-sessions-list h4,
+.admin-full-page .admin-files-list h4,
+.admin-full-page .admin-security-logs h4,
+.admin-full-page .admin-ui-settings h4,
+.admin-full-page .admin-2fa-settings h4 {
+  color: var(--page-text-primary);
+  font-size: 16px;
+  margin-bottom: 16px;
+}
+
+.admin-full-page .settings-form {
+  max-width: 500px;
+}
+
+.admin-full-page .form-group {
+  margin-bottom: 16px;
+}
+
+.admin-full-page .form-group label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--page-text-primary);
+}
+
+.admin-full-page .form-group input[type="text"] {
+  width: 100%;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--page-card-border);
+  background: var(--input-bg);
+  color: var(--page-text-primary);
+  font-size: 14px;
+}
+
+.admin-full-page .form-group input[type="text"]:focus {
+  outline: none;
+  border-color: #667eea;
+}
+
+.admin-full-page .color-picker-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.admin-full-page .color-picker-group input[type="color"] {
+  width: 48px;
+  height: 48px;
+  border: 2px solid var(--page-card-border);
+  border-radius: 8px;
+  padding: 2px;
+  cursor: pointer;
+  background: var(--input-bg);
+}
+
+.admin-full-page .color-picker-group span {
+  font-size: 14px;
+  color: var(--page-text-secondary);
+  font-family: monospace;
+}
+
+.admin-full-page .create-btn {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: #fff;
+  border: none;
+  padding: 10px 20px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.admin-full-page .create-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
 }
 
 /* Адаптивность для телефонной книги */
@@ -5150,7 +5375,7 @@
     padding: 12px;
   }
 
-  .admin-stats-grid {
+  .admin-full-page .admin-dashboard {
     grid-template-columns: 1fr 1fr;
     gap: 8px;
   }
@@ -5229,7 +5454,7 @@
     padding: 8px;
   }
 
-  .admin-stats-grid {
+  .admin-full-page .admin-dashboard {
     grid-template-columns: 1fr;
     gap: 6px;
   }

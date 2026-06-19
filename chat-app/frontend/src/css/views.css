@@ -1000,12 +1000,12 @@ body,
 }
 
 /* Тёмная тема — кнопки ввода (Прикрепить + Смайлы) */
-[data-theme="dark"] .file-btn-main {
+[data-theme="dark"] .add-menu-btn {
   background: rgba(255, 255, 255, 0.08);
   color: rgba(255, 255, 255, 0.7);
 }
 
-[data-theme="dark"] .file-btn-main:hover {
+[data-theme="dark"] .add-menu-btn:hover {
   background: rgba(255, 255, 255, 0.14);
 }
 
@@ -1156,13 +1156,20 @@ body,
   flex: 1;
   display: flex;
   flex-direction: column;
-  overflow-y: auto;
+  overflow: hidden;
   padding: 24px;
+}
+.wiki-article-list {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 .wiki-article-list h3 {
   margin: 0 0 16px;
   font-size: 18px;
   color: var(--text-primary, #fff);
+  flex-shrink: 0;
 }
 .wiki-empty {
   text-align: center;
@@ -1196,6 +1203,10 @@ body,
 /* Article view */
 .wiki-article-view {
   max-width: 800px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 .wiki-article-header h2 {
   font-size: 24px;
@@ -1233,19 +1244,28 @@ body,
   border-color: #e74c3c;
   color: #e74c3c;
 }
+.wiki-article-actions .share-btn:hover {
+  background: rgba(46,204,113,0.15);
+  border-color: #2ecc71;
+  color: #2ecc71;
+}
 .wiki-article-content {
   font-size: 14px;
   line-height: 1.7;
   color: var(--text-primary, #fff);
   white-space: pre-wrap;
+  flex: 1;
+  overflow-y: auto;
 }
 
 /* Editor */
 .wiki-editor {
   max-width: 800px;
+  flex: 1;
   display: flex;
   flex-direction: column;
   gap: 12px;
+  overflow: hidden;
 }
 .wiki-edit-title {
   font-size: 20px;
@@ -1278,7 +1298,8 @@ body,
   font-size: 14px;
   line-height: 1.6;
   resize: vertical;
-  min-height: 300px;
+  min-height: 100px;
+  flex: 1;
   outline: none;
 }
 .wiki-edit-content:focus {
@@ -1365,6 +1386,12 @@ body,
   outline: none;
   box-sizing: border-box;
   margin-bottom: 10px;
+  flex-shrink: 0;
+}
+
+.wiki-article-cards {
+  flex: 1;
+  overflow-y: auto;
 }
 .wiki-search-input:focus {
   border-color: rgba(102,126,234,0.5);

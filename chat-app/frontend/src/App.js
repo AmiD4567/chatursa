@@ -230,6 +230,12 @@ function App() {
   const [forwardSearchQuery, setForwardSearchQuery] = useState('');
   const [selectedForwardUser, setSelectedForwardUser] = useState(null);
 
+  // Модальное окно отправки статьи из базы знаний
+  const [showWikiShareModal, setShowWikiShareModal] = useState(false);
+  const [wikiShareSearchQuery, setWikiShareSearchQuery] = useState('');
+  const [selectedWikiShareUser, setSelectedWikiShareUser] = useState(null);
+  const [wikiShareArticle, setWikiShareArticle] = useState(null);
+
   // Модальное окно редактирования сообщения (оставляем для совместимости)
   const [showEditModal, setShowEditModal] = useState(false);
   const [editMessageText, setEditMessageText] = useState('');
@@ -282,6 +288,7 @@ function App() {
     organizer: ''
   });
   const [canBookMeetingRoom, setCanBookMeetingRoom] = useState(false); // Право на бронирование
+  const [canEditWiki, setCanEditWiki] = useState(false); // Право на редактирование wiki
   const [showTaskModal, setShowTaskModal] = useState(false);
   const [editingTask, setEditingTask] = useState(null);
   const [taskForm, setTaskForm] = useState({
@@ -298,6 +305,8 @@ function App() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [messageToDelete, setMessageToDelete] = useState(null);
   const [chatMenuPosition, setChatMenuPosition] = useState({ top: 0, right: 0 });
+  const [showAddMenu, setShowAddMenu] = useState(false);
+  const addMenuRef = useRef(null);
   const [showImagePreview, setShowImagePreview] = useState(false);
   const [previewImage, setPreviewImage] = useState(null);
   const [showStatusPicker, setShowStatusPicker] = useState(false);
@@ -943,8 +952,7 @@ function App() {
     const cleanupAvailable = window.electronAPI.onUpdateAvailable((info) => {
       setElectronUpdateInfo(info);
       setBrowserUpdateInfo(null);
-      setUpdateStatus('available');
-      setShowUpdateBanner(true);
+      setUpdateStatus('downloading');
     });
 
     const cleanupNotAvailable = window.electronAPI.onUpdateNotAvailable(() => {
@@ -955,8 +963,6 @@ function App() {
     const cleanupDownloaded = window.electronAPI.onUpdateDownloaded((info) => {
       setElectronUpdateInfo(info);
       setUpdateStatus('ready');
-      // Автоматически показываем баннер для установки
-      setShowUpdateBanner(true);
     });
 
     const cleanupProgress = window.electronAPI.onDownloadProgress((progressObj) => {
@@ -969,7 +975,6 @@ function App() {
     const cleanupError = window.electronAPI.onUpdateError((err) => {
       console.error('Ошибка автообновления:', err);
       setUpdateStatus('error');
-      setShowUpdateBanner(false);
     });
 
     return () => {
@@ -1025,11 +1030,10 @@ function App() {
     }
   }, [checkForUpdates]);
 
-  // Скачивание и установка обновления (Electron)
+  // Скачивание обновления (Electron)
   const startUpdateDownload = useCallback(() => {
     if (!window.electronAPI?.downloadUpdate) return;
     setUpdateStatus('downloading');
-    setShowUpdateBanner(false);
     window.electronAPI.downloadUpdate();
   }, []);
 
@@ -1199,19 +1203,21 @@ function App() {
             is_admin: data.user.is_admin || 0
           };
           setCurrentUser(fullUser);
-          // Обновляем право на бронирование после загрузки профиля
           const hasRight = fullUser.username === 'Root' || fullUser.is_admin === 1;
           setCanBookMeetingRoom(hasRight);
+          setCanEditWiki(fullUser.is_admin === 1 || data.user.can_edit_wiki === 1);
         } else {
           setCurrentUser(user);
           const hasRight = user.username === 'Root' || user.is_admin === 1;
           setCanBookMeetingRoom(hasRight);
+          setCanEditWiki(user.is_admin === 1);
         }
       } catch (err) {
         console.error('Ошибка загрузки профиля:', err);
         setCurrentUser(user);
         const hasRight = user.username === 'Root' || user.is_admin === 1;
         setCanBookMeetingRoom(hasRight);
+        setCanEditWiki(user.is_admin === 1);
       }
       
       setIsLoggedIn(true);
@@ -1533,6 +1539,11 @@ function App() {
         saveChats(result).catch(() => {});
         return result;
       });
+    });
+
+    newSocket.on('chat_avatar_updated', ({ chatId, avatar }) => {
+      setChats(prev => prev.map(c => c.id === chatId ? { ...c, avatar } : c));
+      setActiveChat(prev => prev?.id === chatId ? { ...prev, avatar } : prev);
     });
 
     newSocket.on('users_list', (usersList) => {
@@ -2468,6 +2479,32 @@ function App() {
     }
   };
 
+  const handleToggleWikiRights = async (userId, currentCanEdit) => {
+    const newCanEdit = currentCanEdit === 1 ? 0 : 1;
+
+    try {
+      const response = await fetch(`${SOCKET_URL}/api/admin/users/${userId}/wiki-rights`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          can_edit_wiki: newCanEdit,
+          adminId: currentUser.id
+        })
+      });
+
+      if (response.ok) {
+        loadAdminUsers();
+        if (userId === currentUser.id) {
+          setCanEditWiki(newCanEdit === 1);
+        }
+      } else {
+        alert('Ошибка изменения права на редактирование wiki');
+      }
+    } catch (err) {
+      console.error('Ошибка изменения права на wiki:', err);
+    }
+  };
+
   // Сброс пароля пользователя
   const handleOpenResetPassword = (user) => {
     setUserToResetPassword(user);
@@ -2945,12 +2982,8 @@ function App() {
     
     setIsSearching(true);
     const query = searchQuery.toLowerCase().trim();
-    const results = [];
     const userResults = [];
-    
-    console.log('🔍 Начало поиска:', query);
-    console.log('Чатов для поиска:', chats.length);
-    console.log('Пользователей для поиска:', users.length);
+    let messages = [];
     
     // 1. Ищем пользователей
     users.forEach(user => {
@@ -2966,109 +2999,63 @@ function App() {
       }
     });
     
-    console.log('👥 Найдено пользователей:', userResults.length);
-    
-    // 2. Ищем по всем чатам - загружаем сообщения для каждого чата
-    for (const chat of chats) {
-      try {
-        // Загружаем историю сообщений для чата
-        const response = await fetch(`${SOCKET_URL}/api/messages/${chat.id}?userId=${currentUser?.id}`);
-        if (response.ok) {
-          const data = await response.json();
-          const chatMessages = data.messages || [];
-          
-          chatMessages.forEach(msg => {
-            if (msg.text && msg.text.toLowerCase().includes(query)) {
-              results.push({
-                ...msg,
-                chatId: chat.id,
-                chatName: getChatDisplayName(chat),
-                type: 'message',
-                searchIndex: results.length
-              });
-            }
-          });
-        }
-      } catch (err) {
-        console.error('Ошибка поиска в чате:', chat.id, err);
+    // 2. Ищем сообщения через сервер (SQL LIKE)
+    try {
+      const response = await fetch(`${SOCKET_URL}/api/search/messages?userId=${currentUser?.id}&query=${encodeURIComponent(query)}`);
+      if (response.ok) {
+        const data = await response.json();
+        messages = (data.messages || []).map(msg => ({
+          ...msg,
+          type: 'message'
+        }));
       }
+    } catch (err) {
+      console.error('Ошибка поиска сообщений:', err);
     }
-    
-    console.log('💬 Найдено сообщений:', results.length);
-
-    // Сортируем сообщения: сначала недавние
-    results.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 
     // Объединяем результаты: сначала пользователи, потом сообщения
-    const allResults = [...userResults, ...results];
+    const allResults = [...userResults, ...messages];
     setSearchResults(allResults);
     setUserSearchResults(userResults);
     setCurrentSearchIndex(0);
     setIsSearching(false);
-    
-    if (allResults.length > 0) {
-      const firstResult = allResults[0];
-      
-      // Если это пользователь - переходим к его чату
-      if (firstResult.type === 'user') {
-        console.log('👤 Переход к пользователю:', firstResult.username);
-        // Ищем или создаём чат с этим пользователем
-        const existingChat = chats.find(c => 
-          c.type === 'direct' && 
-          c.participantsDetails && 
-          c.participantsDetails.some(p => p.id === firstResult.id)
-        );
-        
-        if (existingChat) {
-          handleSelectChat(existingChat);
-        } else {
-          // Создаём новый чат
-          createDirectChat(firstResult.id);
-        }
-      } else {
-        // Если это сообщение - переходим к чату
-        console.log('💬 Переход к чату:', firstResult.chatId);
-        if (firstResult.chatId !== activeChatId) {
-          handleSelectChat(chats.find(c => c.id === firstResult.chatId));
-        }
-      }
-      
-      // Переходим к результату
-      setTimeout(() => {
-        if (firstResult.type === 'user') {
-          scrollToUser(firstResult.id);
-        } else {
-          scrollToMessage(firstResult.id);
-        }
-      }, 500);
-    } else {
-      console.log('❌ Ничего не найдено');
-    }
   };
 
   const handleSearchResultClick = (result) => {
-    const chatId = result.chatId || result.chat?.id;
-    if (chatId) {
-      const chat = chats.find(c => c.id === chatId);
-      if (chat) {
-        if (activeChatId !== chatId) {
-          handleSelectChat(chat);
-        }
-        handleCloseSearch();
-        const retryScroll = (attempts = 20) => {
-          if (attempts <= 0) return;
-          const el = document.getElementById(`message-${result.id}`);
-          if (el) {
-            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            el.classList.add('message-highlight');
-            setTimeout(() => el.classList.remove('message-highlight'), 2000);
-          } else {
-            setTimeout(() => retryScroll(attempts - 1), 200);
-          }
-        };
-        setTimeout(() => retryScroll(), 400);
+    if (result.type === 'user') {
+      const existingChat = chats.find(c =>
+        c.type === 'direct' &&
+        c.participantsDetails &&
+        c.participantsDetails.some(p => p.id === result.id)
+      );
+      if (existingChat) {
+        handleSelectChat(existingChat);
+      } else {
+        createDirectChat(result.id);
       }
+      handleCloseSearch();
+      return;
     }
+    const chatId = result.chatId || result.chat?.id;
+    if (!chatId) return;
+    const chat = chats.find(c => c.id === chatId);
+    if (!chat) return;
+    if (activeChatId !== chatId) {
+      handleSelectChat(chat);
+    }
+    handleCloseSearch();
+    const retryScroll = (attempts = 40) => {
+      if (attempts <= 0) return;
+      const el = document.getElementById(`message-${result.id}`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        el.classList.add('message-highlight');
+        setTimeout(() => el.classList.remove('message-highlight'), 2000);
+      } else {
+        setTimeout(() => retryScroll(attempts - 1), 250);
+      }
+    };
+    setTimeout(() => retryScroll(), 300);
   };
 
   const handleSearchNext = () => {
@@ -3451,9 +3438,13 @@ function App() {
         setPollAllowsMultiple(false);
         setPollClosesAt('');
         setPollHideResults(false);
+      } else {
+        const text = await res.text();
+        try { const j = JSON.parse(text); alert('Ошибка: ' + (j.error || text)); } catch { alert('Ошибка сервера: ' + text.substring(0, 200)); }
       }
     } catch (err) {
       console.error('Ошибка создания опроса:', err);
+      alert('Ошибка сети: ' + err.message);
     } finally {
       setPollLoading(false);
     }
@@ -3596,7 +3587,16 @@ function App() {
 
   const wikiDeleteArticle = async (articleId) => {
     try {
-      await fetch(`${SOCKET_URL}/api/wiki/articles/${articleId}`, { method: 'DELETE' });
+      const res = await fetch(`${SOCKET_URL}/api/wiki/articles/${articleId}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: currentUser.id })
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        alert('Ошибка: ' + (err.error || 'Доступ запрещён'));
+        return;
+      }
       setWikiActiveArticle(null);
       loadWikiData();
     } catch (err) {
@@ -3619,6 +3619,7 @@ function App() {
     try {
       const formData = new FormData();
       formData.append('file', file);
+      formData.append('userId', currentUser.id);
       const res = await fetch(`${SOCKET_URL}/api/wiki/articles/${articleId}/files`, {
         method: 'POST',
         body: formData
@@ -3653,9 +3654,25 @@ function App() {
     await wikiLoadFiles(article.id);
   };
 
+  const openWikiArticleById = async (articleId) => {
+    let article = wikiArticles.find(a => a.id === articleId);
+    if (!article) {
+      await loadWikiData();
+      article = wikiArticles.find(a => a.id === articleId);
+    }
+    if (article) {
+      setActiveView('wiki');
+      wikiOpenArticle(article);
+    }
+  };
+
   const wikiDeleteFile = async (articleId, fileId) => {
     try {
-      const res = await fetch(`${SOCKET_URL}/api/wiki/articles/${articleId}/files/${fileId}`, { method: 'DELETE' });
+      const res = await fetch(`${SOCKET_URL}/api/wiki/articles/${articleId}/files/${fileId}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: currentUser.id })
+      });
       const data = await res.json();
       if (data.success) {
         setWikiFiles(prev => prev.filter(f => f.id !== fileId));
@@ -4006,11 +4023,48 @@ function App() {
           </a>
         );
       } else {
-        const wrapped = wrapEmojisInText(part.content);
-        if (typeof wrapped === 'string') {
-          elements.push(wrapped);
+        const wikiLinkRegex = /wiki:\/\/(\S+)/g;
+        let lastIdx = 0;
+        let match;
+        let hasWikiLinks = false;
+        const textParts = [];
+
+        while ((match = wikiLinkRegex.exec(part.content)) !== null) {
+          hasWikiLinks = true;
+          if (match.index > lastIdx) {
+            textParts.push(part.content.substring(lastIdx, match.index));
+          }
+          const articleId = match[1];
+          textParts.push({ type: 'wiki', articleId, full: match[0] });
+          lastIdx = match.index + match[0].length;
+        }
+        if (hasWikiLinks) {
+          if (lastIdx < part.content.length) {
+            textParts.push(part.content.substring(lastIdx));
+          }
+          for (const tp of textParts) {
+            if (typeof tp === 'string') {
+              const wrapped = wrapEmojisInText(tp);
+              if (typeof wrapped === 'string') {
+                elements.push(wrapped);
+              } else {
+                wrapped.forEach(w => elements.push(w));
+              }
+            } else if (tp.type === 'wiki') {
+              elements.push(
+                <span key={`wiki-${key++}`} className="wiki-link-inline" onClick={() => openWikiArticleById(tp.articleId)} title="Открыть в базе знаний">
+                  📖 Статья в базе знаний
+                </span>
+              );
+            }
+          }
         } else {
-          wrapped.forEach(w => elements.push(w));
+          const wrapped = wrapEmojisInText(part.content);
+          if (typeof wrapped === 'string') {
+            elements.push(wrapped);
+          } else {
+            wrapped.forEach(w => elements.push(w));
+          }
         }
       }
     }
@@ -4231,6 +4285,31 @@ function App() {
       }
     } catch (err) {
       console.error('Ошибка загрузки аватара общего чата:', err);
+      alert('Ошибка соединения с сервером');
+    }
+  };
+
+  // Загрузка аватара группового чата (любой участник)
+  const handleUploadGroupChatAvatar = async (e, chatId) => {
+    const file = e.target.files[0];
+    if (!file || !currentUser) return;
+
+    const formData = new FormData();
+    formData.append('avatar', file);
+    formData.append('chatId', chatId);
+    formData.append('userId', currentUser.id);
+
+    try {
+      const response = await fetch(`${SOCKET_URL}/api/upload-group-chat-avatar`, {
+        method: 'POST',
+        body: formData
+      });
+      if (!response.ok) {
+        const err = await response.json();
+        alert('Ошибка: ' + (err.error || 'Не удалось загрузить аватар'));
+      }
+    } catch (err) {
+      console.error('Ошибка загрузки аватара группы:', err);
       alert('Ошибка соединения с сервером');
     }
   };
@@ -4670,6 +4749,20 @@ function App() {
     setShowForwardModal(false);
     setForwardSearchQuery('');
     setSelectedForwardUser(null);
+  };
+
+  // Отправка статьи из базы знаний пользователю
+  const handleSendWikiShare = () => {
+    if (!selectedWikiShareUser || !wikiShareArticle || !socket) return;
+    socket.emit('wiki_share', {
+      articleId: wikiShareArticle.id,
+      articleTitle: wikiShareArticle.title,
+      targetUserId: selectedWikiShareUser.id
+    });
+    setShowWikiShareModal(false);
+    setWikiShareSearchQuery('');
+    setSelectedWikiShareUser(null);
+    setWikiShareArticle(null);
   };
 
   // Пересылка сообщения из меню правой кнопки мыши
@@ -5500,6 +5593,7 @@ function App() {
       if (e.key === 'Escape') {
         if (showImagePreview) handleCloseImagePreview();
         if (showChatMenu) setShowChatMenu(false);
+        if (showAddMenu) setShowAddMenu(false);
         if (showMediaViewer) setShowMediaViewer(false);
         if (contextMenu.visible) closeContextMenu();
         if (showEmojiPicker) {
@@ -5516,6 +5610,9 @@ function App() {
       if (showEmojiPicker && !emojiPickerPinned && !e.target.closest('.emoji-btn-send') && !e.target.closest('.emoji-picker-area')) {
         setShowEmojiPicker(false);
       }
+      if (showAddMenu && addMenuRef.current && !addMenuRef.current.contains(e.target)) {
+        setShowAddMenu(false);
+      }
     };
 
     document.addEventListener('keydown', handleEscKey);
@@ -5524,7 +5621,7 @@ function App() {
       document.removeEventListener('keydown', handleEscKey);
       document.removeEventListener('mousedown', handleClickOutside);
     };
-  }, [showImagePreview, showChatMenu, showMediaViewer, contextMenu.visible, showEmojiPicker, emojiPickerPinned]);
+  }, [showImagePreview, showChatMenu, showAddMenu, showMediaViewer, contextMenu.visible, showEmojiPicker, emojiPickerPinned]);
 
   // Обновляем список пользователей при открытии модалки создания чата
   useEffect(() => {
@@ -6075,113 +6172,55 @@ function App() {
         </div>
       )}
 
-      {/* Баннер обновления приложения */}
-      {showUpdateBanner && (
+      {/* Модальное окно установки обновления */}
+      {updateStatus === 'ready' && electronUpdateInfo && window.electronAPI && (
+        <div className="modal-overlay">
+          <div className="modal-content update-install-modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>📦 Обновление готово</h3>
+            </div>
+            <div className="modal-body">
+              <p>Доступна новая версия <strong>v{electronUpdateInfo.version}</strong>.</p>
+              <p>Установить сейчас или отложить?</p>
+            </div>
+            <div className="modal-footer">
+              <button type="button" className="cancel-btn" onClick={() => setUpdateStatus('idle')}>
+                Позже
+              </button>
+              <button type="button" className="create-btn" onClick={installUpdate}>
+                Установить сейчас
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {updateStatus === 'downloading' && electronUpdateInfo && window.electronAPI && (
+        <div className="update-progress-toast">
+          <span>📦 Загрузка обновления... {Math.round(updateProgress)}%</span>
+          <div className="update-progress-bar-inline">
+            <div className="update-progress-fill-inline" style={{ width: `${Math.round(updateProgress)}%` }}></div>
+          </div>
+        </div>
+      )}
+      {browserUpdateInfo && updateStatus === 'available' && !window.electronAPI && (
         <div className="update-banner">
           <div className="update-banner-content">
             <span className="update-banner-icon">📦</span>
             <div className="update-banner-text">
-              {updateStatus === 'checking' && (
-                <>
-                  <strong>Проверка обновлений...</strong>
-                  <p>Подождите, идёт проверка наличия новых версий.</p>
-                </>
-              )}
-              {updateStatus === 'available' && electronUpdateInfo && (
-                <>
-                  <strong>Доступно обновление v{electronUpdateInfo.version}</strong>
-                  <p>Нажмите «Обновить» для скачивания и установки.</p>
-                </>
-              )}
-              {updateStatus === 'available' && browserUpdateInfo && (
-                <>
-                  <strong>Доступно обновление v{browserUpdateInfo.latestVersion}</strong>
-                  <p>
-                    {browserUpdateInfo.releaseName
-                      ? browserUpdateInfo.releaseName
-                      : `Версия v${browserUpdateInfo.latestVersion}`}
-                    {browserUpdateInfo.publishedAt && (
-                      <> · {new Date(browserUpdateInfo.publishedAt).toLocaleDateString('ru-RU', { year: 'numeric', month: 'long', day: 'numeric' })}</>
-                    )}
-                  </p>
-                  <p>Текущая версия: v{browserUpdateInfo.currentVersion}. </p>
-                </>
-              )}
-              {updateStatus === 'downloading' && (
-                <>
-                  <strong>Загрузка обновления...</strong>
-                  <div className="update-progress-bar-inline">
-                    <div
-                      className="update-progress-fill-inline"
-                      style={{ width: `${Math.round(updateProgress)}%` }}
-                    ></div>
-                  </div>
-                  <span className="update-progress-text-inline">{Math.round(updateProgress)}%</span>
-                </>
-              )}
-              {updateStatus === 'ready' && electronUpdateInfo && (
-                <>
-                  <strong>Обновление v{electronUpdateInfo.version} готово к установке</strong>
-                  <p>Нажмите «Установить и перезапустить» для применения.</p>
-                </>
-              )}
-              {updateStatus === 'no-update' && (
-                <>
-                  <strong>У вас последняя версия</strong>
-                  <p>Обновлений не найдено.</p>
-                </>
-              )}
-              {updateStatus === 'error' && (
-                <>
-                  <strong>Ошибка проверки обновлений</strong>
-                  <p>Не удалось проверить наличие новых версий.</p>
-                </>
-              )}
+              <strong>Доступно обновление v{browserUpdateInfo.latestVersion}</strong>
+              <p>
+                {browserUpdateInfo.releaseName || `Версия v${browserUpdateInfo.latestVersion}`}
+                {browserUpdateInfo.publishedAt && <> · {new Date(browserUpdateInfo.publishedAt).toLocaleDateString('ru-RU', { year: 'numeric', month: 'long', day: 'numeric' })}</>}
+              </p>
             </div>
           </div>
           <div className="update-banner-actions">
-            {updateStatus === 'available' && electronUpdateInfo && (
-              <>
-                <button className="update-banner-btn" onClick={startUpdateDownload}>
-                  Обновить
-                </button>
-                <button className="update-banner-dismiss" onClick={() => setShowUpdateBanner(false)}>
-                  Отмена
-                </button>
-              </>
-            )}
-            {updateStatus === 'available' && browserUpdateInfo && (
-              <>
-                <button
-                  className="update-banner-btn"
-                  onClick={() => {
-                    window.open(browserUpdateInfo.releaseUrl, '_blank');
-                    setShowUpdateBanner(false);
-                  }}
-                >
-                  Скачать
-                </button>
-                <button
-                  className="update-banner-btn-link"
-                  onClick={() => window.open(browserUpdateInfo.releaseUrl, '_blank')}
-                >
-                  Что нового
-                </button>
-                <button className="update-banner-dismiss" onClick={() => setShowUpdateBanner(false)}>
-                  Позже
-                </button>
-              </>
-            )}
-            {updateStatus === 'ready' && (
-              <button className="update-banner-btn" onClick={installUpdate}>
-                Установить и перезапустить
-              </button>
-            )}
-            {(updateStatus === 'checking' || updateStatus === 'downloading') && (
-              <button className="update-banner-dismiss" onClick={() => setShowUpdateBanner(false)}>
-                Отмена
-              </button>
-            )}
+            <button className="update-banner-btn" onClick={() => { window.open(browserUpdateInfo.releaseUrl, '_blank'); setBrowserUpdateInfo(null); setUpdateStatus(null); }}>
+              Скачать
+            </button>
+            <button className="update-banner-dismiss" onClick={() => { setBrowserUpdateInfo(null); setUpdateStatus(null); }}>
+              Позже
+            </button>
           </div>
         </div>
       )}
@@ -6699,6 +6738,7 @@ function App() {
                           <th>Компьютер</th>
                           <th>IP</th>
                           <th>Бронирование</th>
+                          <th>База знаний</th>
                           <th>Действия</th>
                         </tr>
                       </thead>
@@ -6745,10 +6785,26 @@ function App() {
                                     title={user.username === 'Root' ? 'Root имеет право по умолчанию' : 'Переключить право на бронирование'}
                                   />
                                   <span className="toggle-slider"></span>
+                              </label>
+                            </td>
+                            <td>
+                              {user.is_admin === 1 ? (
+                                <span style={{fontSize: '12px'}}>Полный</span>
+                              ) : (
+                                <label className="toggle-switch">
+                                  <input
+                                    type="checkbox"
+                                    checked={user.can_edit_wiki === 1}
+                                    onChange={() => handleToggleWikiRights(user.id, user.can_edit_wiki)}
+                                    disabled={user.username === 'Root'}
+                                    title={user.can_edit_wiki === 1 ? 'Запретить создание статей' : 'Разрешить создание статей'}
+                                  />
+                                  <span className="toggle-slider"></span>
                                 </label>
-                              </td>
-                              <td>
-                                <div className="action-buttons">
+                              )}
+                            </td>
+                            <td>
+                              <div className="action-buttons">
                                   <button
                                     className="action-btn edit"
                                     onClick={() => handleToggleAdminRights(user.id, user.is_admin)}
@@ -6854,7 +6910,7 @@ function App() {
                       ))}
                     </div>
                     {uploadedFiles.length === 0 && (
-                      <p style={{textAlign: 'center', color: '#999', padding: '40px'}}>Нет загруженных файлов</p>
+                      <p style={{textAlign: 'center', color: 'var(--text-tertiary)', padding: '40px'}}>Нет загруженных файлов</p>
                     )}
                   </div>
                 )}
@@ -7108,14 +7164,18 @@ function App() {
                   onClick={() => handleSearchResultClick(result)}
                 >
                   <div className="chat-item-left" style={{ cursor: 'pointer' }}>
-                    <div className="chat-icon">{getChatIcon(result.chat || result)}</div>
+                    <div className="chat-icon">{result.type === 'user' ? '👤' : result.type === 'message' ? '💬' : getChatIcon(result)}</div>
                     <div className="chat-info">
                       <div className="chat-name-row">
-                        <span className="chat-name">{result.chat?.name || result.chat?.title || result.senderName || 'Чат'}</span>
-                        <span className="chat-time">{formatTime(result.timestamp)}</span>
+                        <span className="chat-name">
+                          {result.type === 'user' ? result.username : result.chatName || result.senderName || 'Чат'}
+                        </span>
+                        <span className="chat-time">{result.timestamp ? formatTime(result.timestamp) : ''}</span>
                       </div>
                       <div className="chat-preview-row">
-                        <span className="chat-preview">{result.senderName ? `${result.senderName}: ` : ''}{result.text || ''}</span>
+                        <span className="chat-preview">
+                          {result.type === 'user' ? result.fullName || result.email || '' : result.senderName ? `${result.senderName}: ` : ''}{result.text || ''}
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -7186,6 +7246,8 @@ function App() {
                       style={{ cursor: currentUser?.is_admin === 1 ? 'pointer' : 'default' }}
                       title={currentUser?.is_admin === 1 ? 'Настройки общего чата' : ''}
                     />
+                  ) : chat.avatar ? (
+                    <img src={chat.avatar} alt={chat.name} className="chat-avatar" />
                   ) : (
                     <div className="chat-icon">{getChatIcon(chat)}</div>
                   )}
@@ -7352,6 +7414,15 @@ function App() {
                     ) : (
                       <span className="chat-icon-large">{getChatIcon(activeChat)}</span>
                     )}
+                  </div>
+                ) : activeChat.type === 'group' ? (
+                  <div onClick={() => document.getElementById(`group-avatar-${activeChat.id}`).click()} style={{ cursor: 'pointer' }} title="Сменить аватар">
+                    {activeChat.avatar ? (
+                      <img src={activeChat.avatar} alt={activeChat.name} className="chat-header-avatar" />
+                    ) : (
+                      <span className="chat-icon-large">{getChatIcon(activeChat)}</span>
+                    )}
+                    <input id={`group-avatar-${activeChat.id}`} type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => handleUploadGroupChatAvatar(e, activeChat.id)} />
                   </div>
                 ) : (
                   <span className="chat-icon-large">{getChatIcon(activeChat)}</span>
@@ -7522,7 +7593,7 @@ function App() {
                           </div>
                         </div>
                       )}
-                      {message.text && (
+                      {message.text && !message.poll && (
                         <div className="message-text-wrapper">
                           <div className="message-text-content">
                             <p className={`message-text-main${isStickerOnlyMessage(message.text) ? ' sticker-message' : ''}`} onContextMenu={(e) => handleContextMenu(e, message.id, message.text, message.chatId, message.senderId, message.senderName)}>
@@ -7600,7 +7671,7 @@ function App() {
                                         <span className="poll-option-bar-fill" style={{ width: `${pct}%` }} />
                                       </span>
                                       <span className="poll-option-pct">{pct}%</span>
-                                      {!message.poll.isAnonymous && <span className="poll-option-count">{voteCount}</span>}
+                                      {!message.poll.isAnonymous && voteCount > 0 && <span className="poll-option-count">{voteCount}</span>}
                                     </>
                                   )}
                                   {message.poll.votesHidden && !isVoted && <span className="poll-hidden-label">🔒</span>}
@@ -7714,11 +7785,6 @@ function App() {
                 style={{ display: 'none' }}
                 id="file-input-main"
               />
-              <label htmlFor="file-input-main" className="file-btn-main" title="Прикрепить файл">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
-                </svg>
-              </label>
               {selectedFile && (
                 <span className="selected-file-main">
                   📎 {selectedFile.name}
@@ -7728,6 +7794,27 @@ function App() {
                   }}>✕</button>
                 </span>
               )}
+              <div ref={addMenuRef} style={{ position: 'relative', display: 'inline-flex', alignSelf: 'center', marginRight: '8px' }}>
+                <button type="button" className="add-menu-btn" onClick={(e) => { e.preventDefault(); setShowAddMenu(prev => !prev); }} title="Добавить">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="10"/>
+                    <line x1="12" y1="8" x2="12" y2="16"/>
+                    <line x1="8" y1="12" x2="16" y2="12"/>
+                  </svg>
+                </button>
+                {showAddMenu && (
+                  <div className="add-menu-dropdown">
+                    <div className="chat-menu-item" onClick={(e) => { e.preventDefault(); fileInputRef.current?.click(); setShowAddMenu(false); }}>
+                      <span className="menu-icon">📎</span>
+                      Прикрепить файл
+                    </div>
+                    <div className="chat-menu-item" onClick={(e) => { e.preventDefault(); setShowPollModal(true); setShowAddMenu(false); }}>
+                      <span className="menu-icon">📊</span>
+                      Создать опрос
+                    </div>
+                  </div>
+                )}
+              </div>
               <div
                 ref={messageInputRef}
                 className={`message-input-contenteditable ${isEditMode ? 'edit-mode-active' : ''}`}
@@ -7790,15 +7877,6 @@ function App() {
                     <path d="M8 14s1.5 2 4 2 4-2 4-2"/>
                     <line x1="9" y1="9" x2="9.01" y2="9"/>
                     <line x1="15" y1="9" x2="15.01" y2="9"/>
-                  </svg>
-                </button>
-
-                <button type="button" className="poll-btn-send" onClick={(e) => { e.preventDefault(); setShowPollModal(true); }} title="Создать опрос">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
-                    <line x1="7" y1="7" x2="17" y2="7"/>
-                    <line x1="7" y1="12" x2="17" y2="12"/>
-                    <line x1="7" y1="17" x2="12" y2="17"/>
                   </svg>
                 </button>
                 <button type="submit" disabled={isUploading || (!hasInputContent() && !selectedFile)}>
@@ -8393,13 +8471,14 @@ function App() {
           <aside className="wiki-sidebar">
             <div className="wiki-sidebar-header">
               <h3>📚 База знаний</h3>
-              {isAdmin && (
+              {(isAdmin || canEditWiki) && (
                 <button className="wiki-new-article-btn" onClick={() => {
                   setWikiActiveArticle(null);
                   setWikiEditMode(true);
                   setWikiEditTitle('');
                   setWikiEditContent('');
                   setWikiEditCategory(wikiActiveCategory || '');
+                  setWikiFiles([]);
                 }}>+ Статья</button>
               )}
               {isAdmin && (
@@ -8408,12 +8487,12 @@ function App() {
             </div>
             <div className="wiki-category-list">
               <div className={`wiki-cat-item ${!wikiActiveCategory ? 'active' : ''}`}
-                onClick={() => { setWikiActiveCategory(null); setWikiActiveArticle(null); setWikiEditMode(false); }}>
+                onClick={() => { setWikiActiveCategory(null); setWikiActiveArticle(null); setWikiEditMode(false); setWikiFiles([]); }}>
                 📋 Все статьи
               </div>
               {wikiCategories.map(cat => (
                 <div key={cat.id} className={`wiki-cat-item ${wikiActiveCategory === cat.id ? 'active' : ''}`}
-                  onClick={() => { setWikiActiveCategory(cat.id); setWikiActiveArticle(null); setWikiEditMode(false); }}>
+                  onClick={() => { setWikiActiveCategory(cat.id); setWikiActiveArticle(null); setWikiEditMode(false); setWikiFiles([]); }}>
                   📂 {cat.name}
                 </div>
               ))}
@@ -8433,7 +8512,7 @@ function App() {
                 </select>
                 <textarea className="wiki-edit-content" placeholder="Текст статьи (поддерживает Markdown)..."
                   value={wikiEditContent} onChange={e => setWikiEditContent(e.target.value)} rows={20} />
-                {isAdmin && (
+                {(isAdmin || canEditWiki) && (
                   <div className="wiki-edit-files">
                     <label className="wiki-file-upload-btn">
                       {wikiFileUploading ? '⏳ Загрузка...' : '📎 Прикрепить файл'}
@@ -8451,7 +8530,9 @@ function App() {
                           <div key={f.id} className="wiki-file-item">
                             <a href={`${SOCKET_URL}/uploads/${f.file_path}`} target="_blank" rel="noopener noreferrer" className="wiki-file-link">{f.file_name}</a>
                             <span className="wiki-file-size">({(f.file_size / 1024).toFixed(1)} KB)</span>
-                            <button className="wiki-file-remove" onClick={() => wikiDeleteFile(wikiActiveArticle.id, f.id)} title="Удалить">✕</button>
+                            {isAdmin && (
+                              <button className="wiki-file-remove" onClick={() => wikiDeleteFile(wikiActiveArticle.id, f.id)} title="Удалить">✕</button>
+                            )}
                           </div>
                         ))}
                       </div>
@@ -8459,7 +8540,7 @@ function App() {
                   </div>
                 )}
                 <div className="wiki-editor-actions">
-                  <button className="cancel-btn" onClick={() => { setWikiEditMode(false); setWikiActiveArticle(null); }}>Отмена</button>
+                  <button className="cancel-btn" onClick={() => { setWikiEditMode(false); setWikiActiveArticle(null); setWikiFiles([]); }}>Отмена</button>
                   <button className="save-btn" onClick={wikiSaveArticle} disabled={!wikiEditTitle.trim()}>💾 Сохранить</button>
                 </div>
               </div>
@@ -8471,8 +8552,14 @@ function App() {
                     <span>Автор: {wikiActiveArticle.creatorName}</span>
                     <span>Обновлено: {formatDate(wikiActiveArticle.updated_at)}</span>
                   </div>
-                  {isAdmin && (
-                    <div className="wiki-article-actions">
+                  <div className="wiki-article-actions">
+                    <button className="share-btn" onClick={() => {
+                      setWikiShareArticle(wikiActiveArticle);
+                      setWikiShareSearchQuery('');
+                      setSelectedWikiShareUser(null);
+                      setShowWikiShareModal(true);
+                    }}>📤 Поделиться</button>
+                    {(isAdmin || (canEditWiki && wikiActiveArticle.created_by === currentUser?.id)) && (
                       <button onClick={() => {
                         setWikiEditTitle(wikiActiveArticle.title);
                         setWikiEditContent(wikiActiveArticle.content);
@@ -8480,11 +8567,13 @@ function App() {
                         setWikiEditMode(true);
                         wikiLoadFiles(wikiActiveArticle.id);
                       }}>✏️ Редактировать</button>
+                    )}
+                    {isAdmin && (
                       <button className="delete-btn" onClick={() => {
                         if (confirm('Удалить статью?')) wikiDeleteArticle(wikiActiveArticle.id);
                       }}>🗑️ Удалить</button>
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
                 <div className="wiki-article-content">{wikiActiveArticle.content}</div>
                 {wikiFiles.length > 0 && (
@@ -8511,17 +8600,19 @@ function App() {
                     (!q || a.title.toLowerCase().includes(q) || a.content.toLowerCase().includes(q))
                   );
                   return filtered.length === 0 ? (
-                    <div className="wiki-empty">{wikiSearch ? 'Ничего не найдено.' : (isAdmin ? 'Нет статей. Нажмите "+ Статья" чтобы создать.' : 'Нет статей.')}</div>
+                    <div className="wiki-empty">{wikiSearch ? 'Ничего не найдено.' : ((isAdmin || canEditWiki) ? 'Нет статей. Нажмите "+ Статья" чтобы создать.' : 'Нет статей.')}</div>
                   ) : (
-                    filtered.map(article => (
+                    <div className="wiki-article-cards">
+                    {filtered.map(article => (
                       <div key={article.id} className="wiki-article-card"
                         onClick={() => wikiOpenArticle(article)}>
                         <div className="wiki-article-card-title">{article.title}</div>
                         <div className="wiki-article-card-meta">
                           {article.creatorName} · {formatDate(article.updated_at)}
                         </div>
-                      </div>
-                    ))
+                    </div>
+                  ))}
+                  </div>
                   );
                 })()}
               </div>
@@ -10429,6 +10520,91 @@ function App() {
                 disabled={!selectedForwardUser}
               >
                 Переслать
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showWikiShareModal && (
+        <div className="modal-overlay" onClick={() => setShowWikiShareModal(false)}>
+          <div className="modal-content forward-modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>📤 Поделиться статьёй</h3>
+              <button onClick={() => setShowWikiShareModal(false)}>✕</button>
+            </div>
+
+            <div className="modal-body">
+              <div className="forward-preview">
+                <p className="forward-preview-text">
+                  📖 {wikiShareArticle?.title}
+                </p>
+              </div>
+
+              <div className="forward-search">
+                <label>Поиск пользователя:</label>
+                <input
+                  type="text"
+                  placeholder="Введите ФИО..."
+                  value={wikiShareSearchQuery}
+                  onChange={(e) => setWikiShareSearchQuery(e.target.value)}
+                  className="forward-search-input"
+                  autoFocus
+                />
+              </div>
+
+              <div className="forward-users-list">
+                <label>Выберите получателя:</label>
+                <div className="users-list">
+                  {users
+                    .filter(user =>
+                      user.username.toLowerCase().includes(wikiShareSearchQuery.toLowerCase()) &&
+                      user.id !== currentUser?.id
+                    )
+                    .map(user => (
+                      <div
+                        key={user.id}
+                        className={`user-item ${selectedWikiShareUser?.id === user.id ? 'selected' : ''}`}
+                        onClick={() => setSelectedWikiShareUser(user)}
+                      >
+                        <img
+                          src={user.avatar || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(user.username)}
+                          alt={user.username}
+                          className="user-avatar-small"
+                        />
+                        <div className="user-info">
+                          <span className="username">{user.username}</span>
+                          {user.status_text && (
+                            <span className="user-status">{user.status_text}</span>
+                          )}
+                        </div>
+                        {selectedWikiShareUser?.id === user.id && (
+                          <span className="checkmark">✓</span>
+                        )}
+                      </div>
+                    ))
+                  }
+                  {users.filter(user =>
+                    user.username.toLowerCase().includes(wikiShareSearchQuery.toLowerCase()) &&
+                    user.id !== currentUser?.id
+                  ).length === 0 && (
+                    <div className="no-users">Пользователи не найдены</div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="modal-footer">
+              <button type="button" className="cancel-btn" onClick={() => setShowWikiShareModal(false)}>
+                Отмена
+              </button>
+              <button
+                type="button"
+                className="create-btn"
+                onClick={handleSendWikiShare}
+                disabled={!selectedWikiShareUser}
+              >
+                Отправить
               </button>
             </div>
           </div>

@@ -1911,23 +1911,49 @@
   background: #ffffff !important;
 }
 
-/* ===== Poll Styles ===== */
-.poll-btn-send {
-  background: none !important;
-  border: none !important;
-  color: var(--text-muted, #888) !important;
-  cursor: pointer;
-  padding: 4px;
-  border-radius: 6px;
-  display: inline-flex;
+/* ===== Add Menu Button ===== */
+.add-menu-btn {
+  display: flex;
   align-items: center;
   justify-content: center;
-  transition: color 0.2s, background 0.2s;
+  width: 48px;
+  height: 48px;
+  background: var(--primary-gradient);
+  color: white;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: 18px;
+  transition: all var(--transition-fast);
+  box-shadow: var(--shadow-md);
+  flex-shrink: 0;
 }
-.poll-btn-send:hover {
-  color: var(--primary-color, #667eea) !important;
-  background: var(--hover-bg, rgba(102,126,234,0.1)) !important;
+.add-menu-btn:hover {
+  transform: scale(1.1);
+  box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
 }
+.add-menu-btn:active {
+  transform: scale(0.95);
+}
+.add-menu-dropdown {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg);
+  min-width: 220px;
+  z-index: 1000;
+  overflow: hidden;
+  animation: slideUp 0.2s ease;
+}
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ===== Poll Styles ===== */
 
 .poll-container {
   margin-top: 8px;
