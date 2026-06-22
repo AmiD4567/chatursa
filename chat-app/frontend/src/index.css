@@ -2221,6 +2221,7 @@ body::before {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
   cursor: pointer;
   transition: all var(--transition-fast);
+  background: linear-gradient(135deg, #667eea, #764ba2);
 }
 
 .message-avatar:hover {
@@ -9337,6 +9338,12 @@ body,
   height: 32px;
   border-radius: 50%;
   object-fit: cover;
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  color: white;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+  line-height: 32px;
 }
 
 .pinned-message-meta {
@@ -9646,6 +9653,12 @@ body,
   height: 28px;
   border-radius: 50%;
   object-fit: cover;
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  color: white;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+  line-height: 28px;
 }
 
 .thread-sender-name {

@@ -72,7 +72,7 @@ function ThreadModal({
               {original && (
                 <div className="thread-original-message">
                   <div className="thread-message-sender">
-                    <img src={original.senderAvatar} alt="" className="thread-avatar" />
+                    <img src={original.senderAvatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(original.senderName || '?')}&background=667eea&color=fff&size=28`} alt={original.senderName} className="thread-avatar" onError={(e) => { e.target.onerror = null; e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || '?')}&background=667eea&color=fff&size=28`; }} />
                     <span className="thread-sender-name">{original.senderName}</span>
                     <span className="thread-time">{formatTime(original.timestamp)}</span>
                   </div>
@@ -91,7 +91,7 @@ function ThreadModal({
                   replies.map(reply => (
                     <div key={reply.id} className="thread-reply-item">
                       <div className="thread-message-sender">
-                        <img src={reply.senderAvatar} alt="" className="thread-avatar" />
+                        <img src={reply.senderAvatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(reply.senderName || '?')}&background=667eea&color=fff&size=28`} alt={reply.senderName} className="thread-avatar" onError={(e) => { e.target.onerror = null; e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || '?')}&background=667eea&color=fff&size=28`; }} />
                         <span className="thread-sender-name">{reply.senderName}</span>
                         <span className="thread-time">{formatTime(reply.timestamp)}</span>
                       </div>

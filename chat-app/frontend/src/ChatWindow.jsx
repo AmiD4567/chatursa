@@ -225,9 +225,10 @@ function ChatWindow({
                   >
                     {!isGrouped && (
                       <img
-                        src={message.senderAvatar}
+                        src={message.senderAvatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(message.senderName || '?')}&background=667eea&color=fff`}
                         alt={message.senderName}
                         className="message-avatar"
+                        onError={(e) => { e.target.onerror = null; e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || '?')}&background=667eea&color=fff`; }}
                       />
                     )}
                     {isGrouped && <div className="message-avatar-spacer" />}

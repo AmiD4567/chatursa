@@ -1564,6 +1564,11 @@ function App() {
       setChats(prev => prev.map(c => c.id === chatId ? { ...c, avatar } : c));
     });
 
+    newSocket.on('user_avatar_updated', ({ userId, avatar }) => {
+      setMessages(prev => prev.map(m => m.senderId === userId ? { ...m, senderAvatar: avatar } : m));
+      setChats(prev => prev.map(c => c.participantsDetails ? { ...c, participantsDetails: c.participantsDetails.map(p => p.id === userId ? { ...p, avatar } : p) } : c));
+    });
+
     newSocket.on('users_list', (usersList) => {
       setUsers(usersList);
     });
@@ -2908,6 +2913,7 @@ function App() {
         const data = await response.json();
         setProfileData(prev => ({ ...prev, avatar: data.avatar }));
         setCurrentUser(prev => ({ ...prev, avatar: data.avatar }));
+        setMessages(prev => prev.map(m => m.senderId === currentUser.id ? { ...m, senderAvatar: data.avatar } : m));
       } else {
         alert('Ошибка загрузки аватара');
       }
@@ -4496,14 +4502,12 @@ function App() {
 
   // Открыть ответ на сообщение
   const openReply = (messageId, messageText, senderName) => {
-    if (!messageText || !senderName) return;
     setReplyToMessage({
       id: messageId,
-      text: messageText.substring(0, 300),
-      senderName: senderName
+      text: (messageText || '').substring(0, 300),
+      senderName: senderName || ''
     });
     closeContextMenu();
-    // Фокус на поле ввода
     setTimeout(() => {
       if (messageInputRef.current) {
         messageInputRef.current.focus();
@@ -4520,17 +4524,14 @@ function App() {
 
   // Открыть inline-редактирование сообщения
   const openEditMessage = (messageId, messageText, senderName) => {
-    if (!messageText || !senderName) return;
-    
     setEditingMessage(messageId);
     setIsEditMode(true);
     closeContextMenu();
     
-    // Очищаем поле ввода и вставляем текст редактируемого сообщения
     setInputText('');
     if (messageInputRef.current) {
-      messageInputRef.current.innerHTML = messageText.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      messageInputRef.focus();
+      messageInputRef.current.innerHTML = (messageText || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      messageInputRef.current?.focus();
     }
   };
 
@@ -4639,23 +4640,20 @@ function App() {
   }
 
   // Копирование сообщения
-  const handleCopyMessage = async () => {
+  const handleCopyMessage = () => {
     if (contextMenu.messageText) {
       try {
-        await navigator.clipboard.writeText(contextMenu.messageText);
-        // Показываем уведомление (опционально)
-        console.log('Сообщение скопировано');
-      } catch (err) {
-        // Fallback для старых браузеров
         const textArea = document.createElement('textarea');
         textArea.value = contextMenu.messageText;
         document.body.appendChild(textArea);
         textArea.select();
         document.execCommand('copy');
         document.body.removeChild(textArea);
+      } catch (err) {
+        console.warn('Не удалось скопировать текст:', err);
       }
-      closeContextMenu();
     }
+    closeContextMenu();
   };
 
   // Вырезание текста из поля ввода
@@ -5950,7 +5948,7 @@ function App() {
             <div className="last-user-card">
               <div className="last-user-avatar">
                 {lastUser.avatar ? (
-                  <img src={lastUser.avatar} alt={lastUser.username} />
+                  <img src={lastUser.avatar} alt={lastUser.username} onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || lastUser.username || 'U')}`; }} />
                 ) : (
                   <div className="last-user-avatar-placeholder">
                     {lastUser.username.charAt(0).toUpperCase()}
@@ -6299,7 +6297,7 @@ function App() {
       <aside className="sidebar-buttons">
         <div className="user-info" onClick={handleOpenProfile} style={{ cursor: 'pointer' }} title={currentUser?.username}>
           <div className="user-avatar-wrapper">
-            <img src={currentUser?.avatar} alt={currentUser?.username} className="user-avatar" />
+            <img src={currentUser?.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(currentUser?.username || 'U')}`} alt={currentUser?.username} className="user-avatar" onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || 'U')}`; }} />
           </div>
           <span className="user-name-sidebar">{currentUser?.username}</span>
         </div>
@@ -6568,7 +6566,7 @@ function App() {
                       <div className="notifications-list">
                         {upcomingNotifications.birthdays.map(birthday => (
                           <div key={birthday.id} className="notification-item birthday-item">
-                            <img src={birthday.avatar} alt={birthday.username} className="notification-avatar" />
+                            <img src={birthday.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(birthday.username)}`} alt={birthday.username} className="notification-avatar" onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || birthday.username || 'U')}`; }} />
                             <div className="notification-content">
                               <span className="notification-title">{birthday.username}</span>
                               <span className="notification-date">
@@ -6643,7 +6641,7 @@ function App() {
                             key={task.id}
                             className={`notification-item shared-task-item ${disappearingTasks.includes(task.shareId) ? 'disappearing' : ''}`}
                           >
-                            <img src={task.from_avatar} alt={task.from_username} className="notification-avatar" />
+                            <img src={task.from_avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(task.from_username)}`} alt={task.from_username} className="notification-avatar" onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || task.from_username || 'U')}`; }} />
                             <div className="notification-content">
                               <span className="notification-title">{task.title}</span>
                               <span className="notification-from">От: {task.from_username}</span>
@@ -6831,7 +6829,7 @@ function App() {
                             <tr key={user.id} className={userHostCount > 3 ? 'suspicious-row' : ''}>
                               <td>
                                 <div className="user-cell">
-                                  <img src={user.avatar || `https://ui-avatars.com/api/?name=${user.username}`} alt={user.username} className="user-avatar-small" />
+                                  <img src={user.avatar || `https://ui-avatars.com/api/?name=${user.username}`} alt={user.username} className="user-avatar-small" onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || 'U')}`; }} />
                                   <span>{user.username}</span>
                                   {userHostCount > 3 && (
                                     <span className="suspicious-badge" title={`Этот компьютер создал ${userHostCount} учётных записей`}>
@@ -6936,7 +6934,7 @@ function App() {
                           <tr key={session.id}>
                             <td>
                               <div className="user-cell">
-                                <img src={session.avatar || `https://ui-avatars.com/api/?name=${session.username}`} alt={session.username} className="user-avatar-small" />
+                                <img src={session.avatar || `https://ui-avatars.com/api/?name=${session.username}`} alt={session.username} className="user-avatar-small" onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || 'U')}`; }} />
                                 <span>{session.username}</span>
                               </div>
                             </td>
@@ -7541,6 +7539,7 @@ function App() {
                             src={otherUser.avatar || chat.avatar || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(otherUser.username)}
                             alt={otherUser.username}
                             className="chat-avatar"
+                            onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || 'U')}`; }}
                           />
                           <span className={`chat-status-indicator ${otherUser.status === 'online' ? 'online' : ''}`}></span>
                         </div>
@@ -7553,6 +7552,7 @@ function App() {
                       src={chat.avatar}
                       alt="Общий чат"
                       className="chat-avatar"
+                      onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || 'U')}`; }}
                       onClick={(e) => {
                         e.stopPropagation();
                         if (currentUser?.is_admin === 1) {
@@ -7568,7 +7568,7 @@ function App() {
                       title={currentUser?.is_admin === 1 ? 'Настройки общего чата' : ''}
                     />
                   ) : chat.avatar ? (
-                    <img src={chat.avatar} alt={chat.name} className="chat-avatar" />
+                    <img src={chat.avatar} alt={chat.name} className="chat-avatar" onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || 'U')}`; }} />
                   ) : (
                     <div className="chat-icon">{getChatIcon(chat)}</div>
                   )}
@@ -7641,7 +7641,7 @@ function App() {
               {users.map(user => (
                 <div key={user.id} className="user-item">
                   <div className="user-avatar-wrapper">
-                    <img src={user.avatar} alt={user.username} className="user-avatar-small" />
+                    <img src={user.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(user.username)}`} alt={user.username} className="user-avatar-small" onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || user.username || 'U')}`; }} />
                     <span className={`status-indicator ${user.status}`}></span>
                     {user.status_text && (
                       <span className="user-status-badge">
@@ -7696,6 +7696,7 @@ function App() {
                         src={otherUser.avatar || activeChat.avatar || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(otherUser.username)}
                         alt={otherUser.username}
                         className="chat-header-avatar"
+                        onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || 'U')}`; }}
                         onClick={() => {
                           handleViewUserProfile({
                             id: otherUser.id,
@@ -7731,6 +7732,7 @@ function App() {
                         src={activeChat.avatar}
                         alt="Общий чат"
                         className="chat-header-avatar"
+                        onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || 'U')}`; }}
                       />
                     ) : (
                       <span className="chat-icon-large">{getChatIcon(activeChat)}</span>
@@ -7739,7 +7741,7 @@ function App() {
                 ) : activeChat.type === 'group' ? (
                   <div style={{ cursor: 'pointer' }} title="Просмотр аватара">
                     {activeChat.avatar ? (
-                      <img src={activeChat.avatar} alt={activeChat.name} className="chat-header-avatar" onClick={() => setPreviewAvatar({ src: activeChat.avatar, chatId: activeChat.id })} />
+                      <img src={activeChat.avatar} alt={activeChat.name} className="chat-header-avatar" onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || 'U')}`; }} onClick={() => setPreviewAvatar({ src: activeChat.avatar, chatId: activeChat.id })} />
                     ) : (
                       <span className="chat-icon-large" onClick={() => document.getElementById(`group-avatar-${activeChat.id}`).click()}>{getChatIcon(activeChat)}</span>
                     )}
@@ -7898,9 +7900,10 @@ function App() {
                 >
                   {!isGrouped && (
                     <img
-                      src={message.senderAvatar}
+                      src={message.senderAvatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(message.senderName || 'U')}&background=667eea&color=fff`}
                       alt={message.senderName}
                       className="message-avatar"
+                      onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || message.senderName || 'U')}&background=667eea&color=fff`; }}
                     />
                   )}
                   {isGrouped && <div className="message-avatar-spacer" />}
@@ -7961,6 +7964,7 @@ function App() {
                                           src={user.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(user.username)}&background=random`}
                                           alt={user.username}
                                           className="reaction-avatar-inline"
+                                          onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || 'U')}&background=random`; }}
                                         />
                                       ))}
                                       {remainingCount > 0 && (
@@ -8229,7 +8233,7 @@ function App() {
                     <div className="chat-menu-item" onClick={handleViewUserInfo}>
                       <span className="menu-icon">
                         {otherUser ? (
-                          <img src={otherUser.avatar || activeChat.avatar || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(otherUser.username)} alt={otherUser.username} className="menu-avatar" />
+                          <img src={otherUser.avatar || activeChat.avatar || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(otherUser.username)} alt={otherUser.username} className="menu-avatar" onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || 'U')}`; }} />
                         ) : (
                           <span className="emoji-animated">👤</span>
                         )}
@@ -8442,7 +8446,7 @@ function App() {
                 return filteredUsers.map(user => (
                   <div key={user.id} className="phonebook-card">
                     <div className="phonebook-card-header">
-                      <img src={user.avatar} alt={user.username} className="phonebook-card-avatar" />
+                      <img src={user.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(user.username)}`} alt={user.username} className="phonebook-card-avatar" onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || user.username || 'U')}`; }} />
                       <div className="phonebook-card-info">
                         <span className="phonebook-card-username">{user.username}</span>
                         {user.fullName && <span className="phonebook-card-fullname">{user.fullName}</span>}
@@ -8633,7 +8637,7 @@ function App() {
                             <h6 className="birthdays-title">🎂 Дни рождения:</h6>
                             {dayBirthdays.map(birthday => (
                               <div key={birthday.id} className="calendar-birthday-item">
-                                <img src={birthday.avatar} alt={birthday.username} className="birthday-avatar" />
+                                <img src={birthday.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(birthday.username)}`} alt={birthday.username} className="birthday-avatar" onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || birthday.username || 'U')}`; }} />
                                 <div className="birthday-info">
                                   <span className="birthday-name">{birthday.username}</span>
                                   <span className="birthday-age">
@@ -9638,7 +9642,7 @@ function App() {
                           onClick={() => toggleUserSelection(user)}
                         >
                           <div className="user-avatar-wrapper">
-                            <img src={user.avatar} alt={user.username} className="user-avatar-small" />
+                            <img src={user.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(user.username)}`} alt={user.username} className="user-avatar-small" onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || 'U')}`; }} />
                             <span className={`status-indicator ${user.status}`}></span>
                           </div>
                           <div className="user-info-small">
@@ -9699,7 +9703,7 @@ function App() {
             <div className="modal-body">
               <div className="profile-avatar-section">
                 <label htmlFor="avatar-upload" className="avatar-label">
-                  <img src={profileData.avatar || currentUser?.avatar} alt="Аватар" className="profile-avatar-preview" />
+                  <img src={profileData.avatar || currentUser?.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(currentUser?.username || 'U')}`} alt="Аватар" className="profile-avatar-preview" onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || currentUser?.username || 'U')}`; }} />
                   <div className="avatar-overlay">
                     <span>📷 Изменить</span>
                   </div>
@@ -9797,6 +9801,7 @@ function App() {
                     src={viewUserProfileData.avatar || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(viewUserProfileData.username)}
                     alt={viewUserProfileData.username}
                     className="view-profile-avatar"
+                    onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || viewUserProfileData.username || 'U')}`; }}
                     onClick={() => handleOpenAvatar(viewUserProfileData.avatar, viewUserProfileData.username)}
                     style={{ cursor: viewUserProfileData.avatar ? 'zoom-in' : 'default' }}
                   />
@@ -9923,7 +9928,7 @@ function App() {
         <div className="avatar-viewer-overlay" onClick={() => setShowAvatarModal(false)}>
           <div className="avatar-viewer-content" onClick={e => e.stopPropagation()}>
             <button className="avatar-viewer-close" onClick={() => setShowAvatarModal(false)}>✕</button>
-            <img src={avatarUrl} alt="Avatar full size" className="avatar-viewer-image" />
+            <img src={avatarUrl} alt="Avatar full size" className="avatar-viewer-image" onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || 'U')}`; }} />
           </div>
         </div>
       )}
@@ -10637,7 +10642,7 @@ function App() {
                     className={`share-user-item ${selectedUsersForShare.find(id => id === user.id) ? 'selected' : ''}`}
                     onClick={() => toggleUserForShare(user.id)}
                   >
-                    <img src={user.avatar} alt={user.username} className="share-user-avatar" />
+                    <img src={user.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(user.username)}`} alt={user.username} className="share-user-avatar" onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || 'U')}`; }} />
                     <span className="share-user-name">{user.username}</span>
                     {selectedUsersForShare.find(id => id === user.id) && (
                       <span className="share-checkmark">✓</span>
@@ -10686,7 +10691,7 @@ function App() {
                       className={`shared-task-item ${share.status !== 'pending' ? 'disabled' : ''}`}
                     >
                       <div className="shared-task-header">
-                        <img src={share.from_avatar} alt={share.from_username} className="shared-task-avatar" />
+                        <img src={share.from_avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(share.from_username)}`} alt={share.from_username} className="shared-task-avatar" onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || share.from_username || 'U')}`; }} />
                         <div className="shared-task-info">
                           <span className="shared-task-from">От: {share.from_username}</span>
                           <span className="shared-task-title">{share.task.title}</span>
@@ -10919,6 +10924,7 @@ function App() {
                           src={user.avatar || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(user.username)}
                           alt={user.username}
                           className="user-avatar-small"
+                          onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || 'U')}`; }}
                         />
                         <div className="user-info">
                           <span className="username">{user.username}</span>
@@ -10967,7 +10973,7 @@ function App() {
               <button onClick={() => setPreviewAvatar(null)}>✕</button>
             </div>
             <div className="modal-body" style={{ textAlign: 'center', padding: '20px' }}>
-              <img src={previewAvatar.src} alt="Аватар" className="avatar-preview-img" />
+              <img src={previewAvatar.src} alt="Аватар" className="avatar-preview-img" onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || previewAvatar.alt || 'U')}`; }} />
               <div style={{ marginTop: '16px' }}>
                 <button className="btn-primary" onClick={() => { const chatId = previewAvatar.chatId; setPreviewAvatar(null); setTimeout(() => document.getElementById(`group-avatar-${chatId}`)?.click(), 100); }}>
                   📷 Сменить аватар
@@ -11023,6 +11029,7 @@ function App() {
                           src={user.avatar || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(user.username)}
                           alt={user.username}
                           className="user-avatar-small"
+                          onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || 'U')}`; }}
                         />
                         <div className="user-info">
                           <span className="username">{user.username}</span>
@@ -11377,6 +11384,7 @@ function App() {
                         src={pinnedMsg.senderAvatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(pinnedMsg.senderName || 'U')}`}
                         alt={pinnedMsg.senderName}
                         className="pinned-message-avatar"
+                        onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || 'U')}`; }}
                       />
                       <div className="pinned-message-meta">
                         <span className="pinned-message-sender">{pinnedMsg.senderName}</span>

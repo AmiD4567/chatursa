@@ -926,6 +926,7 @@
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
   cursor: pointer;
   transition: all var(--transition-fast);
+  background: linear-gradient(135deg, #667eea, #764ba2);
 }
 
 .message-avatar:hover {

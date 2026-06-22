@@ -2329,7 +2329,8 @@ app.post('/api/upload-avatar', upload.single('avatar'), (req, res) => {
   try {
     db.run('UPDATE users SET avatar = ? WHERE id = ?', [avatarUrl, userId]);
 
-    
+    io.emit('user_avatar_updated', { userId: Number(userId), avatar: avatarUrl });
+
     res.json({
       success: true,
       avatar: avatarUrl
