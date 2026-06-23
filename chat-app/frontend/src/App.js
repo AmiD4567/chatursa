@@ -11,6 +11,7 @@ import { initE2EEForUser, ensureSharedKey, encryptMessage, decryptMessage, getCa
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import DisconnectedOverlay from './DisconnectedOverlay';
+import InAppNotification from './InAppNotification';
 
 const SOCKET_URL = 'http://192.168.210.48:3001';
 const STORAGE_KEY = 'chat_user_data';
@@ -169,6 +170,10 @@ function App() {
   const [rememberMe, setRememberMe] = useState(false); // Запомнить меня
   const [authError, setAuthError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+
+  // In-app уведомления (Telegram-стиль)
+  const [inAppNotifications, setInAppNotifications] = useState([]);
+  const inAppNotificationIdRef = useRef(0);
 
   const [chats, setChats] = useState([]);
   const [activeChatId, setActiveChatId] = useState(null);
@@ -373,6 +378,9 @@ function App() {
   const [wikiFileUploading, setWikiFileUploading] = useState(false);
   const [wikiFiles, setWikiFiles] = useState([]);
   const [wikiSearch, setWikiSearch] = useState('');
+  const [wikiAccessLevel, setWikiAccessLevel] = useState('public');
+  const [wikiAllowedUsers, setWikiAllowedUsers] = useState([]);
+  const [wikiAccessSearch, setWikiAccessSearch] = useState('');
   const [showHR, setShowHR] = useState(false);
   const [hrRequests, setHrRequests] = useState([]);
   const [showHRCreate, setShowHRCreate] = useState(false);
@@ -1056,9 +1064,9 @@ function App() {
   useEffect(() => {
     const newSocket = io(SOCKET_URL, {
       reconnection: true,
-      reconnectionAttempts: 10,
-      reconnectionDelay: 1000,
-      reconnectionDelayMax: 5000
+        reconnectionAttempts: Infinity,
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 5000
     });
     setSocket(newSocket);
     socketRef.current = newSocket;
@@ -1137,8 +1145,6 @@ function App() {
     newSocket.on('reconnect_failed', () => {
       console.error('Не удалось переподключить сокет');
       setConnectionStatus('disconnected');
-      setIsLoggedIn(false);
-      setCurrentUser(null);
     });
 
     newSocket.on('connect_error', (err) => {
@@ -1211,20 +1217,18 @@ function App() {
             is_admin: data.user.is_admin || 0
           };
           setCurrentUser(fullUser);
-          const hasRight = fullUser.username === 'Root' || fullUser.is_admin === 1;
-          setCanBookMeetingRoom(hasRight);
+          const canBook = fullUser.username === 'Root' || data.user.can_book_meeting_room === 1;
+          setCanBookMeetingRoom(canBook);
           setCanEditWiki(fullUser.is_admin === 1 || data.user.can_edit_wiki === 1);
         } else {
           setCurrentUser(user);
-          const hasRight = user.username === 'Root' || user.is_admin === 1;
-          setCanBookMeetingRoom(hasRight);
+          setCanBookMeetingRoom(false);
           setCanEditWiki(user.is_admin === 1);
         }
       } catch (err) {
         console.error('Ошибка загрузки профиля:', err);
         setCurrentUser(user);
-        const hasRight = user.username === 'Root' || user.is_admin === 1;
-        setCanBookMeetingRoom(hasRight);
+        setCanBookMeetingRoom(false);
         setCanEditWiki(user.is_admin === 1);
       }
       
@@ -1277,10 +1281,7 @@ function App() {
         }
       });
 
-      // Проверяем право на бронирование переговорной
-      // По умолчанию у Root есть это право
-      const hasRight = user.username === 'Root' || user.is_admin === 1;
-      setCanBookMeetingRoom(hasRight);
+
 
       if (userChats.length > 0) {
         // При первом входе открываем первый чат, при переподключении сохраняем текущий
@@ -1355,94 +1356,57 @@ function App() {
       // Используем currentUserRef.current и activeChatIdRef.current для актуальных значений
       const myId = currentUserRef.current?.id;
       const isMyMessage = isOwnMessage || message.senderId === myId;
-
-      // Определяем, активен ли чат - используем ref для актуального значения
       const isChatActive = message.chatId === activeChatIdRef.current;
-
-      // Проверяем, находится ли приложение в фокусе (для Electron)
-      let isAppFocused = true;
-      if (window.electronAPI) {
-        // Для Electron приложения проверяем фокус окна
-        isAppFocused = document.hasFocus() && !document.hidden;
-      }
 
       // Показываем уведомление если:
       // 1. Сообщение не от нас
-      // 2. ИЛИ чат не активен, ИЛИ приложение не в фокусе (свернуто)
-      if (!isMyMessage && notificationPermissionRef.current === 'granted') {
-        const shouldShowNotification = !isChatActive || !isAppFocused;
-        
-        if (!shouldShowNotification) {
-          console.log('Уведомление НЕ показываем: чат активен и приложение в фокусе');
-          // Продолжаем обработку для обновления UI, но без уведомления
+      if (!isMyMessage) {
+
+        // Звук уведомления
+        if (notificationSettingsRef.current.sound) {
+          try {
+            const audio = new Audio('data:audio/wav;base64,UklGRl9vT19XQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YU');
+            audio.play().catch(() => {});
+          } catch (e) {}
         }
 
-        // Проверяем, является ли отправитель ботом-помощником
-        const isBotMessage = message.senderName === 'Помощник' || message.senderId?.includes('bot-');
+        // In-app уведомление (Telegram-стиль) — показываем всегда
+        const senderName = message.senderName || 'Чат УРСА';
+        const messageBody = stripStickerMarkers(message.text) || '📎 Файл';
+        showInAppNotification(senderName, messageBody, message.senderAvatar || null, message.chatId);
 
-        // Если это сообщение от бота и уведомления от бота отключены - не показываем
-        if (isBotMessage && !notificationSettingsRef.current.botAssistant) {
-          console.log('Уведомление от бота отключено в настройках');
-        }
-        // Проверяем настройки уведомлений для обычных сообщений
-        else if (notificationSettingsRef.current.newMessages) {
-          // Показываем уведомление только если чат не активен или приложение не в фокусе
-          if (shouldShowNotification) {
-          // Звук уведомления
-          if (notificationSettingsRef.current.sound) {
-            try {
-              const audio = new Audio('data:audio/wav;base64,UklGRl9vT19XQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YU');
-              audio.play().catch(() => {});
-            } catch (e) {}
+        // Системное уведомление (только для браузера, не для Electron)
+        if (!window.electronAPI && notificationPermissionRef.current === 'granted') {
+          const isChatActive = message.chatId === activeChatIdRef.current;
+          let isAppFocused = true;
+          if (window.electronAPI) {
+            isAppFocused = document.hasFocus() && !document.hidden;
           }
+          const shouldShowSystemNotification = !isChatActive || !isAppFocused;
 
-          // Push уведомление
-          const notificationData = {
-            title: 'Чат УРСА',
-            body: `${message.senderName}: ${stripStickerMarkers(message.text) || '📎 Файл'}`,
-            icon: message.senderAvatar || '/favicon.ico',
-            badge: '/favicon.ico',
-            tag: message.chatId,
-            requireInteraction: false,
-            data: { chatId: message.chatId }
-          };
-
-          // Если это Electron приложение, отправляем уведомление через IPC
-          if (window.electronAPI && window.electronAPI.sendNotification) {
-            window.electronAPI.sendNotification({
-              title: notificationData.title,
-              body: notificationData.body,
-              icon: notificationData.icon,
-              chatId: message.chatId
-            });
-          } else {
-            // Обычное браузерное уведомление
-            const notif = new Notification(notificationData.title, {
-              body: notificationData.body,
-              icon: notificationData.icon,
-              badge: notificationData.badge,
-              tag: notificationData.tag,
-              requireInteraction: notificationData.requireInteraction,
-              data: notificationData.data
+          if (shouldShowSystemNotification && notificationSettingsRef.current.newMessages) {
+            const notif = new Notification('Чат УРСА', {
+              body: `${message.senderName}: ${stripStickerMarkers(message.text) || '📎 Файл'}`,
+              icon: message.senderAvatar || '/favicon.ico',
+              badge: '/favicon.ico',
+              tag: message.chatId,
+              requireInteraction: false,
+              data: { chatId: message.chatId }
             });
 
-            // Обработчик клика по уведомлению
             notif.onclick = () => {
               window.focus();
-              const chatId = notificationData.data.chatId;
+              const chatId = message.chatId;
               const chatToOpen = chats.find(c => c.id === chatId);
-              
               if (chatToOpen) {
                 handleSelectChat(chatToOpen);
               }
-              
               notif.close();
             };
           }
-          } // закрывающая скобка для if (shouldShowNotification)
         }
       } else {
-        console.log('Уведомление НЕ показываем: чат активен и приложение в фокусе', { isMyMessage, isChatActive, isAppFocused });
+        console.log('Уведомление НЕ показываем: своё сообщение');
       }
 
       setChats(prev => {
@@ -3366,6 +3330,17 @@ function App() {
     }
   };
 
+  // Показ in-app уведомления (Telegram-стиль)
+  const showInAppNotification = (title, body, icon, chatId) => {
+    const id = ++inAppNotificationIdRef.current;
+    setInAppNotifications(prev => [...prev.slice(-4), { id, title, body, icon, chatId }]);
+  };
+
+  // Закрыть in-app уведомление
+  const dismissInAppNotification = (id) => {
+    setInAppNotifications(prev => prev.filter(n => n.id !== id));
+  };
+
   const handleSendMessage = async (e) => {
     e.preventDefault();
     if (!socket || (!hasInputContent() && !selectedFile) || !activeChatId) return;
@@ -3617,31 +3592,37 @@ function App() {
   const wikiSaveArticle = async () => {
     if (!currentUser || !wikiEditTitle.trim()) return;
     try {
+      const body = {
+        title: wikiEditTitle.trim(),
+        content: wikiEditContent,
+        categoryId: wikiEditCategory || null,
+        userId: currentUser.id
+      };
+
+      if (isAdmin) {
+        body.accessLevel = wikiAccessLevel;
+        if (wikiAccessLevel === 'selected') {
+          body.allowedUsers = wikiAllowedUsers;
+        }
+      }
+
       if (wikiActiveArticle) {
         await fetch(`${SOCKET_URL}/api/wiki/articles/${wikiActiveArticle.id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            title: wikiEditTitle.trim(),
-            content: wikiEditContent,
-            categoryId: wikiEditCategory || null,
-            userId: currentUser.id
-          })
+          body: JSON.stringify(body)
         });
       } else {
         await fetch(`${SOCKET_URL}/api/wiki/articles`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            title: wikiEditTitle.trim(),
-            content: wikiEditContent,
-            categoryId: wikiEditCategory || null,
-            userId: currentUser.id
-          })
+          body: JSON.stringify(body)
         });
       }
       setWikiEditMode(false);
       setWikiActiveArticle(null);
+      setWikiAccessLevel('public');
+      setWikiAllowedUsers([]);
       loadWikiData();
     } catch (err) {
       console.error('Ошибка сохранения статьи:', err);
@@ -6217,7 +6198,15 @@ function App() {
   return (
     <div className="app-container">
       {/* Оверлей потери связи */}
-      {connectionStatus === 'disconnected' && <DisconnectedOverlay />}
+      {connectionStatus !== 'connected' && connectionStatus !== 'connecting' && <DisconnectedOverlay />}
+
+      {/* In-app уведомления (Telegram-стиль) */}
+      <InAppNotification
+        notifications={inAppNotifications}
+        onDismiss={dismissInAppNotification}
+        onSelectChat={handleSelectChat}
+        renderEmoji={renderEmoji}
+      />
 
       {/* Баннер уведомления о включении уведомлений */}
       {showNotificationBanner && browserNotificationPermission !== 'granted' && (
@@ -7599,9 +7588,8 @@ function App() {
                           <div className="chat-status-row">
                             <span className="chat-status-text">
                               {displayStatus.split('').map((char, idx) => {
-                                // Проверяем, является ли символ emoji
                                 if (/[\p{Emoji}]/u.test(char)) {
-                                  return <span key={idx}>{renderEmoji(char)}</span>;
+                                  return renderEmoji(char);
                                 }
                                 return char;
                               })}
@@ -7647,14 +7635,12 @@ function App() {
                       <span className="user-status-badge">
                         {(() => {
                           const statusText = user.status_text;
-                          const firstChar = statusText.charAt(0);
-                          const isEmoji = /[\p{Emoji}]/u.test(firstChar);
-                          // Если начинается со смайла, показываем только смайл
-                          if (isEmoji) {
-                            return renderEmoji(firstChar);
-                          }
-                          // Иначе показываем весь текст
-                          return statusText;
+                          return statusText.split('').map((char, idx) => {
+                            if (/[\p{Emoji}]/u.test(char)) {
+                              return renderEmoji(char);
+                            }
+                            return char;
+                          });
                         })()}
                       </span>
                     )}
@@ -7789,20 +7775,22 @@ function App() {
                           const isOnline = otherUser.status === 'online';
 
                           if (statusText) {
-                            // Проверяем, начинается ли статус со смайла
-                            const firstChar = statusText.charAt(0);
-                            const isEmoji = /[\p{Emoji}]/u.test(firstChar);
+                            // Проверяем, есть ли в статусе эмодзи
+                            const hasEmoji = /[\p{Emoji}]/u.test(statusText);
 
-                            if (isEmoji) {
-                              // Показываем только текст без смайла (смайл уже есть в статусе)
-                              const textOnly = statusText.substring(1).trim();
+                            if (hasEmoji) {
                               return (
                                 <span className="user-status-text with-text">
-                                  {textOnly || firstChar}
+                                  {statusText.split('').map((char, idx) => {
+                                    if (/[\p{Emoji}]/u.test(char)) {
+                                      return renderEmoji(char, '', 16);
+                                    }
+                                    return char;
+                                  })}
                                 </span>
                               );
                             } else {
-                              // Просто текст без смайла
+                              // Просто текст без эмодзи
                               return (
                                 <span className="user-status-text with-text">
                                   {statusText}
@@ -8845,6 +8833,60 @@ function App() {
                     <option key={cat.id} value={cat.id}>{cat.name}</option>
                   ))}
                 </select>
+                {isAdmin && (
+                  <div className="wiki-access-section">
+                    <label className="wiki-access-label">🔐 Доступ к статье</label>
+                    <div className="wiki-access-options">
+                      <label className={`wiki-access-option ${wikiAccessLevel === 'public' ? 'active' : ''}`}>
+                        <input type="radio" name="accessLevel" value="public" checked={wikiAccessLevel === 'public'}
+                          onChange={() => { setWikiAccessLevel('public'); setWikiAllowedUsers([]); }} />
+                        🌍 Все
+                      </label>
+                      <label className={`wiki-access-option ${wikiAccessLevel === 'selected' ? 'active' : ''}`}>
+                        <input type="radio" name="accessLevel" value="selected" checked={wikiAccessLevel === 'selected'}
+                          onChange={() => setWikiAccessLevel('selected')} />
+                        👥 Выборочно
+                      </label>
+                      <label className={`wiki-access-option ${wikiAccessLevel === 'private' ? 'active' : ''}`}>
+                        <input type="radio" name="accessLevel" value="private" checked={wikiAccessLevel === 'private'}
+                          onChange={() => { setWikiAccessLevel('private'); setWikiAllowedUsers([]); }} />
+                        🔒 Только я
+                      </label>
+                    </div>
+                    {wikiAccessLevel === 'selected' && (
+                      <div className="wiki-user-select">
+                        <input type="text" className="wiki-user-search" placeholder="🔍 Поиск пользователей..."
+                          value={wikiAccessSearch} onChange={e => setWikiAccessSearch(e.target.value)} />
+                        {wikiAllowedUsers.length > 0 && (
+                          <div className="wiki-user-chips">
+                            {wikiAllowedUsers.map(uid => {
+                              const u = users.find(u => u.id === uid);
+                              return (
+                                <span key={uid} className="wiki-user-chip" onClick={() => setWikiAllowedUsers(prev => prev.filter(id => id !== uid))}>
+                                  {u?.username || uid} ✕
+                                </span>
+                              );
+                            })}
+                          </div>
+                        )}
+                        <div className="wiki-user-checkbox-list">
+                          {users.filter(u => u.id !== currentUser?.id && (!wikiAccessSearch || u.username.toLowerCase().includes(wikiAccessSearch.toLowerCase()))).map(u => (
+                            <div key={u.id} className={`wiki-user-checkbox-item ${wikiAllowedUsers.includes(u.id) ? 'checked' : ''}`}
+                              onClick={() => {
+                                setWikiAllowedUsers(prev =>
+                                  prev.includes(u.id) ? prev.filter(id => id !== u.id) : [...prev, u.id]
+                                );
+                              }}>
+                              <img src={u.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(u.username)}`} alt="" className="wiki-user-avatar"
+                                onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(u.username)}`; }} />
+                              <span>{u.username}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
                 <div className="wiki-md-toolbar">
                   <button type="button" className="wiki-md-btn" onClick={() => {
                     const ta = document.querySelector('.wiki-edit-content');
@@ -8988,6 +9030,13 @@ function App() {
                   <div className="wiki-article-meta">
                     <span>Автор: {wikiActiveArticle.creatorName}</span>
                     <span>Обновлено: {formatDate(wikiActiveArticle.updated_at)}</span>
+                    {wikiActiveArticle.access_level && (
+                      <span className={`wiki-access-badge ${wikiActiveArticle.access_level}`}>
+                        {wikiActiveArticle.access_level === 'public' && '🌍 Все'}
+                        {wikiActiveArticle.access_level === 'selected' && '👥 Выборочно'}
+                        {wikiActiveArticle.access_level === 'private' && '🔒 Только я'}
+                      </span>
+                    )}
                   </div>
                   <div className="wiki-article-actions">
                     <button className="share-btn" onClick={() => {
@@ -9001,6 +9050,8 @@ function App() {
                         setWikiEditTitle(wikiActiveArticle.title);
                         setWikiEditContent(wikiActiveArticle.content);
                         setWikiEditCategory(wikiActiveArticle.category_id || '');
+                        setWikiAccessLevel(wikiActiveArticle.access_level || 'public');
+                        setWikiAllowedUsers(wikiActiveArticle.allowedUsers || []);
                         setWikiEditMode(true);
                         wikiLoadFiles(wikiActiveArticle.id);
                       }}>✏️ Редактировать</button>
@@ -9043,7 +9094,11 @@ function App() {
                     {filtered.map(article => (
                       <div key={article.id} className="wiki-article-card"
                         onClick={() => wikiOpenArticle(article)}>
-                        <div className="wiki-article-card-title">{article.title}</div>
+                        <div className="wiki-article-card-title">
+                          {article.access_level === 'private' && '🔒 '}
+                          {article.access_level === 'selected' && '👥 '}
+                          {article.title}
+                        </div>
                         <div className="wiki-article-card-meta">
                           {article.creatorName} · {formatDate(article.updated_at)}
                         </div>
@@ -10929,7 +10984,7 @@ function App() {
                         <div className="user-info">
                           <span className="username">{user.username}</span>
                           {user.status_text && (
-                            <span className="user-status">{user.status_text}</span>
+                            <span className="user-status">{wrapEmojisInText(user.status_text)}</span>
                           )}
                         </div>
                         {selectedForwardUser?.id === user.id && (
@@ -11034,7 +11089,7 @@ function App() {
                         <div className="user-info">
                           <span className="username">{user.username}</span>
                           {user.status_text && (
-                            <span className="user-status">{user.status_text}</span>
+                            <span className="user-status">{wrapEmojisInText(user.status_text)}</span>
                           )}
                         </div>
                         {selectedWikiShareUser?.id === user.id && (

@@ -764,6 +764,18 @@
   display: none;
 }
 
+/* Apple-style emoji images in user status text */
+.user-status-text img {
+  width: 16px !important;
+  height: 16px !important;
+  max-width: 16px !important;
+  max-height: 16px !important;
+  object-fit: contain !important;
+  vertical-align: middle !important;
+  flex-shrink: 0 !important;
+  display: block !important;
+}
+
 /* Индикатор "печатает..." */
 .typing-indicator {
   display: flex;

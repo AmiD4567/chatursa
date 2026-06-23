@@ -125,14 +125,18 @@ function ChatWindow({
                         const isOnline = otherUser.status === 'online';
 
                         if (statusText) {
-                          const firstChar = statusText.charAt(0);
-                          const isEmoji = /[\p{Emoji}]/u.test(firstChar);
+                          // Check if status text contains any emoji characters
+                          const hasEmoji = /[\p{Emoji}]/u.test(statusText);
 
-                          if (isEmoji) {
-                            const textOnly = statusText.substring(1).trim();
+                          if (hasEmoji) {
                             return (
                               <span className="user-status-text with-text">
-                                {textOnly || firstChar}
+                                {statusText.split('').map((char, idx) => {
+                                  if (/[\p{Emoji}]/u.test(char)) {
+                                    return renderEmoji(char, '', 16);
+                                  }
+                                  return char;
+                                })}
                               </span>
                             );
                           } else {

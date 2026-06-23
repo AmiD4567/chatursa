@@ -21,7 +21,7 @@ function ensureUpdateConfig() {
     logToFile('Создание app-update.yml...');
     const configContent = `provider: github
 owner: AmiD4567
-repo: chat-app
+repo: chatursa
 private: false
 releaseType: release
 `;

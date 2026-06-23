@@ -1,6 +1,6 @@
-const CACHE_NAME = 'chat-ursa-v2';
-const STATIC_CACHE = 'chat-ursa-static-v2';
-const DYNAMIC_CACHE = 'chat-ursa-dynamic-v2';
+const CACHE_NAME = 'chat-ursa-v3';
+const STATIC_CACHE = 'chat-ursa-static-v3';
+const DYNAMIC_CACHE = 'chat-ursa-dynamic-v3';
 
 const STATIC_ASSETS = [
   '/',

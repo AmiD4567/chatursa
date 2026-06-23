@@ -175,7 +175,7 @@ const ChatList = ({
                               <span className="chat-status-text">
                                 {displayStatus.split('').map((char, idx) => {
                                   if (/[\p{Emoji}]/u.test(char)) {
-                                    return <span key={idx}>{renderEmoji(char)}</span>;
+                                    return renderEmoji(char);
                                   }
                                   return char;
                                 })}
@@ -221,12 +221,12 @@ const ChatList = ({
                     <span className="user-status-badge">
                       {(() => {
                         const statusText = user.status_text;
-                        const firstChar = statusText.charAt(0);
-                        const isEmoji = /[\p{Emoji}]/u.test(firstChar);
-                        if (isEmoji) {
-                          return renderEmoji(firstChar);
-                        }
-                        return statusText;
+                        return statusText.split('').map((char, idx) => {
+                          if (/[\p{Emoji}]/u.test(char)) {
+                            return renderEmoji(char);
+                          }
+                          return char;
+                        });
                       })()}
                     </span>
                   )}

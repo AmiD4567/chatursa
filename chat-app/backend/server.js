@@ -411,6 +411,20 @@ function checkWikiEditAccess(userId) {
   }
 }
 
+function checkArticleAccess(userId, article) {
+  if (!article) return false;
+  if (!userId) return article.access_level === 'public' || !article.access_level;
+  if (checkAdmin(userId)) return true;
+  if (article.created_by === userId) return true;
+  if (article.access_level === 'public' || !article.access_level) return true;
+  if (article.access_level === 'private') return false;
+  if (article.access_level === 'selected') {
+    const allowed = db.prepare('SELECT 1 FROM wiki_article_allowed_users WHERE article_id = ? AND user_id = ?').get(article.id, userId);
+    return !!allowed;
+  }
+  return false;
+}
+
 // Инициализация базы данных
 function initDatabase() {
   db = new Database(DB_PATH);
@@ -497,7 +511,8 @@ function initDatabase() {
     { table: 'user_device_sessions', column: 'is_current', type: 'INTEGER DEFAULT 0' },
     { table: 'messages', column: 'button_data', type: 'TEXT' },
     { table: 'users', column: 'onboarding_completed', type: 'INTEGER DEFAULT 0' },
-    { table: 'wiki_articles', column: 'views', type: 'INTEGER DEFAULT 0' }
+    { table: 'wiki_articles', column: 'views', type: 'INTEGER DEFAULT 0' },
+    { table: 'wiki_articles', column: 'access_level', type: 'TEXT DEFAULT \'public\'' }
   ];
 
   migrations.forEach(({ table, column, type }) => {
@@ -732,6 +747,12 @@ function initDatabase() {
       file_size INTEGER DEFAULT 0,
       mime_type TEXT DEFAULT '',
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS wiki_article_allowed_users (
+      article_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      PRIMARY KEY (article_id, user_id)
     );
 
     CREATE TABLE IF NOT EXISTS announcements (
@@ -1988,7 +2009,7 @@ app.post('/api/login', (req, res) => {
 
 // API для получения профиля пользователя
 app.get('/api/profile/:userId', (req, res) => {
-  const user = db.prepare('SELECT id, username, email, avatar, full_name, birth_date, about, mobile_phone, work_phone, status_text, is_admin, can_edit_wiki FROM users WHERE id = ?').get(req.params.userId);
+  const user = db.prepare('SELECT id, username, email, avatar, full_name, birth_date, about, mobile_phone, work_phone, status_text, is_admin, can_edit_wiki, can_book_meeting_room FROM users WHERE id = ?').get(req.params.userId);
   if (!user) {
     return res.status(404).json({ error: 'Пользователь не найден' });
   }
@@ -4070,19 +4091,37 @@ app.post('/api/admin/support-requests/:id/close', (req, res) => {
 
 // Поиск по wiki-статьям (для бота и пользователей)
 app.get('/api/wiki/search', (req, res) => {
-  const { q, limit = 5 } = req.query;
+  const { q, limit = 5, userId } = req.query;
   if (!q || q.trim().length < 2) {
     return res.json({ success: true, results: [] });
   }
   try {
-    const results = db.prepare(`
-      SELECT id, title, content, category_id,
+    let sql = `
+      SELECT id, title, content, category_id, access_level, created_by,
              (SELECT name FROM wiki_categories WHERE id = wiki_articles.category_id) as category_name
       FROM wiki_articles
-      WHERE title LIKE ? OR content LIKE ?
-      ORDER BY views DESC
-      LIMIT ?
-    `).all(`%${q}%`, `%${q}%`, parseInt(limit) || 5);
+      WHERE (title LIKE ? OR content LIKE ?)`;
+    const params = [`%${q}%`, `%${q}%`];
+
+    if (userId) {
+      const isAdmin = checkAdmin(userId);
+      if (!isAdmin) {
+        sql += ` AND (
+          access_level IS NULL OR
+          access_level = 'public' OR
+          created_by = ? OR
+          (access_level = 'selected' AND id IN (
+            SELECT article_id FROM wiki_article_allowed_users WHERE user_id = ?
+          ))
+        )`;
+        params.push(userId, userId);
+      }
+    }
+
+    sql += ' ORDER BY views DESC LIMIT ?';
+    params.push(parseInt(limit) || 5);
+
+    const results = db.prepare(sql).all(...params);
     res.json({ success: true, results });
   } catch (err) {
     console.error('Ошибка поиска wiki:', err);
@@ -4198,12 +4237,44 @@ app.get('/api/wiki/articles', (req, res) => {
                LEFT JOIN users u1 ON a.created_by = u1.id
                LEFT JOIN users u2 ON a.updated_by = u2.id`;
     const params = [];
+    const conditions = [];
+
     if (categoryId) {
-      sql += ' WHERE a.category_id = ?';
+      conditions.push('a.category_id = ?');
       params.push(categoryId);
     }
+
+    // Filter by access level if userId is provided
+    if (userId) {
+      const isAdmin = checkAdmin(userId);
+      if (!isAdmin) {
+        conditions.push(`(
+          a.access_level = 'public' OR
+          a.access_level IS NULL OR
+          a.created_by = ? OR
+          (a.access_level = 'selected' AND a.id IN (
+            SELECT article_id FROM wiki_article_allowed_users WHERE user_id = ?
+          ))
+        )`);
+        params.push(userId, userId);
+      }
+    }
+
+    if (conditions.length > 0) {
+      sql += ' WHERE ' + conditions.join(' AND ');
+    }
+
     sql += ' ORDER BY a.updated_at DESC';
     const rows = db.prepare(sql).all(...params);
+
+    // Add allowedUsers for admin
+    if (userId && checkAdmin(userId)) {
+      for (const row of rows) {
+        const allowedUsers = db.prepare('SELECT user_id FROM wiki_article_allowed_users WHERE article_id = ?').all(row.id);
+        row.allowedUsers = allowedUsers.map(u => u.user_id);
+      }
+    }
+
     res.json({ success: true, articles: rows });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -4218,7 +4289,19 @@ app.get('/api/wiki/articles/:id', (req, res) => {
       LEFT JOIN users u2 ON a.updated_by = u2.id
       WHERE a.id = ?`).get(req.params.id);
     if (!row) return res.status(404).json({ error: 'Статья не найдена' });
+
+    const userId = req.query.userId;
+    if (!checkArticleAccess(userId, row)) {
+      return res.status(403).json({ error: 'Нет доступа к статье' });
+    }
+
     const files = db.prepare('SELECT * FROM wiki_article_files WHERE article_id = ? ORDER BY created_at').all(req.params.id);
+
+    if (userId && checkAdmin(userId)) {
+      const allowedUsers = db.prepare('SELECT user_id FROM wiki_article_allowed_users WHERE article_id = ?').all(req.params.id);
+      row.allowedUsers = allowedUsers.map(u => u.user_id);
+    }
+
     res.json({ success: true, article: { ...row, files } });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -4226,14 +4309,28 @@ app.get('/api/wiki/articles/:id', (req, res) => {
 });
 
 app.post('/api/wiki/articles', (req, res) => {
-  const { categoryId, title, content, userId } = req.body;
+  const { categoryId, title, content, userId, accessLevel, allowedUsers } = req.body;
   if (!title || !userId) return res.status(400).json({ error: 'title и userId обязательны' });
   if (!checkWikiEditAccess(userId)) return res.status(403).json({ error: 'Доступ запрещён' });
   try {
     const id = uuidv4();
     const now = new Date().toISOString();
-    db.prepare('INSERT INTO wiki_articles (id, category_id, title, content, created_by, updated_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(id, categoryId || null, title, content || '', userId, userId, now, now);
+
+    let finalAccessLevel = 'public';
+    if (checkAdmin(userId) && accessLevel) {
+      finalAccessLevel = accessLevel;
+    }
+
+    db.prepare('INSERT INTO wiki_articles (id, category_id, title, content, created_by, updated_by, created_at, updated_at, access_level) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(id, categoryId || null, title, content || '', userId, userId, now, now, finalAccessLevel);
+
+    if (finalAccessLevel === 'selected' && Array.isArray(allowedUsers) && checkAdmin(userId)) {
+      const insert = db.prepare('INSERT OR IGNORE INTO wiki_article_allowed_users (article_id, user_id) VALUES (?, ?)');
+      for (const uid of allowedUsers) {
+        insert.run(id, uid);
+      }
+    }
+
     const article = db.prepare('SELECT * FROM wiki_articles WHERE id = ?').get(id);
     res.json({ success: true, article });
   } catch (err) {
@@ -4242,7 +4339,7 @@ app.post('/api/wiki/articles', (req, res) => {
 });
 
 app.put('/api/wiki/articles/:id', (req, res) => {
-  const { title, content, categoryId, userId } = req.body;
+  const { title, content, categoryId, userId, accessLevel, allowedUsers } = req.body;
   if (!title || !userId) return res.status(400).json({ error: 'title и userId обязательны' });
   if (!checkWikiEditAccess(userId)) return res.status(403).json({ error: 'Доступ запрещён' });
   try {
@@ -4251,8 +4348,31 @@ app.put('/api/wiki/articles/:id', (req, res) => {
     const isAdmin = checkAdmin(userId);
     if (!isAdmin && article.created_by !== userId) return res.status(403).json({ error: 'Нельзя редактировать чужие статьи' });
     const now = new Date().toISOString();
-    db.prepare('UPDATE wiki_articles SET title = ?, content = ?, category_id = ?, updated_by = ?, updated_at = ? WHERE id = ?')
-      .run(title, content || '', categoryId || null, userId, now, req.params.id);
+
+    let finalAccessLevel = undefined;
+    if (isAdmin && accessLevel) {
+      finalAccessLevel = accessLevel;
+    }
+
+    if (finalAccessLevel) {
+      db.prepare('UPDATE wiki_articles SET title = ?, content = ?, category_id = ?, access_level = ?, updated_by = ?, updated_at = ? WHERE id = ?')
+        .run(title, content || '', categoryId || null, finalAccessLevel, userId, now, req.params.id);
+    } else {
+      db.prepare('UPDATE wiki_articles SET title = ?, content = ?, category_id = ?, updated_by = ?, updated_at = ? WHERE id = ?')
+        .run(title, content || '', categoryId || null, userId, now, req.params.id);
+    }
+
+    // Update allowed users if admin changed access level
+    if (isAdmin && accessLevel) {
+      db.prepare('DELETE FROM wiki_article_allowed_users WHERE article_id = ?').run(req.params.id);
+      if (accessLevel === 'selected' && Array.isArray(allowedUsers)) {
+        const insert = db.prepare('INSERT OR IGNORE INTO wiki_article_allowed_users (article_id, user_id) VALUES (?, ?)');
+        for (const uid of allowedUsers) {
+          insert.run(req.params.id, uid);
+        }
+      }
+    }
+
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -4269,6 +4389,7 @@ app.delete('/api/wiki/articles/:id', (req, res) => {
       if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
     }
     db.prepare('DELETE FROM wiki_article_files WHERE article_id = ?').run(req.params.id);
+    db.prepare('DELETE FROM wiki_article_allowed_users WHERE article_id = ?').run(req.params.id);
     db.prepare('DELETE FROM wiki_articles WHERE id = ?').run(req.params.id);
     res.json({ success: true });
   } catch (err) {
@@ -5758,13 +5879,32 @@ io.on('connection', (socket) => {
           sendBotMessage(socket, chatId, '🔍 *Поиск по базе знаний*\n\nНапишите, что ищете, после команды.\n\nНапример: *найди в базе знаний как создать чат*', []);
         } else {
           try {
-            const results = db.prepare(`
-              SELECT id, title, content, category_id,
+            const onlineUser = onlineUsers.get(socket.id);
+            const botUserId = onlineUser ? onlineUser.id : null;
+            let botSql = `
+              SELECT id, title, content, category_id, access_level, created_by,
                      (SELECT name FROM wiki_categories WHERE id = wiki_articles.category_id) as category_name
               FROM wiki_articles
-              WHERE title LIKE ? OR content LIKE ?
-              ORDER BY views DESC LIMIT 5
-            `).all(`%${query}%`, `%${query}%`);
+              WHERE (title LIKE ? OR content LIKE ?)`;
+            const botParams = [`%${query}%`, `%${query}%`];
+
+            if (botUserId) {
+              const isBotAdmin = checkAdmin(botUserId);
+              if (!isBotAdmin) {
+                botSql += ` AND (
+                  access_level IS NULL OR
+                  access_level = 'public' OR
+                  created_by = ? OR
+                  (access_level = 'selected' AND id IN (
+                    SELECT article_id FROM wiki_article_allowed_users WHERE user_id = ?
+                  ))
+                )`;
+                botParams.push(botUserId, botUserId);
+              }
+            }
+
+            botSql += ' ORDER BY views DESC LIMIT 5';
+            const results = db.prepare(botSql).all(...botParams);
             if (results.length === 0) {
               sendBotMessage(socket, chatId, `🔍 По запросу "${query}" ничего не найдено в базе знаний.`, []);
             } else {
@@ -5840,14 +5980,13 @@ io.on('connection', (socket) => {
         socket.emit('bot_typing', { chatId, isTyping: false });
         sendBotMessage(socket, chatId, botResponse.text, botResponse.buttons || []);
       }, 500);
-    }
-
-    // Онбординг: отмечаем завершение
-    if (command === '/онбординг_финиш') {
-      try {
-        const userId = chatId.replace('bot-chat-', '');
-        db.run('UPDATE users SET onboarding_completed = 1 WHERE id = ?', [userId]);
-      } catch (e) {}
+      // Онбординг: отмечаем завершение
+      if (command === '/онбординг_финиш') {
+        try {
+          const userId = chatId.replace('bot-chat-', '');
+          db.run('UPDATE users SET onboarding_completed = 1 WHERE id = ?', [userId]);
+        } catch (e) {}
+      }
     }
   } catch (err) {
     console.error('=== ОШИБКА ПРИ ОТПРАВКЕ СООБЩЕНИЯ ===', err);

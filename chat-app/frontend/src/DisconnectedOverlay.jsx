@@ -22,8 +22,8 @@ export default function DisconnectedOverlay() {
 
   return (
     <div className="disconnected-overlay">
-      <div className="disconnected-overlay-content">
-        <div className="disconnected-spinner"></div>
+      <div className="disconnected-spinner"></div>
+      <div>
         <p>Потеряно соединение с сервером. Переподключение...</p>
         {outboxCount > 0 && (
           <p className="disconnected-outbox-count">
