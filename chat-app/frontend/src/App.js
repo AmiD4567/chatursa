@@ -896,7 +896,7 @@ function App() {
           setAppVersion(version);
 
           // Подписываемся на обновления
-          window.electronAPI.onCheckingForUpdate(() => {
+          window.electronAPI.onUpdateChecking(() => {
             setUpdateStatus('checking');
             console.log('Проверка обновлений...');
           });

@@ -33,7 +33,8 @@ async function subscribeToPush(reg) {
   }
 }
 
-if ('serviceWorker' in navigator) {
+// SW регистрируем только в браузере (не в Electron — file:// не поддерживает SW)
+if ('serviceWorker' in navigator && !window.electronAPI) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/sw.js').then((reg) => {
       console.log('[SW] Зарегистрирован:', reg.scope);

@@ -46,6 +46,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('update-error', handler);
     return () => ipcRenderer.removeListener('update-error', handler);
   },
+  onUpdatePostponed: (callback) => {
+    const handler = (_, info) => callback(info);
+    ipcRenderer.on('update-postponed', handler);
+    return () => ipcRenderer.removeListener('update-postponed', handler);
+  },
 
   // Открытие чата из уведомления
   onOpenChatFromNotification: (callback) => {
