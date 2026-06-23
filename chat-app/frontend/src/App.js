@@ -1376,8 +1376,8 @@ function App() {
         const messageBody = stripStickerMarkers(message.text) || '📎 Файл';
         showInAppNotification(senderName, messageBody, message.senderAvatar || null, message.chatId);
 
-        // Системное уведомление (на рабочем столе) — как в Telegram: только если чат не активен
-        const shouldShowSystemNotification = !isChatActive;
+        // Системное уведомление (на рабочем столе) — как в Telegram + при свёрнутом окне
+        const shouldShowSystemNotification = !isChatActive || !isAppVisibleRef.current;
 
         if (shouldShowSystemNotification && notificationSettingsRef.current.newMessages) {
           const senderName = message.senderName || 'Чат УРСА';
