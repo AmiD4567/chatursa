@@ -611,14 +611,24 @@ function downloadImage(url, timeout = 5000) {
   });
 }
 
-/** Получает nativeImage аватара с кэшированием */
+/** Получает nativeImage аватара с кэшированием + путь к файлу для toastXml */
+const avatarFileCache = new Map();
+
 async function getAvatarImage(url) {
   if (!url) return null;
   if (avatarCache.has(url)) return avatarCache.get(url);
   try {
     const buf = await downloadImage(url);
     const img = nativeImage.createFromBuffer(buf);
+
+    // Сохраняем в temp для toastXml (Windows)
+    const ext = '.png';
+    const fileName = `chat_avatar_${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`;
+    const filePath = path.join(app.getPath('temp'), fileName);
+    fs.writeFileSync(filePath, buf);
+
     avatarCache.set(url, img);
+    avatarFileCache.set(url, filePath);
     return img;
   } catch (e) {
     console.warn('Не удалось скачать аватар:', url, e.message);
@@ -626,15 +636,24 @@ async function getAvatarImage(url) {
   }
 }
 
+// Группировка уведомлений по чату (замена старого уведомления для того же чата)
+const activeNotifications = new Map();
+
+function escapeXml(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+}
+
 // Обработка уведомлений от веб-приложения
 ipcMain.on('show-notification', async (event, { title, body, icon, chatId }) => {
   let iconImage = undefined;
+  let avatarFilePath = null;
 
   // Если указан аватар — скачиваем и используем
   if (icon) {
     try {
       if (icon.startsWith('http://') || icon.startsWith('https://')) {
         iconImage = await getAvatarImage(icon);
+        avatarFilePath = avatarFileCache.get(icon) || null;
       } else {
         // Локальный файл
         iconImage = nativeImage.createFromPath(path.join(__dirname, icon));
@@ -644,11 +663,33 @@ ipcMain.on('show-notification', async (event, { title, body, icon, chatId }) => 
     }
   }
 
-  const notif = new Notification({
+  // Закрываем предыдущее уведомление для того же чата (группировка)
+  if (chatId && activeNotifications.has(chatId)) {
+    try {
+      activeNotifications.get(chatId).close();
+    } catch (e) {
+      // игнорируем ошибку если уведомление уже закрыто
+    }
+  }
+
+  const notifOptions = {
     title,
     body,
     icon: iconImage || undefined
-  });
+  };
+
+  // На Windows используем toastXml для большого аватара как в Telegram
+  if (process.platform === 'win32' && avatarFilePath) {
+    const winPath = avatarFilePath.replace(/\\/g, '/');
+    notifOptions.toastXml = `<toast><visual><binding template="ToastGeneric"><text>${escapeXml(title)}</text><text>${escapeXml(body)}</text><image placement="appLogoOverride" src="file:///${winPath}" hint-crop="circle"/></binding></visual></toast>`;
+  }
+
+  const notif = new Notification(notifOptions);
+
+  // Сохраняем в Map для последующей замены
+  if (chatId) {
+    activeNotifications.set(chatId, notif);
+  }
 
   // Обработчик клика по уведомлению
   notif.on('click', () => {
@@ -664,6 +705,13 @@ ipcMain.on('show-notification', async (event, { title, body, icon, chatId }) => 
       if (chatId) {
         mainWindow.webContents.send('open-chat-from-notification', chatId);
       }
+    }
+  });
+
+  // Очищаем Map при закрытии уведомления
+  notif.on('close', () => {
+    if (chatId && activeNotifications.get(chatId) === notif) {
+      activeNotifications.delete(chatId);
     }
   });
 

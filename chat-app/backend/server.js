@@ -4194,7 +4194,8 @@ app.get('/api/wiki/categories', (req, res) => {
 });
 
 app.post('/api/wiki/categories', (req, res) => {
-  const { name, description, parentId } = req.body;
+  const { name, description, parentId, userId } = req.body;
+  if (!userId || !checkAdmin(userId)) return res.status(403).json({ error: 'Только для администраторов' });
   if (!name) return res.status(400).json({ error: 'name обязателен' });
   try {
     const id = uuidv4();
@@ -4207,7 +4208,9 @@ app.post('/api/wiki/categories', (req, res) => {
 });
 
 app.put('/api/wiki/categories/:id', (req, res) => {
-  const { name, description, parentId, sortOrder } = req.body;
+  const { name, description, parentId, sortOrder, userId } = req.body;
+  if (!userId || !checkAdmin(userId)) return res.status(403).json({ error: 'Только для администраторов' });
+  if (!name) return res.status(400).json({ error: 'name обязателен' });
   try {
     db.prepare('UPDATE wiki_categories SET name = ?, description = ?, parent_id = ?, sort_order = ? WHERE id = ?')
       .run(name, description || '', parentId || null, sortOrder || 0, req.params.id);
@@ -4218,6 +4221,8 @@ app.put('/api/wiki/categories/:id', (req, res) => {
 });
 
 app.delete('/api/wiki/categories/:id', (req, res) => {
+  const { userId } = req.body;
+  if (!userId || !checkAdmin(userId)) return res.status(403).json({ error: 'Только для администраторов' });
   try {
     db.prepare('DELETE FROM wiki_articles WHERE category_id = ?').run(req.params.id);
     db.prepare('DELETE FROM wiki_categories WHERE id = ?').run(req.params.id);

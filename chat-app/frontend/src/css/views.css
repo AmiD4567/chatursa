@@ -1102,8 +1102,8 @@ body,
   overflow: hidden;
 }
 .wiki-sidebar {
-  width: 240px;
-  min-width: 240px;
+  width: 200px;
+  min-width: 200px;
   background: var(--sidebar-bg, rgba(255,255,255,0.03));
   border-right: 1px solid var(--border-color, rgba(255,255,255,0.1));
   display: flex;
@@ -1148,6 +1148,45 @@ body,
   font-size: 13px;
   color: var(--text-secondary, #ccc);
   transition: all 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.wiki-cat-item span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wiki-cat-actions {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.wiki-cat-item:hover .wiki-cat-actions {
+  opacity: 1;
+}
+.wiki-cat-edit-btn,
+.wiki-cat-del-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  line-height: 1;
+  color: var(--text-secondary, #ccc);
+}
+.wiki-cat-edit-btn:hover {
+  background: rgba(102,126,234,0.2);
+  color: var(--primary-color, #667eea);
+}
+.wiki-cat-del-btn:hover {
+  background: rgba(234,102,102,0.2);
+  color: #ff6b6b;
 }
 .wiki-cat-item:hover {
   background: rgba(255,255,255,0.05);

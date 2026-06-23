@@ -373,6 +373,7 @@ function App() {
   const [wikiEditContent, setWikiEditContent] = useState('');
   const [wikiEditCategory, setWikiEditCategory] = useState('');
   const [showWikiCategoryModal, setShowWikiCategoryModal] = useState(false);
+  const [wikiEditingCategory, setWikiEditingCategory] = useState(null);
   const [wikiCategoryName, setWikiCategoryName] = useState('');
   const [wikiCategoryDesc, setWikiCategoryDesc] = useState('');
   const [wikiFileUploading, setWikiFileUploading] = useState(false);
@@ -432,7 +433,7 @@ function App() {
   // Тема (тёмная/светлая)
   const [appTheme, setAppTheme] = useState(() => {
     const saved = localStorage.getItem('chat_app_theme');
-    return saved || 'dark';
+    return saved || 'light';
   });
 
   // 20 фонов чата (dark/light)
@@ -1375,8 +1376,8 @@ function App() {
         const messageBody = stripStickerMarkers(message.text) || '📎 Файл';
         showInAppNotification(senderName, messageBody, message.senderAvatar || null, message.chatId);
 
-        // Системное уведомление (на рабочем столе)
-        const shouldShowSystemNotification = !isChatActive || !isAppVisibleRef.current;
+        // Системное уведомление (на рабочем столе) — как в Telegram: только если чат не активен
+        const shouldShowSystemNotification = !isChatActive;
 
         if (shouldShowSystemNotification && notificationSettingsRef.current.newMessages) {
           const senderName = message.senderName || 'Чат УРСА';
@@ -1907,8 +1908,9 @@ function App() {
 
   // Обработчик открытия чата из уведомления (для Electron)
   useEffect(() => {
+    let cleanup;
     if (window.electronAPI && window.electronAPI.onOpenChatFromNotification) {
-      window.electronAPI.onOpenChatFromNotification((chatId) => {
+      cleanup = window.electronAPI.onOpenChatFromNotification((chatId) => {
         console.log('Открываем чат из уведомления:', chatId);
         
         // Находим чат в списке
@@ -1933,6 +1935,7 @@ function App() {
         }
       });
     }
+    return () => { if (cleanup) cleanup(); };
   }, [chats, socket]);
 
   // Отправляем общее количество непрочитанных сообщений в Electron для отображения бейджа
@@ -3734,20 +3737,77 @@ function App() {
   const wikiCreateCategory = async () => {
     if (!wikiCategoryName.trim()) return;
     try {
-      await fetch(`${SOCKET_URL}/api/wiki/categories`, {
+      const res = await fetch(`${SOCKET_URL}/api/wiki/categories`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: wikiCategoryName.trim(),
-          description: wikiCategoryDesc.trim()
+          description: wikiCategoryDesc.trim(),
+          userId: currentUser.id
         })
       });
+      if (!res.ok) {
+        const err = await res.json();
+        alert('Ошибка: ' + (err.error || 'Доступ запрещён'));
+        return;
+      }
       setShowWikiCategoryModal(false);
       setWikiCategoryName('');
       setWikiCategoryDesc('');
+      setWikiEditingCategory(null);
       loadWikiData();
     } catch (err) {
       console.error('Ошибка создания категории:', err);
+    }
+  };
+
+  const wikiUpdateCategory = async () => {
+    if (!wikiEditingCategory || !wikiCategoryName.trim()) return;
+    try {
+      const res = await fetch(`${SOCKET_URL}/api/wiki/categories/${wikiEditingCategory.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: wikiCategoryName.trim(),
+          description: wikiCategoryDesc.trim(),
+          userId: currentUser.id
+        })
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        alert('Ошибка: ' + (err.error || 'Доступ запрещён'));
+        return;
+      }
+      setShowWikiCategoryModal(false);
+      setWikiCategoryName('');
+      setWikiCategoryDesc('');
+      setWikiEditingCategory(null);
+      loadWikiData();
+    } catch (err) {
+      console.error('Ошибка обновления категории:', err);
+    }
+  };
+
+  const wikiDeleteCategory = async (categoryId) => {
+    if (!confirm('Удалить категорию и все статьи в ней?')) return;
+    try {
+      const res = await fetch(`${SOCKET_URL}/api/wiki/categories/${categoryId}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: currentUser.id })
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        alert('Ошибка: ' + (err.error || 'Доступ запрещён'));
+        return;
+      }
+      if (wikiActiveCategory === categoryId) {
+        setWikiActiveCategory(null);
+        setWikiActiveArticle(null);
+      }
+      loadWikiData();
+    } catch (err) {
+      console.error('Ошибка удаления категории:', err);
     }
   };
 
@@ -8810,7 +8870,7 @@ function App() {
                 }}>+ Статья</button>
               )}
               {isAdmin && (
-                <button className="wiki-new-cat-btn" onClick={() => setShowWikiCategoryModal(true)}>+ Категория</button>
+                <button className="wiki-new-cat-btn" onClick={() => { setWikiEditingCategory(null); setWikiCategoryName(''); setWikiCategoryDesc(''); setShowWikiCategoryModal(true); }}>+ Категория</button>
               )}
             </div>
             <div className="wiki-category-list">
@@ -8821,7 +8881,13 @@ function App() {
               {wikiCategories.map(cat => (
                 <div key={cat.id} className={`wiki-cat-item ${wikiActiveCategory === cat.id ? 'active' : ''}`}
                   onClick={() => { setWikiActiveCategory(cat.id); setWikiActiveArticle(null); setWikiEditMode(false); setWikiFiles([]); }}>
-                  📂 {cat.name}
+                  <span>📂 {cat.name}</span>
+                  {isAdmin && (
+                    <span className="wiki-cat-actions">
+                      <button className="wiki-cat-edit-btn" title="Редактировать" onClick={e => { e.stopPropagation(); setWikiEditingCategory(cat); setWikiCategoryName(cat.name); setWikiCategoryDesc(cat.description || ''); setShowWikiCategoryModal(true); }}>✏️</button>
+                      <button className="wiki-cat-del-btn" title="Удалить" onClick={e => { e.stopPropagation(); wikiDeleteCategory(cat.id); }}>🗑️</button>
+                    </span>
+                  )}
                 </div>
               ))}
             </div>
@@ -9118,13 +9184,13 @@ function App() {
         </div>
       )}
 
-      {/* Modal for creating wiki category */}
+      {/* Modal for creating/editing wiki category */}
       {showWikiCategoryModal && (
-        <div className="modal-overlay" onClick={() => setShowWikiCategoryModal(false)}>
+        <div className="modal-overlay" onClick={() => { setShowWikiCategoryModal(false); setWikiEditingCategory(null); setWikiCategoryName(''); setWikiCategoryDesc(''); }}>
           <div className="modal-content" style={{ maxWidth: 400 }} onClick={e => e.stopPropagation()}>
             <div className="modal-header">
-              <h3>📂 Новая категория</h3>
-              <button onClick={() => setShowWikiCategoryModal(false)}>✕</button>
+              <h3>{wikiEditingCategory ? '✏️ Редактировать категорию' : '📂 Новая категория'}</h3>
+              <button onClick={() => { setShowWikiCategoryModal(false); setWikiEditingCategory(null); setWikiCategoryName(''); setWikiCategoryDesc(''); }}>✕</button>
             </div>
             <div className="modal-body">
               <div className="ann-form-group">
@@ -9139,8 +9205,8 @@ function App() {
               </div>
             </div>
             <div className="modal-footer">
-              <button className="cancel-btn" onClick={() => setShowWikiCategoryModal(false)}>Отмена</button>
-              <button className="save-btn" onClick={wikiCreateCategory} disabled={!wikiCategoryName.trim()}>Создать</button>
+              <button className="cancel-btn" onClick={() => { setShowWikiCategoryModal(false); setWikiEditingCategory(null); setWikiCategoryName(''); setWikiCategoryDesc(''); }}>Отмена</button>
+              <button className="save-btn" onClick={wikiEditingCategory ? wikiUpdateCategory : wikiCreateCategory} disabled={!wikiCategoryName.trim()}>{wikiEditingCategory ? 'Сохранить' : 'Создать'}</button>
             </div>
           </div>
         </div>

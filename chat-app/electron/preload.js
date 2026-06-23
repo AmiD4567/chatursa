@@ -54,7 +54,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Открытие чата из уведомления
   onOpenChatFromNotification: (callback) => {
-    ipcRenderer.on('open-chat-from-notification', (event, chatId) => callback(chatId));
+    const handler = (event, chatId) => callback(chatId);
+    ipcRenderer.on('open-chat-from-notification', handler);
+    return () => ipcRenderer.removeListener('open-chat-from-notification', handler);
   },
 
   // Обновление индикатора непрочитанных сообщений
