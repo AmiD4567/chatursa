@@ -1375,18 +1375,23 @@ function App() {
         const messageBody = stripStickerMarkers(message.text) || '📎 Файл';
         showInAppNotification(senderName, messageBody, message.senderAvatar || null, message.chatId);
 
-        // Системное уведомление (только для браузера, не для Electron)
-        if (!window.electronAPI && notificationPermissionRef.current === 'granted') {
-          const isChatActive = message.chatId === activeChatIdRef.current;
-          let isAppFocused = true;
-          if (window.electronAPI) {
-            isAppFocused = document.hasFocus() && !document.hidden;
-          }
-          const shouldShowSystemNotification = !isChatActive || !isAppFocused;
+        // Системное уведомление (на рабочем столе)
+        const shouldShowSystemNotification = !isChatActive || !isAppVisibleRef.current;
 
-          if (shouldShowSystemNotification && notificationSettingsRef.current.newMessages) {
+        if (shouldShowSystemNotification && notificationSettingsRef.current.newMessages) {
+          const senderName = message.senderName || 'Чат УРСА';
+          const messageBody = (message.senderName ? `${message.senderName}: ` : '') + (stripStickerMarkers(message.text) || '📎 Файл');
+
+          if (window.electronAPI) {
+            window.electronAPI.sendNotification({
+              title: 'Чат УРСА',
+              body: messageBody,
+              icon: message.senderAvatar || null,
+              chatId: message.chatId
+            });
+          } else if (notificationPermissionRef.current === 'granted') {
             const notif = new Notification('Чат УРСА', {
-              body: `${message.senderName}: ${stripStickerMarkers(message.text) || '📎 Файл'}`,
+              body: messageBody,
               icon: message.senderAvatar || '/favicon.ico',
               badge: '/favicon.ico',
               tag: message.chatId,
