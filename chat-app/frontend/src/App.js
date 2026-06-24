@@ -5795,6 +5795,23 @@ function App() {
     });
   };
 
+  // Форматирование даты/времени для поиска сообщений
+  const formatSearchTime = (timestamp) => {
+    const date = new Date(timestamp);
+    const now = new Date();
+    const yesterday = new Date(now);
+    yesterday.setDate(yesterday.getDate() - 1);
+
+    const isToday = date.toDateString() === now.toDateString();
+    const isYesterday = date.toDateString() === yesterday.toDateString();
+    const timeStr = date.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+
+    if (isToday) return timeStr;
+    if (isYesterday) return `Вчера, ${timeStr}`;
+    
+    return `${date.toLocaleDateString('ru-RU', { day: 'numeric', month: '2-digit' })}, ${timeStr}`;
+  };
+
   // Отображение статуса доставки сообщения
   const renderMessageStatus = (message) => {
     // readStatusVersion — зависимость для ре-рендера при получении messages_read
@@ -7537,13 +7554,19 @@ function App() {
                   onClick={() => handleSearchResultClick(result)}
                 >
                   <div className="chat-item-left" style={{ cursor: 'pointer' }}>
-                    <div className="chat-icon">{result.type === 'user' ? '👤' : result.type === 'message' ? '💬' : getChatIcon(result)}</div>
+                    {result.type === 'message' ? (
+                      result.senderAvatar ? (
+                        <img src={result.senderAvatar} alt="" className="chat-avatar-img" onError={(e) => { e.target.style.display = 'none'; }} />
+                      ) : (
+                        <div className="chat-icon chat-avatar-fallback">{(result.senderName || '?')[0].toUpperCase()}</div>
+                      )
+                    ) : result.type === 'user' ? '👤' : getChatIcon(result)}
                     <div className="chat-info">
                       <div className="chat-name-row">
                         <span className="chat-name">
                           {result.type === 'user' ? result.username : result.chatName || result.senderName || 'Чат'}
                         </span>
-                        <span className="chat-time">{result.timestamp ? formatTime(result.timestamp) : ''}</span>
+                        <span className="chat-time">{result.timestamp ? formatSearchTime(result.timestamp) : ''}</span>
                       </div>
                       <div className="chat-preview-row">
                         <span className="chat-preview">
@@ -7951,7 +7974,8 @@ function App() {
                   className={`message-main ${message.senderId === currentUser?.id ? 'own' : ''} ${isBotMessage(message) ? 'message-bot' : ''} ${isGrouped ? 'message-grouped' : ''} ${sideChanged ? 'side-changed' : ''}`}
                   onContextMenu={(e) => handleContextMenu(e, message.id, message.text, message.chatId, message.senderId, message.senderName)}
                 >
-                  {!isGrouped && (
+                  {isOwn && <div className="message-avatar-spacer" />}
+                  {!isOwn && (
                     <img
                       src={message.senderAvatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(message.senderName || 'U')}&background=667eea&color=fff`}
                       alt={message.senderName}
@@ -7959,7 +7983,6 @@ function App() {
                       onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || message.senderName || 'U')}&background=667eea&color=fff`; }}
                     />
                   )}
-                  {isGrouped && <div className="message-avatar-spacer" />}
                   <div className="message-content" data-message-id={message.id}>
                     <div className="message-bubble-wrapper">
                       {!isBotMessage(message) && message.forwarded_from && (
@@ -8053,13 +8076,13 @@ function App() {
                                   disabled={!canVote}
                                   title={message.poll.votesHidden && !isVoted ? 'Результаты скрыты до окончания' : `${opt}: ${voteCount} голос(а/ов)`}>
                                   <span className="poll-option-text">{opt}</span>
-                                  {!message.poll.votesHidden && (
+                                  {!message.poll.votesHidden && voteCount > 0 && (
                                     <>
                                       <span className="poll-option-bar-track">
                                         <span className="poll-option-bar-fill" style={{ width: `${pct}%` }} />
                                       </span>
                                       <span className="poll-option-pct">{pct}%</span>
-                                      {!message.poll.isAnonymous && voteCount > 0 && <span className="poll-option-count">{voteCount}</span>}
+                                      {!message.poll.isAnonymous && <span className="poll-option-count">{voteCount}</span>}
                                     </>
                                   )}
                                   {message.poll.votesHidden && !isVoted && <span className="poll-hidden-label">🔒</span>}
@@ -8114,6 +8137,15 @@ function App() {
                       </div>
                     )}
                   </div>
+                  {/* Аватар для исходящих — после контента (скрывается через CSS при группировке) */}
+                  {isOwn && (
+                    <img
+                      src={message.senderAvatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(message.senderName || 'U')}&background=667eea&color=fff`}
+                      alt={message.senderName}
+                      className="message-avatar"
+                      onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || message.senderName || 'U')}&background=667eea&color=fff`; }}
+                    />
+                  )}
                 </div>
                 </>
               );

@@ -341,6 +341,48 @@
   box-shadow: 0 4px 16px rgba(102, 126, 234, 0.4);
 }
 
+.chat-avatar-img {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+  border: 2px solid rgba(102, 126, 234, 0.3);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  transition: all var(--transition-fast);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.chat-item:hover .chat-avatar-img {
+  border-color: rgba(102, 126, 234, 0.5);
+  box-shadow: 0 4px 16px rgba(102, 126, 234, 0.3);
+}
+
+.chat-avatar-fallback {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.1);
+  flex-shrink: 0;
+  border: 2px solid rgba(102, 126, 234, 0.3);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.chat-item:hover .chat-avatar-fallback {
+  background: rgba(255, 255, 255, 0.15);
+  border-color: rgba(102, 126, 234, 0.5);
+  box-shadow: 0 4px 16px rgba(102, 126, 234, 0.3);
+}
+
 .chat-avatar-wrapper {
   position: relative;
   flex-shrink: 0;
@@ -879,12 +921,24 @@
   }
 }
 
+/* Исходящие сообщения — аватар и контент справа */
 .message-main.own {
-  flex-direction: row;
+  /* Убрано row-reverse — используем order для управления порядком элементов */
+}
+
+.message-main.own .message-avatar-spacer {
+  flex: 1;
+  min-width: 42px;
+  width: auto;
 }
 
 .message-main.own .message-content {
-  align-items: flex-start;
+  align-items: flex-end;
+  order: 2;
+}
+
+.message-main.own .message-avatar {
+  order: 3;
 }
 
 .message-main.own .message-time-inline {
@@ -952,10 +1006,6 @@
   display: flex;
   flex-direction: column;
   position: relative;
-}
-
-.message-main.own .message-content {
-  align-items: flex-end;
 }
 
 /* Новый wrapper для пузыря сообщения */
