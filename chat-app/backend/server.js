@@ -3340,53 +3340,57 @@ app.get('/api/search/messages', (req, res) => {
   }
 
   try {
-    const searchTerm = `%${query.trim()}%`;
+    const searchLower = query.trim().toLowerCase();
+
+    // Загружаем сообщения из чатов пользователя (без LIKE — текст зашифрован)
     const rows = db.prepare(`
       SELECT m.id, m.chat_id, m.sender_id, m.text, m.file_data, m.reply_to, m.timestamp, m.read_at,
              m.e2ee, m.e2ee_nonce, m.e2ee_ephemeral, m.poll_id,
              u.username as senderName, u.avatar as senderAvatar,
-             c.name as chatName, c.title as chatTitle
+             c.name as chatName
       FROM messages m
       LEFT JOIN users u ON m.sender_id = u.id
       LEFT JOIN chats c ON m.chat_id = c.id
-      WHERE (m.e2ee IS NULL OR m.e2ee = 0)
-        AND m.text LIKE ?
-        AND m.chat_id IN (
-          SELECT chat_id FROM chat_participants WHERE user_id = ?
-        )
+      WHERE m.chat_id IN (
+        SELECT chat_id FROM chat_participants WHERE user_id = ?
+      )
       ORDER BY m.timestamp DESC
-      LIMIT 100
-    `).all(searchTerm, userId);
+      LIMIT 500
+    `).all(userId);
 
-    const messages = rows.map(row => {
-      let file = null;
-      if (row.file_data) {
-        try { file = JSON.parse(row.file_data); } catch (e) { file = null; }
-      }
-      let poll = null;
-      if (row.poll_id) {
-        poll = getPollWithVotes(row.poll_id, userId);
-      }
-      let reply_to = null;
-      if (row.reply_to) {
-        try { reply_to = JSON.parse(row.reply_to); } catch { reply_to = null; }
-      }
-      return {
-        id: row.id,
-        chatId: row.chat_id,
-        senderId: row.sender_id,
-        text: decryptText(row.text) || '',
-        file,
-        poll,
-        reply_to,
-        timestamp: row.timestamp,
-        read_at: row.read_at || null,
-        senderName: row.senderName,
-        senderAvatar: row.senderAvatar,
-        chatName: row.chatName || row.chatTitle || 'Чат',
-        e2ee: 0
-      };
-    });
+    // Расшифровываем и фильтруем на уровне JS
+    const messages = rows
+      .map(row => {
+        let file = null;
+        if (row.file_data) {
+          try { file = JSON.parse(row.file_data); } catch (e) { file = null; }
+        }
+        let poll = null;
+        if (row.poll_id) {
+          poll = getPollWithVotes(row.poll_id, userId);
+        }
+        let reply_to = null;
+        if (row.reply_to) {
+          try { reply_to = JSON.parse(row.reply_to); } catch { reply_to = null; }
+        }
+        const decryptedText = decryptText(row.text) || '';
+        return {
+          id: row.id,
+          chatId: row.chat_id,
+          senderId: row.sender_id,
+          text: decryptedText,
+          file,
+          poll,
+          reply_to,
+          timestamp: row.timestamp,
+          read_at: row.read_at || null,
+          senderName: row.senderName,
+          senderAvatar: row.senderAvatar,
+          chatName: row.chatName || 'Чат',
+          e2ee: row.e2ee === 1 ? 1 : 0
+        };
+      })
+      .filter(msg => msg.text.toLowerCase().includes(searchLower));
 
     res.json({ messages });
   } catch (err) {

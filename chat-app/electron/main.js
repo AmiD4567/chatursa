@@ -4,8 +4,7 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
 
-// Определяем isDev после app.whenReady()
-let isDev;
+const isDev = !app.isPackaged;
 let logDir;
 let logFile;
 
@@ -43,7 +42,6 @@ releaseType: release
 }
 
 function initPaths() {
-  isDev = !app.isPackaged;
   logDir = isDev
     ? path.join(__dirname, '..')
     : path.join(app.getPath('userData'), 'logs');
@@ -365,18 +363,25 @@ function createWindow() {
     return filePath && fs.existsSync(filePath) ? filePath : null;
   });
 
-  // Обработка закрытия
+  // Обработка закрытия — подтверждение выхода
   mainWindow.on('close', (e) => {
-    e.preventDefault();
-    mainWindow.hide();
+    if (app.isQuiting) return;
 
-    // Показываем уведомление в трей
-    if (tray) {
-      tray.displayBalloon({
-        title: 'Чат',
-        content: 'Приложение свёрнуто в трей. Двойной клик для открытия.'
-      });
-    }
+    e.preventDefault();
+
+    dialog.showMessageBox(mainWindow, {
+      type: 'question',
+      buttons: ['Остаться', 'Выйти'],
+      defaultId: 0,
+      title: 'Выход из чата',
+      message: 'Вы уверены, что хотите выйти из чата?',
+      detail: 'Приложение будет полностью закрыто.'
+    }).then(({ response }) => {
+      if (response === 1) {
+        app.isQuiting = true;
+        app.quit();
+      }
+    });
   });
 
   // Открытие DevTools в разработке (раскомментировать при необходимости)
@@ -403,6 +408,8 @@ function createWindow() {
   mainWindow.on('restore', () => sendVisibilityStatus());
   mainWindow.on('focus', () => sendVisibilityStatus());
   mainWindow.on('blur', () => sendVisibilityStatus());
+  mainWindow.on('hide', () => sendVisibilityStatus());
+  mainWindow.on('show', () => sendVisibilityStatus());
 
   // Запускаем проверку обновлений после создания окна
   if (!isDev) {
@@ -478,6 +485,18 @@ app.whenReady().then(() => {
   // Инициализация путей и логирования
   initPaths();
   logToFile(`App Path: ${app.getAppPath()}`);
+
+  // Включение автозапуска при первом запуске
+  const autoLaunchFlag = path.join(app.getPath('userData'), '.autolaunch-enabled');
+  if (!fs.existsSync(autoLaunchFlag)) {
+    try {
+      app.setLoginItemSettings({ openAtLogin: true });
+      fs.writeFileSync(autoLaunchFlag, '', 'utf-8');
+      logToFile('Автозапуск включён по умолчанию (первый запуск)');
+    } catch (err) {
+      logError(`Ошибка включения автозапуска: ${err.message}`);
+    }
+  }
   logToFile(`Resources Path: ${process.resourcesPath}`);
 
   // Запуск бэкенда
@@ -646,14 +665,12 @@ function escapeXml(s) {
 // Обработка уведомлений от веб-приложения
 ipcMain.on('show-notification', async (event, { title, body, icon, chatId }) => {
   let iconImage = undefined;
-  let avatarFilePath = null;
 
   // Если указан аватар — скачиваем и используем
   if (icon) {
     try {
       if (icon.startsWith('http://') || icon.startsWith('https://')) {
         iconImage = await getAvatarImage(icon);
-        avatarFilePath = avatarFileCache.get(icon) || null;
       } else {
         // Локальный файл
         iconImage = nativeImage.createFromPath(path.join(__dirname, icon));
@@ -672,19 +689,21 @@ ipcMain.on('show-notification', async (event, { title, body, icon, chatId }) => 
     }
   }
 
-  const notifOptions = {
-    title,
-    body,
-    icon: iconImage || undefined
-  };
+  // Создаём объект опций уведомления
+  const notifOptions = { title, body, sound: 'default' };
 
-  // На Windows используем toastXml для большого аватара как в Telegram
-  if (process.platform === 'win32' && avatarFilePath) {
-    const winPath = avatarFilePath.replace(/\\/g, '/');
-    notifOptions.toastXml = `<toast><visual><binding template="ToastGeneric"><text>${escapeXml(title)}</text><text>${escapeXml(body)}</text><image placement="appLogoOverride" src="file:///${winPath}" hint-crop="circle"/></binding></visual></toast>`;
+  // Используем иконку аватара если есть (БЕЗ toastXml — не требует регистрации AUMID в Windows)
+  if (iconImage) {
+    notifOptions.icon = iconImage;
   }
 
-  const notif = new Notification(notifOptions);
+  let notif;
+  try {
+    notif = new Notification(notifOptions);
+  } catch (e) {
+    logToFile('Ошибка создания уведомления: ' + e.message);
+    return;
+  }
 
   // Сохраняем в Map для последующей замены
   if (chatId) {

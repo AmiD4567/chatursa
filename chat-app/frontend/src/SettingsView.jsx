@@ -178,7 +178,13 @@ export default function SettingsView({
                       <input
                         type="checkbox"
                         checked={autoLaunch}
-                        onChange={(e) => setAutoLaunch(e.target.checked)}
+                        onChange={(e) => {
+                          const val = e.target.checked;
+                          setAutoLaunch(val);
+                          if (window.electronAPI?.setAutoLaunch) {
+                            window.electronAPI.setAutoLaunch(val);
+                          }
+                        }}
                       />
                       <span className="slider"></span>
                     </label>

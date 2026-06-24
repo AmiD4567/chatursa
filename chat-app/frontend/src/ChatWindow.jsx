@@ -227,15 +227,13 @@ function ChatWindow({
                     className={`message-main ${message.senderId === currentUser?.id ? 'own' : ''} ${isBotMessage(message) ? 'message-bot' : ''} ${isGrouped ? 'message-grouped' : ''} ${sideChanged ? 'side-changed' : ''}`}
                     onContextMenu={(e) => onContextMenu(e, message.id, message.text, message.chatId, message.senderId, message.senderName)}
                   >
-                    {!isGrouped && (
-                      <img
-                        src={message.senderAvatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(message.senderName || '?')}&background=667eea&color=fff`}
-                        alt={message.senderName}
-                        className="message-avatar"
-                        onError={(e) => { e.target.onerror = null; e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || '?')}&background=667eea&color=fff`; }}
-                      />
-                    )}
-                    {isGrouped && <div className="message-avatar-spacer" />}
+                    {isOwn && <div className="message-avatar-spacer" />}
+                    <img
+                      src={message.senderAvatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(message.senderName || '?')}&background=667eea&color=fff`}
+                      alt={message.senderName}
+                      className="message-avatar"
+                      onError={(e) => { e.target.onerror = null; e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || '?')}&background=667eea&color=fff`; }}
+                    />
                     <div className="message-content" data-message-id={message.id}>
                       <div className="message-bubble-wrapper">
                         {!isBotMessage(message) && message.forwarded_from && (
