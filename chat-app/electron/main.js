@@ -228,20 +228,58 @@ function startBackend() {
   });
 }
 
-// Остановка бэкенда
+// Остановка бэкенда (возвращает Promise, который резолвится когда процесс завершён)
 function stopBackend() {
-  if (backendProcess) {
+  return new Promise((resolve) => {
+    if (!backendProcess) {
+      resolve();
+      return;
+    }
+
     logToFile('Остановка бэкенда...');
+    const pid = backendProcess.pid;
+
+    // Если процесс уже завершён — резолвим сразу
+    if (backendProcess.killed || backendProcess.exitCode !== null) {
+      backendProcess = null;
+      resolve();
+      return;
+    }
+
+    // Ждём завершения процесса
+    const onClose = (code) => {
+      logToFile(`Бэкенд завершён с кодом ${code}`);
+      backendProcess = null;
+      resolve();
+    };
+
+    backendProcess.on('close', onClose);
+
+    // Таймаут на случай если процесс не отвечает
+    const timeout = setTimeout(() => {
+      logToFile('Таймаут ожидания завершения бэкенда, принудительное завершение...');
+      backendProcess.removeListener('close', onClose);
+      backendProcess = null;
+      resolve();
+    }, 5000);
+
     try {
       if (process.platform === 'win32') {
-        spawn('taskkill', ['/pid', backendProcess.pid, '/f', '/t']);
+        const kill = spawn('taskkill', ['/pid', pid, '/f', '/t']);
+        kill.on('error', (err) => {
+          logError(`Ошибка taskkill: ${err.message}`);
+        });
       } else {
         backendProcess.kill('SIGTERM');
       }
     } catch (err) {
       logError(`Ошибка остановки бэкенда: ${err.message}`);
+      clearTimeout(timeout);
+      backendProcess.removeListener('close', onClose);
+      backendProcess = null;
+      resolve();
     }
-  }
+  });
 }
 
 function createWindow() {
@@ -516,25 +554,28 @@ app.whenReady().then(() => {
   });
 });
 
+// Флаг предотвращения рекурсивного вызова before-quit
+let isQuittingForUpdate = false;
+
 // Обработка закрытия приложения
-app.on('before-quit', (event) => {
+app.on('before-quit', async (event) => {
   logToFile('Закрытие приложения (before-quit)...');
 
-  // Если загружено обновление — устанавливаем его тихо и с автозапуском
-  if (autoUpdater.isUpdateDownloaded) {
-    logToFile('before-quit: обнаружено загруженное обновление, запускаю тихую установку...');
-    app.isQuiting = true;
-    stopBackend();
-    globalShortcut.unregisterAll();
+  app.isQuiting = true;
+  globalShortcut.unregisterAll();
+
+  // Если загружено обновление — сначала останавливаем бэкенд, потом устанавливаем
+  if (autoUpdater.isUpdateDownloaded && !isQuittingForUpdate) {
+    isQuittingForUpdate = true;
+    logToFile('before-quit: обнаружено загруженное обновление, останавливаю бэкенд...');
+    event.preventDefault();
+    await stopBackend();
+    logToFile('before-quit: бэкенд остановлен, запускаю тихую установку...');
     autoUpdater.quitAndInstall(true, true); // isSilent=true, isForceRunAfter=true
     return;
   }
 
-  app.isQuiting = true;
-  stopBackend();
-
-  // Убираем все зарегистрированные горячие клавиши
-  globalShortcut.unregisterAll();
+  await stopBackend();
 
   // Закрываем все окна
   const windows = BrowserWindow.getAllWindows();
@@ -543,9 +584,9 @@ app.on('before-quit', (event) => {
   });
 });
 
-app.on('will-quit', (event) => {
+app.on('will-quit', async (event) => {
   logToFile('Закрытие приложения (will-quit)...');
-  stopBackend();
+  await stopBackend();
 });
 
 app.on('window-all-closed', () => {
@@ -556,10 +597,10 @@ app.on('window-all-closed', () => {
 });
 
 // Обработка завершения сессии Windows (для корректного закрытия при установке обновлений)
-app.on('session-end', () => {
+app.on('session-end', async () => {
   logToFile('Завершение сессии Windows, закрываем приложение...');
   globalShortcut.unregisterAll();
-  stopBackend();
+  await stopBackend();
   app.quit();
 });
 
@@ -1212,8 +1253,11 @@ ipcMain.on('start-update', () => {
 });
 
 ipcMain.on('quit-and-install', () => {
-  logToFile('Пользователь запустил установку обновления (тихая + автозапуск)');
-  autoUpdater.quitAndInstall(true, true); // isSilent=true, isForceRunAfter=true
+  logToFile('Пользователь запустил установку обновления');
+  // Инициируем штатное закрытие приложения — before-quit сам вызовет quitAndInstall
+  // после остановки бэкенда, чтобы установщик не споткнулся о заблокированные файлы
+  app.isQuiting = true;
+  app.quit();
 });
 
 // Логирование непредвиденных ошибок
