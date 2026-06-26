@@ -1,6 +1,7 @@
 {
   "name": "chat-app",
-  "version": "1.0.158",
+  "productName": "ChatApp",
+  "version": "1.0.159",
   "description": "Корпоративный мессенджер",
   "main": "electron/main.js",
   "scripts": {

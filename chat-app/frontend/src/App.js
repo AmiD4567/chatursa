@@ -910,33 +910,29 @@ function App() {
             console.log('Проверка обновлений...');
           });
 
-          window.electronAPI.onUpdateAvailable((event, info) => {
+          window.electronAPI.onUpdateAvailable((info) => {
             setUpdateStatus('available');
-            console.log('Доступно обновление:', info);
           });
 
-          window.electronAPI.onUpdateNotAvailable((event, info) => {
+          window.electronAPI.onUpdateNotAvailable(() => {
             setUpdateStatus('no-update');
-            console.log('Обновлений не найдено');
           });
 
-          window.electronAPI.onDownloadProgress((event, progress) => {
+          window.electronAPI.onDownloadProgress((progress) => {
+            if (!progress) return;
             setUpdateStatus('downloading');
             setUpdateProgress(progress.percent);
-            console.log('Загрузка обновления:', progress.percent);
           });
 
-          window.electronAPI.onUpdateDownloaded((event, info) => {
+          window.electronAPI.onUpdateDownloaded(() => {
             setUpdateStatus('ready');
-            console.log('Обновление готово к установке');
           });
 
-          window.electronAPI.onUpdatePostponed((event, info) => {
+          window.electronAPI.onUpdatePostponed(() => {
             setUpdateStatus(null);
-            console.log('Пользователь отложил установку обновления');
           });
 
-          window.electronAPI.onUpdateError((event, error) => {
+          window.electronAPI.onUpdateError((error) => {
             setUpdateStatus(null);
             console.error('Ошибка обновления:', error);
           });
@@ -991,6 +987,7 @@ function App() {
     });
 
     const cleanupProgress = window.electronAPI.onDownloadProgress((progressObj) => {
+      if (!progressObj) return;
       setUpdateProgress(progressObj.percent);
       if (updateStatus !== 'downloading') {
         setUpdateStatus('downloading');
