@@ -64,7 +64,7 @@
       "oneClick": false,
       "perMachine": false,
       "runAfterFinish": true,
-      "shortcutName": "Chat App",
+      "shortcutName": "ChatApp",
       "upgradeCode": "{8F3B5A7C-9D2E-4F1A-B6C3-5E8D7A9F2B4C}"
     },
     "nsis": {
@@ -78,10 +78,10 @@
       "oneClick": false,
       "perMachine": false,
       "runAfterFinish": true,
-      "shortcutName": "Chat App",
+      "shortcutName": "ChatApp",
       "uninstallerIcon": "electron/icon.ico"
     },
-    "productName": "Chat App",
+    "productName": "ChatApp",
     "publish": {
       "owner": "AmiD4567",
       "private": false,
