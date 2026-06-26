@@ -554,27 +554,12 @@ app.whenReady().then(() => {
   });
 });
 
-// Флаг предотвращения рекурсивного вызова before-quit
-let isQuittingForUpdate = false;
-
 // Обработка закрытия приложения
 app.on('before-quit', async (event) => {
   logToFile('Закрытие приложения (before-quit)...');
 
   app.isQuiting = true;
   globalShortcut.unregisterAll();
-
-  // Если загружено обновление — сначала останавливаем бэкенд, потом устанавливаем
-  if (autoUpdater.isUpdateDownloaded && !isQuittingForUpdate) {
-    isQuittingForUpdate = true;
-    logToFile('before-quit: обнаружено загруженное обновление, останавливаю бэкенд...');
-    event.preventDefault();
-    await stopBackend();
-    logToFile('before-quit: бэкенд остановлен, запускаю тихую установку...');
-    autoUpdater.quitAndInstall(true, true); // isSilent=true, isForceRunAfter=true
-    return;
-  }
-
   await stopBackend();
 
   // Закрываем все окна
@@ -1252,12 +1237,14 @@ ipcMain.on('start-update', () => {
   autoUpdater.downloadUpdate();
 });
 
-ipcMain.on('quit-and-install', () => {
+ipcMain.on('quit-and-install', async () => {
   logToFile('Пользователь запустил установку обновления');
-  // Инициируем штатное закрытие приложения — before-quit сам вызовет quitAndInstall
-  // после остановки бэкенда, чтобы установщик не споткнулся о заблокированные файлы
-  app.isQuiting = true;
-  app.quit();
+  // Останавливаем бэкенд, чтобы установщик не споткнулся о заблокированные файлы
+  await stopBackend();
+  logToFile('Запуск тихой установки...');
+  // Закрываем окна перед установкой
+  BrowserWindow.getAllWindows().forEach(win => win.destroy());
+  autoUpdater.quitAndInstall(true, true);
 });
 
 // Логирование непредвиденных ошибок
