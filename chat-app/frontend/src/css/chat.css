@@ -775,6 +775,50 @@
   font-weight: 500;
 }
 
+.header-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 500;
+  margin-left: 8px;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.chat-type-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: rgba(102, 126, 234, 0.15);
+  color: #667eea;
+  font-weight: 500;
+  margin-left: 8px;
+  vertical-align: middle;
+}
+
+.chat-members-status {
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-secondary);
+}
+
+.chat-members-count-link {
+  cursor: pointer;
+  color: var(--text-secondary);
+  transition: color 0.15s;
+}
+
+.chat-members-count-link:hover {
+  color: #667eea;
+  text-decoration: underline;
+}
+
+.chat-status-sep {
+  color: var(--border-color, #444);
+}
+
 .user-status-text {
   display: flex;
   align-items: center;

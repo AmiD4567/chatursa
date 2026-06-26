@@ -294,8 +294,11 @@ function App() {
     meetingDate: '',
     startTime: '',
     endTime: '',
-    organizer: ''
+    organizer: '',
+    participants: [],
+    reminderMinutes: ''
   });
+  const [participantSearch, setParticipantSearch] = useState('');
   const [canBookMeetingRoom, setCanBookMeetingRoom] = useState(false); // Право на бронирование
   const [canEditWiki, setCanEditWiki] = useState(false); // Право на редактирование wiki
   const [showTaskModal, setShowTaskModal] = useState(false);
@@ -395,6 +398,10 @@ function App() {
   const [announcementPriority, setAnnouncementPriority] = useState('normal');
   const [announcementLoading, setAnnouncementLoading] = useState(false);
   const [unreadAnnouncements, setUnreadAnnouncements] = useState(0);
+  const [showMembersModal, setShowMembersModal] = useState(false);
+  const [membersModalChat, setMembersModalChat] = useState(null);
+  const [membersModalSearch, setMembersModalSearch] = useState('');
+  const [membersModalLoading, setMembersModalLoading] = useState(false);
   const [notificationSettings, setNotificationSettings] = useState({
     newMessages: true,
     birthdays: true,
@@ -528,6 +535,7 @@ function App() {
   const loginFormRef = useRef(null);
   const loginTimeoutRef = useRef(null);
   const prevViewRef = useRef(null);
+  const wikiImageInputRef = useRef(null);
 
   // Вычисляем активный чат по ID
   const activeChat = chats.find(c => c.id === activeChatId) || null;
@@ -1534,6 +1542,15 @@ function App() {
       setChats(prev => prev.map(c => c.id === chatId ? { ...c, avatar } : c));
     });
 
+    // Обновление состава участников группы
+    newSocket.on('chat_participants_updated', ({ chatId, chat }) => {
+      if (chat) {
+        setChats(prev => prev.map(c => c.id === chatId
+          ? { ...c, participantsDetails: chat.participantsDetails || c.participantsDetails, participants: chat.participants || c.participants }
+          : c));
+      }
+    });
+
     newSocket.on('user_avatar_updated', ({ userId, avatar }) => {
       setMessages(prev => prev.map(m => m.senderId === userId ? { ...m, senderAvatar: avatar } : m));
       setChats(prev => prev.map(c => c.participantsDetails ? { ...c, participantsDetails: c.participantsDetails.map(p => p.id === userId ? { ...p, avatar } : p) } : c));
@@ -1827,6 +1844,17 @@ function App() {
           [messageId]: { reactions: newReactions }
         };
       });
+    });
+
+    // Уведомление автору сообщения о реакции
+    newSocket.on('reaction_notification', ({ messageId, emoji, userId, username, avatar, chatId }) => {
+      const myId = currentUserRef.current?.id;
+      if (myId && userId !== myId) {
+        const chat = chats.find(c => c.id === chatId);
+        const chatName = chat?.name || 'Чат';
+        showInAppNotification(`Реакция от ${username}`,
+          `${emoji} — ${chatName}`, avatar || '', chatId);
+      }
     });
 
     // Обработка закрепления сообщения
@@ -3701,6 +3729,51 @@ function App() {
     }
   };
 
+  const wikiInsertImage = async (file) => {
+    if (!wikiActiveArticle) {
+      alert('Сначала сохраните статью, затем добавьте изображение');
+      return;
+    }
+    setWikiFileUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('userId', currentUser.id);
+      const res = await fetch(`${SOCKET_URL}/api/wiki/articles/${wikiActiveArticle.id}/files`, {
+        method: 'POST',
+        body: formData
+      });
+      if (!res.ok) {
+        const errText = await res.text();
+        let errMsg;
+        try { errMsg = JSON.parse(errText).error; } catch { errMsg = errText.substring(0, 200); }
+        alert('Ошибка загрузки: ' + (errMsg || 'неизвестная ошибка'));
+        return;
+      }
+      const data = await res.json();
+      if (data.success) {
+        const fileUrl = `${SOCKET_URL}/uploads/${data.file.file_path}`;
+        const ta = document.querySelector('.wiki-edit-content');
+        if (ta) {
+          const start = ta.selectionStart;
+          const end = ta.selectionEnd;
+          const selected = wikiEditContent.substring(start, end);
+          const before = wikiEditContent.substring(0, start);
+          const after = wikiEditContent.substring(end);
+          const alt = selected || file.name.replace(/\.[^.]+$/, '');
+          setWikiEditContent(before + `![${alt}](${fileUrl})` + after);
+          setTimeout(() => { ta.focus(); ta.selectionStart = start + 2; ta.selectionEnd = start + 2; }, 0);
+        }
+        setWikiFiles(prev => [...prev, data.file]);
+      }
+    } catch (err) {
+      console.error('Ошибка вставки изображения:', err);
+      alert('Ошибка загрузки изображения: ' + err.message);
+    } finally {
+      setWikiFileUploading(false);
+    }
+  };
+
   const wikiOpenArticle = async (article) => {
     setWikiActiveArticle(article);
     await wikiLoadFiles(article.id);
@@ -4986,7 +5059,9 @@ function App() {
       meetingDate: booking.meeting_date,
       startTime: booking.start_time,
       endTime: booking.end_time,
-      organizer: booking.organizer_name
+      organizer: booking.organizer_name,
+      participants: booking.participants || [],
+      reminderMinutes: booking.reminder_minutes || ''
     });
     setShowEditMeetingModal(true);
   };
@@ -5029,7 +5104,9 @@ function App() {
           description: meetingForm.description,
           meetingDate: meetingForm.meetingDate,
           startTime: meetingForm.startTime,
-          endTime: meetingForm.endTime
+          endTime: meetingForm.endTime,
+          participants: meetingForm.participants,
+          reminderMinutes: meetingForm.reminderMinutes || null
         })
       });
 
@@ -5045,7 +5122,9 @@ function App() {
           meetingDate: '',
           startTime: '',
           endTime: '',
-          organizer: ''
+          organizer: '',
+          participants: [],
+          reminderMinutes: ''
         });
         setEditingBooking(null);
         setShowEditMeetingModal(false);
@@ -5430,6 +5509,81 @@ function App() {
       }
     }
     setShowChatMenu(false);
+  };
+
+  const openMembersModal = () => {
+    setMembersModalChat(activeChat);
+    setMembersModalSearch('');
+    setShowMembersModal(true);
+    setShowChatMenu(false);
+  };
+
+  const handleAddMember = async (chatId, userId) => {
+    try {
+      const res = await fetch(`${SOCKET_URL}/api/chats/${chatId}/participants`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, adminId: currentUser?.id })
+      });
+      const data = await res.json();
+      if (!res.ok) alert(data.error || 'Ошибка добавления');
+    } catch (err) {
+      console.error('Ошибка добавления участника:', err);
+    }
+  };
+
+  const handleRemoveMember = async (chatId, targetUserId, username) => {
+    if (!confirm(`Вы уверены, что хотите удалить пользователя ${username} из группы?`)) return;
+    try {
+      const res = await fetch(`${SOCKET_URL}/api/chats/${chatId}/participants/${targetUserId}?adminId=${currentUser?.id}`, {
+        method: 'DELETE'
+      });
+      const data = await res.json();
+      if (!res.ok) alert(data.error || 'Ошибка удаления');
+    } catch (err) {
+      console.error('Ошибка удаления участника:', err);
+    }
+  };
+
+  const handleLeaveGroup = async (chatId) => {
+    if (!confirm('Вы уверены, что хотите покинуть группу?')) return;
+    try {
+      const res = await fetch(`${SOCKET_URL}/api/chats/${chatId}/participants/${currentUser?.id}?adminId=${currentUser?.id}`, {
+        method: 'DELETE'
+      });
+      const data = await res.json();
+      if (res.ok) {
+        // Удаляем чат из списка
+        setChats(prev => prev.filter(c => c.id !== chatId));
+        if (activeChat?.id === chatId) setActiveChatId(null);
+      } else {
+        alert(data.error || 'Ошибка');
+      }
+    } catch (err) {
+      console.error('Ошибка выхода из группы:', err);
+    }
+    setShowMembersModal(false);
+  };
+
+  const handleChangeRole = async (chatId, targetUserId, role, username) => {
+    if (role === 'creator') {
+      if (!confirm(`Передать права создателя группы пользователю ${username}?`)) return;
+    } else if (role === 'admin') {
+      if (!confirm(`Назначить ${username} администратором группы?`)) return;
+    } else {
+      if (!confirm(`Снять права администратора с ${username}?`)) return;
+    }
+    try {
+      const res = await fetch(`${SOCKET_URL}/api/chats/${chatId}/participants/${targetUserId}/role`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role, adminId: currentUser?.id })
+      });
+      const data = await res.json();
+      if (!res.ok) alert(data.error || 'Ошибка изменения роли');
+    } catch (err) {
+      console.error('Ошибка изменения роли:', err);
+    }
   };
 
   const handleViewMedia = () => {
@@ -7297,6 +7451,12 @@ function App() {
                               <span>Уведомления о днях рождения</span>
                             </label>
                           </div>
+                          <div className="form-group">
+                            <label className="remember-me-label">
+                              <input type="checkbox" checked={botSettings.ai_enabled} onChange={(e) => setBotSettings({...botSettings, ai_enabled: e.target.checked})} />
+                              <span>🤖 AI-помощник (локальная модель)</span>
+                            </label>
+                          </div>
                           <button
                             className="btn-primary"
                             onClick={async () => {
@@ -7653,6 +7813,8 @@ function App() {
                     <div className="chat-name-row">
                       <span className="chat-name">
                         {getChatDisplayName(chat)}
+                        {chat.type === 'group' && <span className="chat-type-badge" title="Групповой чат">🏢 Группа</span>}
+                        {chat.type === 'general' && <span className="chat-type-badge" title="Общий чат">🏢 Группа</span>}
                         {e2eeEnabled[chat.id] && <span className="e2ee-chat-badge" title="E2EE включено">🔒</span>}
                         {chat.type === 'direct' && chat.participantsDetails && (() => {
                           const otherUser = chat.participantsDetails.find(p => p.username !== currentUser?.username);
@@ -7825,7 +7987,9 @@ function App() {
                   <span className="chat-icon-large">{getChatIcon(activeChat)}</span>
                 )}
                 <div>
-                  <h2>{getChatDisplayName(activeChat)}</h2>
+                  <h2>{getChatDisplayName(activeChat)}
+                    {(activeChat.type === 'group' || activeChat.type === 'general') && <span className="chat-type-badge header-badge">🏢 Группа</span>}
+                  </h2>
                   <span className="chat-status">
                     {/* Индикатор "печатает..." */}
                     {Object.keys(typingUsers).length > 0 && activeChat.type === 'direct' && (
@@ -7896,6 +8060,16 @@ function App() {
                         }
                         return null;
                       })()
+                    ) : Object.keys(typingUsers).length === 0 && (activeChat.type === 'group' || activeChat.type === 'general') ? (
+                      <span className="chat-members-status">
+                        <span className="chat-members-count-link" onClick={() => { setMembersModalChat(activeChat); setShowMembersModal(true); }}>
+                          👥 {activeChat.participantsDetails?.length || 0} участников
+                        </span>
+                        <span className="chat-status-sep"> • </span>
+                        <span className="user-status-text online">
+                          {getOnlineUsersCount(activeChat)} онлайн
+                        </span>
+                      </span>
                     ) : Object.keys(typingUsers).length === 0 && (
                       <span className="user-status-text online">
                         {getOnlineUsersCount(activeChat)} онлайн
@@ -8341,6 +8515,12 @@ function App() {
                   <span className="menu-icon"><span className="emoji-animated">📄</span></span>
                   <span>Документы</span>
                 </div>
+                {(activeChat?.type === 'group' || activeChat?.type === 'general') && (
+                  <div className="chat-menu-item" onClick={openMembersModal}>
+                    <span className="menu-icon"><span className="emoji-animated">👥</span></span>
+                    <span>Участники</span>
+                  </div>
+                )}
                 {(activeChat?.type === 'direct' || activeChat?.type === 'group') && (
                   <div className={`chat-menu-item ${e2eeEnabled[activeChatId] ? 'active-e2ee' : ''}`} onClick={handleToggleE2EE}>
                     <span className="menu-icon">
@@ -8356,6 +8536,133 @@ function App() {
                 <div className="chat-menu-item danger" onClick={handleDeleteChat}>
                   <span className="menu-icon"><span className="emoji-animated">❌</span></span>
                   <span>Удалить чат</span>
+                </div>
+              </div>
+            )}
+
+            {/* Модальное окно участников группы */}
+            {showMembersModal && membersModalChat && (
+              <div className="modal-overlay" onClick={() => setShowMembersModal(false)}>
+                <div className="modal-content members-modal" onClick={(e) => e.stopPropagation()}>
+                  <div className="modal-header">
+                    <h3>👥 Участники — {getChatDisplayName(membersModalChat)}</h3>
+                    <button className="close-btn" onClick={() => setShowMembersModal(false)}>✕</button>
+                  </div>
+                  <div className="modal-body">
+                    {/* Поиск участников */}
+                    <div className="members-search">
+                      <input
+                        type="text"
+                        placeholder="Поиск участников..."
+                        value={membersModalSearch}
+                        onChange={(e) => setMembersModalSearch(e.target.value)}
+                        autoFocus
+                      />
+                    </div>
+
+                    {/* Список участников */}
+                    <div className="members-list">
+                      {membersModalChat.participantsDetails
+                        ?.filter(p => p.username?.toLowerCase().includes(membersModalSearch.toLowerCase()))
+                        .map(p => {
+                          const isCurrentUser = p.username === currentUser?.username;
+                          const currentUserRole = membersModalChat.participantsDetails?.find(u => u.username === currentUser?.username)?.role;
+                          const isCreator = currentUserRole === 'creator';
+                          const isAdmin = currentUserRole === 'admin' || isCreator;
+
+                          return (
+                            <div key={p.id} className="members-list-item">
+                              <img
+                                src={p.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(p.username)}`}
+                                alt={p.username}
+                                className="members-avatar"
+                                onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || 'U')}`; }}
+                              />
+                              <div className="members-info">
+                                <span className="members-name">
+                                  {p.username}
+                                  {isCurrentUser && <span className="members-you"> (это вы)</span>}
+                                </span>
+                                <div className="members-meta">
+                                  <span className={`members-role-badge role-${p.role}`}>
+                                    {p.role === 'creator' ? '👑 Создатель' : p.role === 'admin' ? '🛡️ Админ' : '👤 Участник'}
+                                  </span>
+                                </div>
+                              </div>
+                              <div className="members-actions">
+                                {/* Кнопка покинуть группу (для самого себя) */}
+                                {isCurrentUser && p.role !== 'creator' && (
+                                  <button className="members-btn danger" onClick={() => handleLeaveGroup(membersModalChat.id)} title="Покинуть группу">
+                                    🚪
+                                  </button>
+                                )}
+                                {/* Кнопка удалить (для admin/creator, не для себя и не для creator) */}
+                                {isAdmin && !isCurrentUser && p.role !== 'creator' && (
+                                  <button className="members-btn danger" onClick={() => handleRemoveMember(membersModalChat.id, p.id, p.username)} title="Удалить из группы">
+                                    ✕
+                                  </button>
+                                )}
+                                {/* Смена роли (только для creator, не для себя) */}
+                                {isCreator && !isCurrentUser && (
+                                  <div className="members-role-select">
+                                    {p.role === 'member' && (
+                                      <button className="members-btn" onClick={() => handleChangeRole(membersModalChat.id, p.id, 'admin', p.username)} title="Сделать администратором">
+                                        🛡️
+                                      </button>
+                                    )}
+                                    {p.role === 'admin' && (
+                                      <>
+                                        <button className="members-btn" onClick={() => handleChangeRole(membersModalChat.id, p.id, 'member', p.username)} title="Снять админа">
+                                          👤
+                                        </button>
+                                        <button className="members-btn creator-transfer" onClick={() => handleChangeRole(membersModalChat.id, p.id, 'creator', p.username)} title="Передать права создателя">
+                                          👑
+                                        </button>
+                                      </>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                    </div>
+
+                    {/* Добавление участников (только admin/creator) */}
+                    {(() => {
+                      const currentUserRole = membersModalChat.participantsDetails?.find(u => u.username === currentUser?.username)?.role;
+                      const isAdmin = currentUserRole === 'admin' || currentUserRole === 'creator';
+                      if (!isAdmin) return null;
+                      const existingIds = new Set(membersModalChat.participantsDetails?.map(p => p.id));
+                      const availableUsers = (users || []).filter(u => !existingIds.has(u.id));
+                      return (
+                        <div className="members-add-section">
+                          <h4>➕ Добавить участников</h4>
+                          <div className="members-add-list">
+                            {availableUsers.length === 0 ? (
+                              <span className="members-no-users">Все пользователи уже в группе</span>
+                            ) : (
+                              availableUsers.map(u => (
+                                <div
+                                  key={u.id}
+                                  className="members-add-item"
+                                  onClick={() => handleAddMember(membersModalChat.id, u.id)}
+                                >
+                                  <img
+                                    src={u.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(u.username)}`}
+                                    alt={u.username}
+                                    className="members-avatar small"
+                                    onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || 'U')}`; }}
+                                  />
+                                  <span>{u.username}</span>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
                 </div>
               </div>
             )}
@@ -8849,6 +9156,20 @@ function App() {
                             <p className="booking-description">{booking.description}</p>
                           )}
                           <span className="booking-organizer">👤 {booking.organizer_name}</span>
+                          {booking.participants && booking.participants.length > 0 && (
+                            <div className="booking-participants">
+                              <span>👥 </span>
+                              {booking.participants.map(pid => {
+                                const u = users.find(x => x.id === pid);
+                                return u ? <span key={pid} className="booking-participant-tag">{u.username}</span> : null;
+                              })}
+                            </div>
+                          )}
+                          {booking.reminder_minutes && (
+                            <div className="booking-reminder-badge">
+                              🔔 За {booking.reminder_minutes} мин
+                            </div>
+                          )}
                         </div>
                         {/* Кнопки действий показываем только если пользователь имеет право на бронирование И является организатором ИЛИ админ */}
                         {(canBookMeetingRoom || currentUser?.username === 'Root' || currentUser?.is_admin === 1) && (
@@ -9091,9 +9412,31 @@ function App() {
                     setWikiEditContent(before + '> ' + selected.replace(/\n/g, '\n> ') + after);
                     setTimeout(() => { ta.focus(); ta.selectionStart = start + 2; ta.selectionEnd = end + 2; }, 0);
                   }} title="Цитата">❝</button>
+                  <span className="wiki-md-sep">|</span>
+                  <button type="button" className="wiki-md-btn" onClick={() => {
+                    wikiImageInputRef.current?.click();
+                  }} disabled={wikiFileUploading} title="Изображение">🖼️</button>
+                  <input type="file" ref={wikiImageInputRef} accept="image/*" style={{ display: 'none' }} onChange={e => {
+                    const file = e.target.files[0];
+                    if (file) wikiInsertImage(file);
+                    e.target.value = '';
+                  }} />
                 </div>
                 <textarea className="wiki-edit-content" placeholder="Текст статьи (поддерживает Markdown)..."
-                  value={wikiEditContent} onChange={e => setWikiEditContent(e.target.value)} rows={20} />
+                  value={wikiEditContent} onChange={e => setWikiEditContent(e.target.value)} rows={20}
+                  onDragOver={e => { e.preventDefault(); e.stopPropagation(); e.currentTarget.style.outline = '2px dashed #667eea'; }}
+                  onDragLeave={e => { e.preventDefault(); e.stopPropagation(); e.currentTarget.style.outline = 'none'; }}
+                  onDrop={e => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    e.currentTarget.style.outline = 'none';
+                    const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/'));
+                    if (files.length > 0) {
+                      wikiInsertImage(files[0]);
+                    } else {
+                      alert('Пожалуйста, перетащите изображение');
+                    }
+                  }} />
                 {(isAdmin || canEditWiki) && (
                   <div className="wiki-edit-files">
                     <label className="wiki-file-upload-btn">
@@ -9110,8 +9453,27 @@ function App() {
                       <div className="wiki-file-list">
                         {wikiFiles.map(f => (
                           <div key={f.id} className="wiki-file-item">
-                            <a href={`${SOCKET_URL}/uploads/${f.file_path}`} target="_blank" rel="noopener noreferrer" className="wiki-file-link">{f.file_name}</a>
-                            <span className="wiki-file-size">({(f.file_size / 1024).toFixed(1)} KB)</span>
+                            {f.mime_type && f.mime_type.startsWith('image/') ? (
+                              <div className="wiki-image-preview-wrapper">
+                                <img src={`${SOCKET_URL}/uploads/${f.file_path}`} alt={f.file_name} className="wiki-image-preview" onClick={() => window.open(`${SOCKET_URL}/uploads/${f.file_path}`, '_blank')} />
+                                <span className="wiki-file-name">{f.file_name}</span>
+                                <button className="wiki-md-insert-img-btn" onClick={() => {
+                                  const fileUrl = `${SOCKET_URL}/uploads/${f.file_path}`;
+                                  const ta = document.querySelector('.wiki-edit-content');
+                                  if (ta) {
+                                    const start = ta.selectionStart;
+                                    const before = wikiEditContent.substring(0, start);
+                                    const after = wikiEditContent.substring(start);
+                                    setWikiEditContent(before + `![${f.file_name}](${fileUrl})` + after);
+                                  }
+                                }} title="Вставить в текст">+</button>
+                              </div>
+                            ) : (
+                              <>
+                                <a href={`${SOCKET_URL}/uploads/${f.file_path}`} target="_blank" rel="noopener noreferrer" className="wiki-file-link">{f.file_name}</a>
+                                <span className="wiki-file-size">({(f.file_size / 1024).toFixed(1)} KB)</span>
+                              </>
+                            )}
                             {isAdmin && (
                               <button className="wiki-file-remove" onClick={() => wikiDeleteFile(wikiActiveArticle.id, f.id)} title="Удалить">✕</button>
                             )}
@@ -9170,12 +9532,18 @@ function App() {
                 {wikiFiles.length > 0 && (
                   <div className="wiki-article-files">
                     <h4>📎 Прикреплённые файлы</h4>
-                    {wikiFiles.map(f => (
-                      <div key={f.id} className="wiki-file-item">
-                        <a href={`${SOCKET_URL}/uploads/${f.file_path}`} target="_blank" rel="noopener noreferrer" className="wiki-file-link">{f.file_name}</a>
-                        <span className="wiki-file-size">({(f.file_size / 1024).toFixed(1)} KB)</span>
-                      </div>
-                    ))}
+                    <div className="wiki-file-list">
+                      {wikiFiles.map(f => (
+                        <div key={f.id} className="wiki-file-item">
+                          {f.mime_type && f.mime_type.startsWith('image/') ? (
+                            <img src={`${SOCKET_URL}/uploads/${f.file_path}`} alt={f.file_name} className="wiki-image-preview" onClick={() => window.open(`${SOCKET_URL}/uploads/${f.file_path}`, '_blank')} />
+                          ) : (
+                            <a href={`${SOCKET_URL}/uploads/${f.file_path}`} target="_blank" rel="noopener noreferrer" className="wiki-file-link">{f.file_name}</a>
+                          )}
+                          <span className="wiki-file-size">({(f.file_size / 1024).toFixed(1)} KB)</span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>
@@ -10212,7 +10580,9 @@ function App() {
                     description: meetingForm.description,
                     meetingDate: meetingForm.meetingDate,
                     startTime: meetingForm.startTime,
-                    endTime: meetingForm.endTime
+                    endTime: meetingForm.endTime,
+                    participants: meetingForm.participants,
+                    reminderMinutes: meetingForm.reminderMinutes || null
                   })
                 });
                 
@@ -10232,7 +10602,9 @@ function App() {
                     meetingDate: '',
                     startTime: '',
                     endTime: '',
-                    organizer: ''
+                    organizer: '',
+                    participants: [],
+                    reminderMinutes: ''
                   });
                   
                   setShowMeetingModal(false);
@@ -10308,6 +10680,63 @@ function App() {
                     onChange={(e) => setMeetingForm({...meetingForm, organizer: e.target.value})}
                     disabled
                   />
+                </div>
+
+                <div className="form-group">
+                  <label>Участники</label>
+                  <div className="participant-selector">
+                    <input
+                      type="text"
+                      className="participant-search-input"
+                      placeholder="Поиск пользователей..."
+                      value={participantSearch}
+                      onChange={(e) => setParticipantSearch(e.target.value)}
+                    />
+                    <div className="participant-list">
+                      {users.filter(u => u.id !== currentUser?.id && (u.username || '').toLowerCase().includes(participantSearch.toLowerCase())).map(u => {
+                        const isSelected = meetingForm.participants.includes(u.id);
+                        return (
+                          <div
+                            key={u.id}
+                            className={`participant-item ${isSelected ? 'selected' : ''}`}
+                            onClick={() => {
+                              setMeetingForm({
+                                ...meetingForm,
+                                participants: isSelected
+                                  ? meetingForm.participants.filter(id => id !== u.id)
+                                  : [...meetingForm.participants, u.id]
+                              });
+                            }}
+                          >
+                            <span className="participant-name">{u.username}</span>
+                            {isSelected && <span className="participant-check">✓</span>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {meetingForm.participants.length > 0 && (
+                      <div className="selected-participants">
+                        <span>Выбрано: </span>
+                        {meetingForm.participants.map(pid => {
+                          const u = users.find(x => x.id === pid);
+                          return u ? <span key={pid} className="selected-tag">{u.username} <span className="remove-participant" onClick={() => setMeetingForm({...meetingForm, participants: meetingForm.participants.filter(id => id !== pid)})}>✕</span></span> : null;
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="form-group">
+                  <label>Напоминание</label>
+                  <select
+                    value={meetingForm.reminderMinutes}
+                    onChange={(e) => setMeetingForm({...meetingForm, reminderMinutes: e.target.value})}
+                  >
+                    <option value="">Без напоминания</option>
+                    <option value="10">За 10 минут</option>
+                    <option value="15">За 15 минут</option>
+                    <option value="30">За 30 минут</option>
+                  </select>
                 </div>
               </div>
 
@@ -10404,6 +10833,63 @@ function App() {
                     value={meetingForm.organizer}
                     disabled
                   />
+                </div>
+
+                <div className="form-group">
+                  <label>Участники</label>
+                  <div className="participant-selector">
+                    <input
+                      type="text"
+                      className="participant-search-input"
+                      placeholder="Поиск пользователей..."
+                      value={participantSearch}
+                      onChange={(e) => setParticipantSearch(e.target.value)}
+                    />
+                    <div className="participant-list">
+                      {users.filter(u => u.id !== currentUser?.id && (u.username || '').toLowerCase().includes(participantSearch.toLowerCase())).map(u => {
+                        const isSelected = meetingForm.participants.includes(u.id);
+                        return (
+                          <div
+                            key={u.id}
+                            className={`participant-item ${isSelected ? 'selected' : ''}`}
+                            onClick={() => {
+                              setMeetingForm({
+                                ...meetingForm,
+                                participants: isSelected
+                                  ? meetingForm.participants.filter(id => id !== u.id)
+                                  : [...meetingForm.participants, u.id]
+                              });
+                            }}
+                          >
+                            <span className="participant-name">{u.username}</span>
+                            {isSelected && <span className="participant-check">✓</span>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {meetingForm.participants.length > 0 && (
+                      <div className="selected-participants">
+                        <span>Выбрано: </span>
+                        {meetingForm.participants.map(pid => {
+                          const u = users.find(x => x.id === pid);
+                          return u ? <span key={pid} className="selected-tag">{u.username} <span className="remove-participant" onClick={() => setMeetingForm({...meetingForm, participants: meetingForm.participants.filter(id => id !== pid)})}>✕</span></span> : null;
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="form-group">
+                  <label>Напоминание</label>
+                  <select
+                    value={meetingForm.reminderMinutes}
+                    onChange={(e) => setMeetingForm({...meetingForm, reminderMinutes: e.target.value})}
+                  >
+                    <option value="">Без напоминания</option>
+                    <option value="10">За 10 минут</option>
+                    <option value="15">За 15 минут</option>
+                    <option value="30">За 30 минут</option>
+                  </select>
                 </div>
               </div>
 

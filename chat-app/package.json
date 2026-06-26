@@ -1,6 +1,6 @@
 {
   "name": "chat-app",
-  "version": "1.0.156",
+  "version": "1.0.158",
   "description": "Корпоративный мессенджер",
   "main": "electron/main.js",
   "scripts": {
@@ -16,6 +16,7 @@
     "start": "concurrently \"npm run server\" \"npm run client\""
   },
   "build": {
+    "productName": "ChatApp",
     "appId": "com.pantyuhov.chat",
     "asar": false,
     "directories": {

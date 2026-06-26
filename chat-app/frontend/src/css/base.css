@@ -37,6 +37,8 @@
   --input-bg: #252542;
   --hover-bg: rgba(255, 255, 255, 0.08);
   --active-bg: rgba(255, 255, 255, 0.12);
+  --btn-secondary-bg: rgba(255, 255, 255, 0.08);
+  --btn-secondary-hover: rgba(255, 255, 255, 0.15);
   --sidebar-bg: #1a1a2e;
   --chat-bg: #0f0f1a;
   --message-own-bg: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
