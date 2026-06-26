@@ -32,10 +32,6 @@
     ],
     "extraResources": [
       {
-        "filter": [
-          "**/*",
-          "!node_modules/sqlite3/**/*"
-        ],
         "from": "backend",
         "to": "app/backend"
       },
@@ -53,7 +49,6 @@
     ],
     "files": [
       "electron/**/*",
-      "backend/**/*",
       "frontend/build/**/*",
       "uploads/**/*"
     ],
