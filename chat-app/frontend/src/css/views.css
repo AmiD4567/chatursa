@@ -850,8 +850,6 @@ body,
   --input-bg: #f0f2f5;
   --hover-bg: #eef1f6;
   --active-bg: #dfe3eb;
-  --btn-secondary-bg: rgba(0, 0, 0, 0.06);
-  --btn-secondary-hover: rgba(0, 0, 0, 0.12);
   --sidebar-bg: #ffffff;
   --chat-bg: #eef1f6;
   --message-own-bg: #667eea;
@@ -1395,43 +1393,6 @@ body,
   font-size: 14px;
   padding: 0 4px;
 }
-.wiki-image-preview-wrapper {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.wiki-image-preview {
-  width: 60px;
-  height: 60px;
-  object-fit: cover;
-  border-radius: 4px;
-  cursor: pointer;
-  border: 1px solid rgba(255,255,255,0.1);
-}
-.wiki-image-preview:hover {
-  opacity: 0.85;
-}
-.wiki-file-name {
-  font-size: 12px;
-  opacity: 0.7;
-  max-width: 150px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.wiki-md-insert-img-btn {
-  background: rgba(102,126,234,0.15);
-  border: none;
-  color: #7c8ef5;
-  cursor: pointer;
-  font-size: 16px;
-  border-radius: 4px;
-  padding: 2px 8px;
-  margin-left: auto;
-}
-.wiki-md-insert-img-btn:hover {
-  background: rgba(102,126,234,0.3);
-}
 .wiki-article-files {
   margin-top: 20px;
   padding-top: 12px;
@@ -1510,21 +1471,6 @@ body,
   border-top-color: #e0e0e0;
 }
 [data-theme="light"] .wiki-article-files h4 {
-  color: #333;
-}
-[data-theme="light"] .wiki-image-preview {
-  border-color: #ddd;
-}
-[data-theme="light"] .wiki-md-insert-img-btn {
-  background: rgba(102,126,234,0.1);
-  color: #667eea;
-}
-[data-theme="light"] .wiki-md-insert-img-btn:hover {
-  background: rgba(102,126,234,0.2);
-}
-[data-theme="light"] .wiki-edit-content {
-  background: #fff;
-  border-color: #ddd;
   color: #333;
 }
 [data-theme="light"] .wiki-search-input {

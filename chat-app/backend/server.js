@@ -512,10 +512,7 @@ function initDatabase() {
     { table: 'messages', column: 'button_data', type: 'TEXT' },
     { table: 'users', column: 'onboarding_completed', type: 'INTEGER DEFAULT 0' },
     { table: 'wiki_articles', column: 'views', type: 'INTEGER DEFAULT 0' },
-    { table: 'wiki_articles', column: 'access_level', type: 'TEXT DEFAULT \'public\'' },
-    { table: 'meeting_room_bookings', column: 'participants', type: 'TEXT DEFAULT \'[]\'' },
-    { table: 'meeting_room_bookings', column: 'reminder_minutes', type: 'INTEGER' },
-    { table: 'chat_participants', column: 'role', type: 'TEXT DEFAULT \'member\'' }
+    { table: 'wiki_articles', column: 'access_level', type: 'TEXT DEFAULT \'public\'' }
   ];
 
   migrations.forEach(({ table, column, type }) => {
@@ -813,7 +810,6 @@ function initDatabase() {
     INSERT OR IGNORE INTO bot_settings (setting_key, setting_value) VALUES ('poll_creation_enabled', '1');
     INSERT OR IGNORE INTO bot_settings (setting_key, setting_value) VALUES ('support_enabled', '1');
     INSERT OR IGNORE INTO bot_settings (setting_key, setting_value) VALUES ('birthday_notifications_enabled', '1');
-    INSERT OR IGNORE INTO bot_settings (setting_key, setting_value) VALUES ('ai_enabled', '0');
 
     CREATE TABLE IF NOT EXISTS support_requests (
       id TEXT PRIMARY KEY,
@@ -1025,9 +1021,6 @@ const botRateLimit = new Map(); // socketId -> timestamp последнего з
 
 // State machine — контекст разговора с ботом (socketId -> ConversationState)
 let conversationStates; // будет инициализирован в initDatabase().then()
-
-// История сообщений для AI контекста (chatId -> [{role, text}])
-const aiHistory = new Map(); // chatId -> array of last 20 messages
 
 // Аналитика использования бота
 let botAnalytics; // будет инициализирован в initDatabase().then()
@@ -2344,134 +2337,6 @@ app.delete('/api/chats/:chatId', (req, res) => {
   }
 });
 
-// API для управления участниками группы
-// Проверка прав на управление группой (creator или admin)
-function checkGroupAdmin(chatId, userId) {
-  const row = db.prepare('SELECT role FROM chat_participants WHERE chat_id = ? AND user_id = ?').get(chatId, userId);
-  return row && (row.role === 'creator' || row.role === 'admin');
-}
-
-// Получить список участников чата
-app.get('/api/chats/:chatId/participants', (req, res) => {
-  const { chatId } = req.params;
-  const { userId } = req.query;
-  if (!userId) return res.status(400).json({ error: 'userId обязателен' });
-
-  const isMember = db.prepare('SELECT 1 FROM chat_participants WHERE chat_id = ? AND user_id = ?').get(chatId, userId);
-  if (!isMember) return res.status(403).json({ error: 'Вы не участник этого чата' });
-
-  const rows = db.prepare(`
-    SELECT u.id, u.username, u.avatar, u.status, u.status_text, cp.role
-    FROM users u
-    JOIN chat_participants cp ON u.id = cp.user_id
-    WHERE cp.chat_id = ?
-    ORDER BY
-      CASE cp.role WHEN 'creator' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END,
-      u.username
-  `).all(chatId);
-
-  res.json({ success: true, participants: rows });
-});
-
-// Добавить участника в группу
-app.post('/api/chats/:chatId/participants', (req, res) => {
-  const { chatId } = req.params;
-  const { userId, adminId } = req.body;
-  if (!userId || !adminId) return res.status(400).json({ error: 'userId и adminId обязательны' });
-
-  const chat = db.prepare('SELECT type FROM chats WHERE id = ?').get(chatId);
-  if (!chat || chat.type !== 'group') return res.status(400).json({ error: 'Чат не является группой' });
-  if (!checkGroupAdmin(chatId, adminId)) return res.status(403).json({ error: 'Недостаточно прав' });
-
-  const already = db.prepare('SELECT 1 FROM chat_participants WHERE chat_id = ? AND user_id = ?').get(chatId, userId);
-  if (already) return res.status(409).json({ error: 'Пользователь уже в группе' });
-
-  try {
-    db.run('INSERT INTO chat_participants (chat_id, user_id, role) VALUES (?, ?, ?)', [chatId, userId, 'member']);
-    const user = db.prepare('SELECT id, username FROM users WHERE id = ?').get(userId);
-    const admin = db.prepare('SELECT username FROM users WHERE id = ?').get(adminId);
-    const updatedChat = getChatWithDetails(chatId);
-    io.to(chatId).emit('chat_participants_updated', { chatId, chat: updatedChat, action: 'add', userId: user.id, username: user.username, byUserId: adminId, byUsername: admin?.username });
-    res.json({ success: true, user });
-  } catch (err) {
-    console.error('Ошибка добавления участника:', err);
-    res.status(500).json({ error: 'Ошибка сервера' });
-  }
-});
-
-// Удалить участника из группы
-app.delete('/api/chats/:chatId/participants/:targetUserId', (req, res) => {
-  const { chatId, targetUserId } = req.params;
-  const { adminId } = req.query;
-  if (!adminId) return res.status(400).json({ error: 'adminId обязателен' });
-
-  const chat = db.prepare('SELECT type FROM chats WHERE id = ?').get(chatId);
-  if (!chat || chat.type !== 'group') return res.status(400).json({ error: 'Чат не является группой' });
-
-  // Проверяем права: admin/creator могут удалять участников
-  if (adminId !== targetUserId) {
-    if (!checkGroupAdmin(chatId, adminId)) return res.status(403).json({ error: 'Недостаточно прав' });
-  }
-
-  const targetRole = db.prepare('SELECT role FROM chat_participants WHERE chat_id = ? AND user_id = ?').get(chatId, targetUserId);
-  if (!targetRole) return res.status(404).json({ error: 'Участник не найден' });
-  if (targetRole.role === 'creator') return res.status(403).json({ error: 'Нельзя удалить создателя группы' });
-
-  try {
-    db.run('DELETE FROM chat_participants WHERE chat_id = ? AND user_id = ?', [chatId, targetUserId]);
-    const target = db.prepare('SELECT username FROM users WHERE id = ?').get(targetUserId);
-    const admin = db.prepare('SELECT username FROM users WHERE id = ?').get(adminId);
-    const updatedChat = getChatWithDetails(chatId);
-    io.to(chatId).emit('chat_participants_updated', { chatId, chat: updatedChat, action: 'remove', userId: targetUserId, username: target?.username, byUserId: adminId, byUsername: admin?.username });
-    // Если пользователь удалил сам себя, он покинул группу — отключаем от сокет-комнаты
-    if (adminId === targetUserId) {
-      const sockets = getUserSockets(targetUserId);
-      sockets.forEach(sid => {
-        const sock = io.sockets.sockets.get(sid);
-        if (sock) sock.leave(chatId);
-      });
-    }
-    res.json({ success: true });
-  } catch (err) {
-    console.error('Ошибка удаления участника:', err);
-    res.status(500).json({ error: 'Ошибка сервера' });
-  }
-});
-
-// Изменить роль участника (только creator)
-app.put('/api/chats/:chatId/participants/:targetUserId/role', (req, res) => {
-  const { chatId, targetUserId } = req.params;
-  const { role, adminId } = req.body;
-  if (!adminId || !role) return res.status(400).json({ error: 'adminId и role обязательны' });
-
-  if (!['member', 'admin', 'creator'].includes(role)) return res.status(400).json({ error: 'Недопустимая роль' });
-
-  const adminRole = db.prepare('SELECT role FROM chat_participants WHERE chat_id = ? AND user_id = ?').get(chatId, adminId);
-  if (!adminRole) return res.status(403).json({ error: 'Недостаточно прав' });
-
-  // Только creator может назначать admin и передавать creator
-  if (adminRole.role !== 'creator') return res.status(403).json({ error: 'Только создатель может менять роли' });
-
-  const target = db.prepare('SELECT id, username FROM users WHERE id = ?').get(targetUserId);
-  if (!target) return res.status(404).json({ error: 'Пользователь не найден' });
-
-  try {
-    if (role === 'creator') {
-      // Передача прав: текущий creator становится admin, target становится creator
-      db.run('UPDATE chat_participants SET role = ? WHERE chat_id = ? AND user_id = ?', ['admin', chatId, adminId]);
-      db.run('UPDATE chat_participants SET role = ? WHERE chat_id = ? AND user_id = ?', ['creator', chatId, targetUserId]);
-    } else {
-      db.run('UPDATE chat_participants SET role = ? WHERE chat_id = ? AND user_id = ?', [role, chatId, targetUserId]);
-    }
-    const updatedChat = getChatWithDetails(chatId);
-    io.to(chatId).emit('chat_participants_updated', { chatId, chat: updatedChat, action: 'role', userId: targetUserId, username: target.username, role, byUserId: adminId });
-    res.json({ success: true });
-  } catch (err) {
-    console.error('Ошибка изменения роли:', err);
-    res.status(500).json({ error: 'Ошибка сервера' });
-  }
-});
-
 // API для загрузки аватара
 app.post('/api/upload-avatar', upload.single('avatar'), (req, res) => {
   const { userId } = req.body;
@@ -2647,17 +2512,9 @@ app.post('/upload', upload.single('file'), (req, res) => {
     return res.status(507).json({ error: 'Недостаточно места на диске' });
   }
 
-  // multer может испортить UTF-8 имена — пробуем восстановить
-  let fileName = req.file.originalname;
-  try {
-    // escape() кодирует Latin-1 байты как %XX, decodeURIComponent декодирует их как UTF-8
-    // Если строка уже корректный UTF-8 — escape выдаст %uXXXX, decodeURIComponent кинет ошибку
-    fileName = decodeURIComponent(escape(fileName));
-  } catch (_) {}
-
   const fileUrl = `${SERVER_URL}/uploads/${req.file.filename}`;
   res.json({
-    filename: fileName,
+    filename: req.file.originalname,
     url: fileUrl,
     size: req.file.size,
     mimetype: req.file.mimetype
@@ -2790,17 +2647,12 @@ app.get('/api/meeting-room/bookings', (req, res) => {
 
   const bookings = db.prepare(query).all(params);
 
-  const parsedBookings = bookings.map(b => ({
-    ...b,
-    participants: b.participants ? JSON.parse(b.participants) : []
-  }));
-
-  res.json({ bookings: parsedBookings });
+  res.json({ bookings });
 });
 
 // Создать бронирование переговорной
 app.post('/api/meeting-room/bookings', (req, res) => {
-  const { organizerId, organizerName, title, description, meetingDate, startTime, endTime, participants, reminderMinutes } = req.body;
+  const { organizerId, organizerName, title, description, meetingDate, startTime, endTime } = req.body;
 
   if (!organizerId || !title || !meetingDate || !startTime || !endTime) {
     return res.status(400).json({ error: 'organizerId, title, meetingDate, startTime и endTime обязательны' });
@@ -2829,21 +2681,15 @@ app.post('/api/meeting-room/bookings', (req, res) => {
     return res.status(409).json({ error: 'Это время уже забронировано' });
   }
 
-  const participantsJson = JSON.stringify(participants || []);
-
   try {
     const insertResult = db.run(`
-      INSERT INTO meeting_room_bookings (organizer_id, organizer_name, title, description, meeting_date, start_time, end_time, participants, reminder_minutes)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [organizerId, organizerName || 'Аноним', title, description || null, meetingDate, startTime, endTime, participantsJson, reminderMinutes || null]);
+      INSERT INTO meeting_room_bookings (organizer_id, organizer_name, title, description, meeting_date, start_time, end_time)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `, [organizerId, organizerName || 'Аноним', title, description || null, meetingDate, startTime, endTime]);
     
     const newId = insertResult.lastInsertRowid;
     
     const newBooking = db.prepare('SELECT * FROM meeting_room_bookings WHERE id = ?').get(newId);
-
-    if (newBooking && reminderMinutes) {
-      scheduleMeetingReminder(newBooking);
-    }
     
     res.json({ 
       success: true, 
@@ -2855,9 +2701,7 @@ app.post('/api/meeting-room/bookings', (req, res) => {
         start_time: newBooking.start_time,
         end_time: newBooking.end_time,
         organizer_id: newBooking.organizer_id,
-        organizer_name: newBooking.organizer_name,
-        participants: newBooking.participants ? JSON.parse(newBooking.participants) : [],
-        reminder_minutes: newBooking.reminder_minutes
+        organizer_name: newBooking.organizer_name
       } : null
     });
   } catch (err) {
@@ -2876,13 +2720,6 @@ app.delete('/api/meeting-room/bookings/:id', (req, res) => {
   }
 
   try {
-    // Отменяем запланированное напоминание
-    const existing = pendingMeetingReminders.get(id);
-    if (existing) {
-      clearTimeout(existing);
-      pendingMeetingReminders.delete(id);
-    }
-
     db.run(`DELETE FROM meeting_room_bookings WHERE id = ?`, [id]);
 
     res.json({ success: true });
@@ -2895,7 +2732,7 @@ app.delete('/api/meeting-room/bookings/:id', (req, res) => {
 // Обновить бронирование
 app.put('/api/meeting-room/bookings/:id', (req, res) => {
   const { id } = req.params;
-  const { title, description, meetingDate, startTime, endTime, participants, reminderMinutes } = req.body;
+  const { title, description, meetingDate, startTime, endTime } = req.body;
   const organizerId = req.body.organizerId || req.query.organizerId;
 
   if (!title || !meetingDate || !startTime || !endTime) {
@@ -2927,28 +2764,14 @@ app.put('/api/meeting-room/bookings/:id', (req, res) => {
     return res.status(409).json({ error: 'Это время уже забронировано' });
   }
 
-  const participantsJson = JSON.stringify(participants || []);
-
   try {
     db.run(`
       UPDATE meeting_room_bookings 
-      SET title = ?, description = ?, meeting_date = ?, start_time = ?, end_time = ?, participants = ?, reminder_minutes = ?
+      SET title = ?, description = ?, meeting_date = ?, start_time = ?, end_time = ?
       WHERE id = ?
-    `, [title, description || null, meetingDate, startTime, endTime, participantsJson, reminderMinutes || null, id]);
+    `, [title, description || null, meetingDate, startTime, endTime, id]);
     
     const updatedBooking = db.prepare('SELECT * FROM meeting_room_bookings WHERE id = ?').get(id);
-
-    if (updatedBooking) {
-      // Отменяем старый таймер и устанавливаем новый, если нужно
-      const existing = pendingMeetingReminders.get(id);
-      if (existing) {
-        clearTimeout(existing);
-        pendingMeetingReminders.delete(id);
-      }
-      if (reminderMinutes) {
-        scheduleMeetingReminder(updatedBooking);
-      }
-    }
     
     res.json({ 
       success: true, 
@@ -2960,9 +2783,7 @@ app.put('/api/meeting-room/bookings/:id', (req, res) => {
         start_time: updatedBooking.start_time,
         end_time: updatedBooking.end_time,
         organizer_id: updatedBooking.organizer_id,
-        organizer_name: updatedBooking.organizer_name,
-        participants: updatedBooking.participants ? JSON.parse(updatedBooking.participants) : [],
-        reminder_minutes: updatedBooking.reminder_minutes
+        organizer_name: updatedBooking.organizer_name
       } : null
     });
   } catch (err) {
@@ -5072,7 +4893,7 @@ function getChatWithDetails(chatId, userId = null) {
 
   // Получаем участников с полными данными
   const participantsRows = db.prepare(`
-    SELECT u.id, u.username, u.avatar, u.status, u.status_text, cp.role
+    SELECT u.id, u.username, u.avatar, u.status, u.status_text
     FROM users u
     JOIN chat_participants cp ON u.id = cp.user_id
     WHERE cp.chat_id = ?
@@ -5082,8 +4903,7 @@ function getChatWithDetails(chatId, userId = null) {
     username: String(row.username || ''),
     avatar: String(row.avatar || ''),
     status: String(row.status || 'offline'),
-    status_text: row.status_text || '',
-    role: String(row.role || 'member')
+    status_text: row.status_text || ''
   }));
 
   // Получаем непрочитанные
@@ -5293,17 +5113,17 @@ function getAllUsers() {
 // ============================================
 const { initBotEngine } = require('./bot/engine');
 const { handleTodayCommand, handleContactsCommand } = require('./bot/commands');
-const aiModule = require('./bot/ai');
 const { processConversationState, isDialogStartCommand, startConversation, clearConversation } = require('./bot/state');
 
 // Инициализация движка бота (после определения db, uuidv4, encryptText)
 let bot; // будет инициализирован ниже после определения send_message handler
 
 // ============================================
-// Функция для получения ответа бота
-async function getBotResponse(message, options = {}) {
+// Функция для получения ответа бота (ПОЛНОСТЬЮ КНОПОЧНАЯ)
+function getBotResponse(message) {
   if (!bot) return { text: '🤖 Бот ещё не инициализирован.', buttons: [] };
-  return bot.getBotResponse(message, options);
+  // getBotResponse делегируется через bot.getBotResponse() в send_message handler
+  return bot.getBotResponse(message);
 }
 
 // Отправка сообщения от имени помощника (ОБНОВЛЁННАЯ — с сохранением кнопок в БД)
@@ -5751,12 +5571,12 @@ io.on('connection', (socket) => {
         VALUES (?, 'group', ?, ?)
       `, [chatId, name || 'Групповой чат', onlineUser.id]);
 
-      db.run('INSERT INTO chat_participants (chat_id, user_id, role) VALUES (?, ?, ?)', [chatId, onlineUser.id, 'creator']);
+      db.run('INSERT INTO chat_participants (chat_id, user_id) VALUES (?, ?)', [chatId, onlineUser.id]);
 
       participants.forEach((pUsername) => {
         const pUser = getUserByUsername(pUsername);
         if (pUser) {
-          db.run('INSERT INTO chat_participants (chat_id, user_id, role) VALUES (?, ?, ?)', [chatId, pUser.id, 'member']);
+          db.run('INSERT INTO chat_participants (chat_id, user_id) VALUES (?, ?)', [chatId, pUser.id]);
         }
       });
 
@@ -5822,7 +5642,7 @@ io.on('connection', (socket) => {
   }
 
   // Отправка сообщения
-  socket.on('send_message', async (data) => {
+  socket.on('send_message', (data) => {
     if (!checkWsRateLimit(socket.id)) {
       socket.emit('error', { message: 'Слишком много запросов. Подождите.' });
       return;
@@ -6150,34 +5970,12 @@ io.on('connection', (socket) => {
         return;
       }
 
-      // Обычные команды через базу знаний (с AI fallback)
-      const aiEnabled = getBotSetting('ai_enabled');
+      // Обычные команды через базу знаний
+      const botResponse = getBotResponse(text);
 
-      // Собираем историю для AI контекста
-      if (!aiHistory.has(chatId)) {
-        aiHistory.set(chatId, []);
-      }
-      const chatHistory = aiHistory.get(chatId);
-
-      const botResponse = await getBotResponse(text, {
-        aiFallback: aiEnabled ? (msg, history) => aiModule.getAiResponse(msg, history) : null,
-        history: chatHistory
-      });
-
-      // Сохраняем в историю
-      chatHistory.push({ role: 'user', text: text });
-      if (botResponse.fromAi) {
-        chatHistory.push({ role: 'assistant', text: botResponse.text });
-      }
-      // Ограничиваем историю 20 сообщениями
-      if (chatHistory.length > 20) {
-        chatHistory.splice(0, chatHistory.length - 20);
-      }
-
-      // Аналитика
-      if (botResponse.fromAi) {
-        botAnalytics.recordCommand('/ai');
-      } else if (botResponse.isFallback) {
+      // Аналитика: если это fallback (ответ по умолчанию) — записываем фразу
+      const isFallback = botResponse.text.includes('Я вас не совсем понял');
+      if (isFallback) {
         botAnalytics.recordFallback(text);
       } else {
         botAnalytics.recordCommand(command);
@@ -6186,7 +5984,7 @@ io.on('connection', (socket) => {
       // Показываем индикатор печати бота
       socket.emit('bot_typing', { chatId, isTyping: true });
 
-      // Отправляем ответ
+      // Отправляем ответ с небольшой задержкой для естественности
       setTimeout(() => {
         socket.emit('bot_typing', { chatId, isTyping: false });
         sendBotMessage(socket, chatId, botResponse.text, botResponse.buttons || []);
@@ -6694,14 +6492,13 @@ io.on('connection', (socket) => {
     }
 
     try {
-      // Проверяем, существует ли сообщение и получаем chat_id + sender_id
-      const messageRow = db.prepare('SELECT id, chat_id, sender_id FROM messages WHERE id = ?').get(messageId);
+      // Проверяем, существует ли сообщение и получаем chat_id
+      const messageRow = db.prepare('SELECT id, chat_id FROM messages WHERE id = ?').get(messageId);
       if (!messageRow) {
         return;
       }
 
       const chatId = messageRow.chat_id;
-      const messageAuthorId = messageRow.sender_id;
 
       if (!chatId) {
         return;
@@ -6727,30 +6524,6 @@ io.on('connection', (socket) => {
         username: onlineUser.username,
         avatar: onlineUser.avatar
       });
-
-      // Уведомляем автора сообщения о реакции (если это не его собственная реакция)
-      if (messageAuthorId && messageAuthorId !== onlineUser.id) {
-        const authorSockets = getUserSockets(messageAuthorId);
-        const notificationData = {
-          messageId,
-          emoji,
-          userId: onlineUser.id,
-          username: onlineUser.username,
-          avatar: onlineUser.avatar,
-          chatId
-        };
-        authorSockets.forEach(sid => io.to(sid).emit('reaction_notification', notificationData));
-
-        // Также отправляем push-уведомление, если автор офлайн
-        const onlineUserIds = new Set(Array.from(onlineUsers.values()).map(u => u.id));
-        if (!onlineUserIds.has(messageAuthorId)) {
-          sendPushNotification(messageAuthorId, 'Новая реакция',
-            `${onlineUser.username}反应了 ${emoji}`,
-            onlineUser.avatar || '', { chatId, messageId });
-          sendFcmNotification(messageAuthorId, 'Новая реакция',
-            `${onlineUser.username}: ${emoji}`, { chatId, messageId });
-        }
-      }
 
     } catch (err) {
       console.error('Ошибка при добавлении реакции:', err);
@@ -6954,8 +6727,6 @@ io.on('connection', (socket) => {
 
 // Map: taskId -> timeoutId для отмены при удалении/редактировании
 const pendingReminders = new Map();
-// Map: bookingId -> timeoutId для отмены напоминаний о бронировании
-const pendingMeetingReminders = new Map();
 
 /**
  * Отправить напоминание пользователю через бота «Помощник»
@@ -7071,117 +6842,6 @@ function restorePendingReminders() {
 
 // Запускаем восстановление напоминаний после старта сервера
 setTimeout(restorePendingReminders, 8000);
-
-// ============================================
-// Meeting Room Reminder Functions
-// ============================================
-
-function sendMeetingReminder(booking) {
-  try {
-    const participants = JSON.parse(booking.participants || '[]');
-    const organizerId = booking.organizer_id;
-    const organizerName = booking.organizer_name;
-    const title = booking.title;
-    const meetingDate = booking.meeting_date;
-    const startTime = booking.start_time;
-    const endTime = booking.end_time;
-
-    const reminderText = `🏢 *Напоминание о встрече:*\n\n📌 **${title}**\n📅 ${meetingDate}\n⏰ ${startTime} — ${endTime}\n👤 Организатор: ${organizerName}\n\n💡 Не забудьте подготовиться!`;
-
-    const botResult = db.prepare("SELECT id FROM users WHERE username = 'Помощник'").get();
-    if (!botResult) return;
-    const botId = botResult.id;
-
-    // Отправляем организатору
-    if (organizerId) {
-      const botChatId = `bot-chat-${organizerId}`;
-      const messageId = uuidv4();
-      const encryptedText = encryptText(reminderText);
-      db.run(`INSERT INTO messages (id, chat_id, sender_id, text, timestamp) VALUES (?, ?, ?, ?, ?)`,
-        [messageId, botChatId, botId, encryptedText, new Date().toISOString()]);
-      const socketItem = Array.from(onlineUsers.entries()).find(([sid, u]) => u.id === organizerId);
-      if (socketItem) {
-        const userSocket = io.sockets.sockets.get(socketItem[0]);
-        if (userSocket) {
-          userSocket.emit('new_message', {
-            message: {
-              id: messageId, chatId: botChatId, senderId: botId,
-              senderName: 'Помощник',
-              senderAvatar: 'https://ui-avatars.com/api/?name=🤖+Бот&background=667eea&color=fff',
-              text: reminderText, timestamp: new Date().toISOString(), isBotMessage: true,
-              buttons: [{ label: '📅 Календарь', action: '/календарь' }]
-            },
-            chat: { id: botChatId }
-          });
-        }
-      }
-    }
-
-    // Отправляем участникам
-    if (participants.length > 0) {
-      participants.forEach(pid => {
-        if (pid === organizerId) return;
-        const botChatId = `bot-chat-${pid}`;
-        const messageId = uuidv4();
-        const encryptedText = encryptText(reminderText);
-        db.run(`INSERT INTO messages (id, chat_id, sender_id, text, timestamp) VALUES (?, ?, ?, ?, ?)`,
-          [messageId, botChatId, botId, encryptedText, new Date().toISOString()]);
-        const socketItem = Array.from(onlineUsers.entries()).find(([sid, u]) => u.id === pid);
-        if (socketItem) {
-          const userSocket = io.sockets.sockets.get(socketItem[0]);
-          if (userSocket) {
-            userSocket.emit('new_message', {
-              message: {
-                id: messageId, chatId: botChatId, senderId: botId,
-                senderName: 'Помощник',
-                senderAvatar: 'https://ui-avatars.com/api/?name=🤖+Бот&background=667eea&color=fff',
-                text: reminderText, timestamp: new Date().toISOString(), isBotMessage: true,
-                buttons: [{ label: '📅 Календарь', action: '/календарь' }]
-              },
-              chat: { id: botChatId }
-            });
-          }
-        }
-      });
-    }
-  } catch (err) {
-    console.error('Ошибка отправки напоминания о встрече:', err);
-  }
-}
-
-function scheduleMeetingReminder(booking) {
-  const existing = pendingMeetingReminders.get(booking.id);
-  if (existing) {
-    clearTimeout(existing);
-    pendingMeetingReminders.delete(booking.id);
-  }
-  if (!booking.reminder_minutes) return;
-  const meetingDateTime = new Date(`${booking.meeting_date}T${booking.start_time}`);
-  const remindAt = meetingDateTime.getTime() - (booking.reminder_minutes * 60 * 1000);
-  const now = Date.now();
-  if (remindAt <= now) return;
-  const delay = remindAt - now;
-  pendingMeetingReminders.set(booking.id, setTimeout(() => {
-    sendMeetingReminder(booking);
-    pendingMeetingReminders.delete(booking.id);
-  }, delay));
-}
-
-function restorePendingMeetingReminders() {
-  try {
-    const rows = db.prepare(`
-      SELECT * FROM meeting_room_bookings
-      WHERE reminder_minutes IS NOT NULL AND meeting_date || 'T' || start_time > datetime('now')
-    `).all();
-    rows.forEach(row => scheduleMeetingReminder(row));
-  } catch (err) {
-    if (!err.message.includes('no such column')) {
-      console.error('Ошибка восстановления напоминаний о встречах:', err);
-    }
-  }
-}
-
-setTimeout(restorePendingMeetingReminders, 9000);
 
 /**
  * Планировщик уведомлений о днях рождения

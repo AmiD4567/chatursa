@@ -188,12 +188,9 @@ function initBotEngine({ db, io, uuidv4, encryptText }) {
   /**
    * Получение ответа бота на сообщение пользователя.
    * @param {string} message - текст сообщения
-   * @param {Object} [options] - опциональные параметры
-   * @param {Function} [options.aiFallback] - async функция для AI fallback (message, history) => { text, buttons } | null
-   * @param {Array} [options.history] - история сообщений [{role, text}]
-   * @returns {Object} { text, buttons, steps, isFallback }
+   * @returns {Object} { text, buttons, steps }
    */
-  async function getBotResponse(message, options = {}) {
+  function getBotResponse(message) {
     const text = message.trim().toLowerCase();
 
     // Проверка команд (с / или без)
@@ -206,8 +203,7 @@ function initBotEngine({ db, io, uuidv4, encryptText }) {
         return {
           text: cmd.text,
           buttons: cmd.buttons || [],
-          steps: cmd.steps || null,
-          isFallback: false
+          steps: cmd.steps || null
         };
       }
     }
@@ -221,7 +217,7 @@ function initBotEngine({ db, io, uuidv4, encryptText }) {
         if (text.includes(keyword)) {
           const cmd = knowledge.commands[command];
           if (cmd) {
-            return { text: cmd.text, buttons: cmd.buttons || [], steps: cmd.steps || null, isFallback: false };
+            return { text: cmd.text, buttons: cmd.buttons || [], steps: cmd.steps || null };
           }
         }
       }
@@ -234,7 +230,7 @@ function initBotEngine({ db, io, uuidv4, encryptText }) {
           if (word.startsWith(keyword)) {
             const cmd = knowledge.commands[command];
             if (cmd) {
-              return { text: cmd.text, buttons: cmd.buttons || [], steps: cmd.steps || null, isFallback: false };
+              return { text: cmd.text, buttons: cmd.buttons || [], steps: cmd.steps || null };
             }
           }
         }
@@ -245,22 +241,9 @@ function initBotEngine({ db, io, uuidv4, encryptText }) {
     for (const [keyword, response] of Object.entries(knowledge.responses)) {
       if (text.includes(keyword)) {
         if (typeof response === 'object') {
-          return { ...response, isFallback: false };
+          return response;
         }
-        return { text: response, buttons: [], isFallback: false };
-      }
-    }
-
-    // AI fallback
-    if (options.aiFallback) {
-      try {
-        let history = options.history || [];
-        const aiResult = await options.aiFallback(message, history);
-        if (aiResult && aiResult.text) {
-          return { text: aiResult.text, buttons: aiResult.buttons || [], isFallback: true, fromAi: true };
-        }
-      } catch (e) {
-        console.error('AI fallback error:', e);
+        return { text: response, buttons: [] };
       }
     }
 
@@ -275,9 +258,7 @@ function initBotEngine({ db, io, uuidv4, encryptText }) {
         { label: '📞 Контакты', action: '/контакты' },
         { label: '❓ Помощь', action: '/помощь' }
       ],
-      steps: null,
-      isFallback: true,
-      fromAi: false
+      steps: null
     };
   };
 

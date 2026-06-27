@@ -154,52 +154,6 @@
   border-top-color: rgba(102, 126, 234, 0.2);
 }
 
-[data-theme="dark"] .booking-participants {
-  color: #aaa;
-}
-
-[data-theme="dark"] .booking-participant-tag {
-  background: rgba(102, 126, 234, 0.2);
-  color: #8ab4f8;
-}
-
-[data-theme="dark"] .booking-reminder-badge {
-  color: #f0ad4e;
-}
-
-[data-theme="dark"] .participant-search-input {
-  background: #2d2d3a;
-  border-color: #444;
-  color: #e0e0e0;
-}
-
-[data-theme="dark"] .participant-search-input:focus {
-  border-color: #667eea;
-}
-
-[data-theme="dark"] .participant-list {
-  background: #2d2d3a;
-  border-color: #444;
-}
-
-[data-theme="dark"] .participant-item:hover {
-  background: #3a3a4a;
-}
-
-[data-theme="dark"] .participant-item.selected {
-  background: rgba(102, 126, 234, 0.25);
-  color: #8ab4f8;
-}
-
-[data-theme="dark"] .participant-check {
-  color: #8ab4f8;
-}
-
-[data-theme="dark"] .selected-tag {
-  background: rgba(102, 126, 234, 0.2);
-  color: #8ab4f8;
-}
-
 /* Status Picker Theme */
 [data-theme="dark"] .status-preview-card {
   background: linear-gradient(135deg, rgba(102, 126, 234, 0.12) 0%, rgba(118, 75, 162, 0.12) 100%);

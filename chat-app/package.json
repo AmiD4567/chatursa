@@ -1,7 +1,6 @@
 {
   "name": "chat-app",
-  "productName": "ChatApp",
-  "version": "1.0.160",
+  "version": "1.0.156",
   "description": "Корпоративный мессенджер",
   "main": "electron/main.js",
   "scripts": {
@@ -17,7 +16,6 @@
     "start": "concurrently \"npm run server\" \"npm run client\""
   },
   "build": {
-    "productName": "ChatApp",
     "appId": "com.pantyuhov.chat",
     "asar": false,
     "directories": {
@@ -32,6 +30,10 @@
     ],
     "extraResources": [
       {
+        "filter": [
+          "**/*",
+          "!node_modules/sqlite3/**/*"
+        ],
         "from": "backend",
         "to": "app/backend"
       },
@@ -49,6 +51,7 @@
     ],
     "files": [
       "electron/**/*",
+      "backend/**/*",
       "frontend/build/**/*",
       "uploads/**/*"
     ],
@@ -59,7 +62,7 @@
       "oneClick": false,
       "perMachine": false,
       "runAfterFinish": true,
-      "shortcutName": "ChatApp",
+      "shortcutName": "Chat App",
       "upgradeCode": "{8F3B5A7C-9D2E-4F1A-B6C3-5E8D7A9F2B4C}"
     },
     "nsis": {
@@ -73,10 +76,10 @@
       "oneClick": false,
       "perMachine": false,
       "runAfterFinish": true,
-      "shortcutName": "ChatApp",
+      "shortcutName": "Chat App",
       "uninstallerIcon": "electron/icon.ico"
     },
-    "productName": "ChatApp",
+    "productName": "Chat App",
     "publish": {
       "owner": "AmiD4567",
       "private": false,
