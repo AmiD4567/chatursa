@@ -157,6 +157,11 @@ function logEnqueue(level, ...args) {
   // Обычные логи — в очередь
   logQueue.push(line);
 
+  // Защита от переполнения очереди
+  if (logQueue.length > 10000) {
+    logQueue.splice(0, 5000);
+  }
+
   // Если таймер ещё не запущен — запускаем debounce
   if (!logFlushTimer) {
     logFlushTimer = setTimeout(() => {
@@ -829,6 +834,15 @@ function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
     CREATE INDEX IF NOT EXISTS idx_sessions_user ON user_sessions(user_id);
     CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON security_logs(timestamp);
+    CREATE INDEX IF NOT EXISTS idx_messages_read_at ON messages(read_at);
+    CREATE TABLE IF NOT EXISTS message_reads (
+      message_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      read_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (message_id, user_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_message_reads_message ON message_reads(message_id);
+    CREATE INDEX IF NOT EXISTS idx_message_reads_user ON message_reads(user_id);
   `);
 
   // Проверка и создание общего чата
@@ -2337,6 +2351,127 @@ app.delete('/api/chats/:chatId', (req, res) => {
   }
 });
 
+// Выход из группового чата
+app.post('/api/chats/:chatId/leave', (req, res) => {
+  const { chatId } = req.params;
+  const { userId } = req.body;
+
+  if (!chatId || !userId) {
+    return res.status(400).json({ error: 'chatId и userId обязательны' });
+  }
+
+  try {
+    const chat = getChatById(chatId);
+    if (!chat || chat.type !== 'group') {
+      return res.status(400).json({ error: 'Чат не найден или это не группа' });
+    }
+
+    db.run('DELETE FROM chat_participants WHERE chat_id = ? AND user_id = ?', [chatId, userId]);
+    db.run('DELETE FROM unread_messages WHERE chat_id = ? AND user_id = ?', [chatId, userId]);
+
+    // Уведомляем остальных участников
+    const chatWithDetails = getChatWithDetails(chatId);
+    if (chatWithDetails) {
+      chatWithDetails.participantsDetails.forEach(p => {
+        emitToUser(p.id, 'participant_left', { chatId, userId });
+      });
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Ошибка выхода из чата:', err);
+    res.status(500).json({ error: 'Ошибка сервера' });
+  }
+});
+
+// Добавление участника в группу (только создатель)
+app.post('/api/chats/:chatId/participants', (req, res) => {
+  const { chatId } = req.params;
+  const { userId, requesterId } = req.body;
+
+  if (!chatId || !userId || !requesterId) {
+    return res.status(400).json({ error: 'chatId, userId и requesterId обязательны' });
+  }
+
+  try {
+    const chat = getChatById(chatId);
+    if (!chat || chat.type !== 'group') {
+      return res.status(400).json({ error: 'Чат не найден или это не группа' });
+    }
+
+    if (chat.created_by !== requesterId) {
+      return res.status(403).json({ error: 'Только создатель группы может добавлять участников' });
+    }
+
+    const existing = db.prepare('SELECT * FROM chat_participants WHERE chat_id = ? AND user_id = ?').get(chatId, userId);
+    if (existing) {
+      return res.status(400).json({ error: 'Пользователь уже в чате' });
+    }
+
+    db.run('INSERT INTO chat_participants (chat_id, user_id) VALUES (?, ?)', [chatId, userId]);
+
+    // Уведомляем нового участника
+    const chatWithDetails = getChatWithDetails(chatId);
+    emitToUser(userId, 'chat_created', { chat: chatWithDetails });
+
+    // Уведомляем остальных
+    chatWithDetails.participantsDetails.forEach(p => {
+      if (p.id !== userId) {
+        emitToUser(p.id, 'participant_added', { chatId, userId });
+      }
+    });
+
+    res.json({ success: true, chat: chatWithDetails });
+  } catch (err) {
+    console.error('Ошибка добавления участника:', err);
+    res.status(500).json({ error: 'Ошибка сервера' });
+  }
+});
+
+// Удаление участника из группы (только создатель)
+app.delete('/api/chats/:chatId/participants/:targetUserId', (req, res) => {
+  const { chatId, targetUserId } = req.params;
+  const { requesterId } = req.body;
+
+  if (!chatId || !targetUserId || !requesterId) {
+    return res.status(400).json({ error: 'chatId, targetUserId и requesterId обязательны' });
+  }
+
+  try {
+    const chat = getChatById(chatId);
+    if (!chat || chat.type !== 'group') {
+      return res.status(400).json({ error: 'Чат не найден или это не группа' });
+    }
+
+    if (chat.created_by !== requesterId) {
+      return res.status(403).json({ error: 'Только создатель группы может удалять участников' });
+    }
+
+    if (targetUserId === requesterId) {
+      return res.status(400).json({ error: 'Нельзя удалить себя. Используйте выход из группы.' });
+    }
+
+    db.run('DELETE FROM chat_participants WHERE chat_id = ? AND user_id = ?', [chatId, targetUserId]);
+    db.run('DELETE FROM unread_messages WHERE chat_id = ? AND user_id = ?', [chatId, targetUserId]);
+
+    // Уведомляем удалённого участника
+    emitToUser(targetUserId, 'removed_from_chat', { chatId });
+
+    // Уведомляем остальных
+    const chatWithDetails = getChatWithDetails(chatId);
+    if (chatWithDetails) {
+      chatWithDetails.participantsDetails.forEach(p => {
+        emitToUser(p.id, 'participant_left', { chatId, userId: targetUserId });
+      });
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Ошибка удаления участника:', err);
+    res.status(500).json({ error: 'Ошибка сервера' });
+  }
+});
+
 // API для загрузки аватара
 app.post('/api/upload-avatar', upload.single('avatar'), (req, res) => {
   const { userId } = req.body;
@@ -2538,28 +2673,23 @@ function trimFilenameCache() {
 }
 
 function findOriginalFilenameByUuid(uuid) {
-  // Проверяем кэш
   if (filenameCache.has(uuid)) return filenameCache.get(uuid);
 
   try {
-    const fileDataRows = db.prepare('SELECT file_data FROM messages WHERE file_data IS NOT NULL').all();
-    for (const row of fileDataRows) {
-      const fd = row.file_data;
-      if (fd && typeof fd === 'string') {
-        try {
-          const parsed = JSON.parse(fd);
-          if (parsed && parsed.url) {
-            const urlFilename = parsed.url.split('/').pop();
-            if (urlFilename === uuid) {
-              trimFilenameCache();
-              filenameCache.set(uuid, parsed.filename);
-              return parsed.filename;
-            }
-          }
-        } catch (e) {
-          // skip invalid JSON
+    const searchPattern = `%"url":"${uuid.replace(/"/g, '""')}"%`;
+    const row = db.prepare(
+      "SELECT file_data FROM messages WHERE file_data LIKE ? LIMIT 1"
+    ).get(searchPattern);
+
+    if (row) {
+      try {
+        const parsed = JSON.parse(row.file_data);
+        if (parsed && parsed.filename) {
+          trimFilenameCache();
+          filenameCache.set(uuid, parsed.filename);
+          return parsed.filename;
         }
-      }
+      } catch (e) { /* skip invalid JSON */ }
     }
   } catch (err) {
     console.error('Ошибка поиска оригинального имени файла:', err);
@@ -3332,9 +3462,27 @@ app.get('/api/messages/:chatId', (req, res) => {
   }
 });
 
+// API: кто прочитал сообщение
+app.get('/api/messages/:messageId/read-by', (req, res) => {
+  const { messageId } = req.params;
+  try {
+    const readers = db.prepare(`
+      SELECT mr.user_id, u.username, u.avatar, mr.read_at
+      FROM message_reads mr
+      JOIN users u ON u.id = mr.user_id
+      WHERE mr.message_id = ?
+      ORDER BY mr.read_at ASC
+    `).all(messageId);
+    res.json({ readers });
+  } catch (err) {
+    console.error('Ошибка получения читателей:', err);
+    res.status(500).json({ error: 'Ошибка сервера' });
+  }
+});
+
 // API для поиска сообщений
 app.get('/api/search/messages', (req, res) => {
-  const { userId, query } = req.query;
+  const { userId, query, chatId } = req.query;
   if (!userId || !query || !query.trim()) {
     return res.status(400).json({ error: 'userId и query обязательны' });
   }
@@ -3343,7 +3491,7 @@ app.get('/api/search/messages', (req, res) => {
     const searchLower = query.trim().toLowerCase();
 
     // Загружаем сообщения из чатов пользователя (без LIKE — текст зашифрован)
-    const rows = db.prepare(`
+    let sql = `
       SELECT m.id, m.chat_id, m.sender_id, m.text, m.file_data, m.reply_to, m.timestamp, m.read_at,
              m.e2ee, m.e2ee_nonce, m.e2ee_ephemeral, m.poll_id,
              u.username as senderName, u.avatar as senderAvatar,
@@ -3354,9 +3502,17 @@ app.get('/api/search/messages', (req, res) => {
       WHERE m.chat_id IN (
         SELECT chat_id FROM chat_participants WHERE user_id = ?
       )
-      ORDER BY m.timestamp DESC
-      LIMIT 500
-    `).all(userId);
+    `;
+    const params = [userId];
+
+    if (chatId) {
+      sql += ` AND m.chat_id = ?`;
+      params.push(chatId);
+    }
+
+    sql += ` ORDER BY m.timestamp DESC LIMIT 500`;
+
+    const rows = db.prepare(sql).all(...params);
 
     // Расшифровываем и фильтруем на уровне JS
     const messages = rows
@@ -3758,6 +3914,16 @@ function fetchHtml(url, timeoutMs = 5000) {
 // GET /api/link-preview?url=...
 const linkPreviewCache = new Map();
 const LINK_PREVIEW_CACHE_TTL = 60 * 60 * 1000; // 1 час
+
+// Фоновая очистка просроченных записей linkPreviewCache
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, cached] of linkPreviewCache) {
+    if (now - cached.ts > LINK_PREVIEW_CACHE_TTL) {
+      linkPreviewCache.delete(key);
+    }
+  }
+}, 10 * 60 * 1000);
 
 app.get('/api/link-preview', async (req, res) => {
   const rawUrl = (req.query.url || '').trim();
@@ -4893,7 +5059,7 @@ function getChatWithDetails(chatId, userId = null) {
 
   // Получаем участников с полными данными
   const participantsRows = db.prepare(`
-    SELECT u.id, u.username, u.avatar, u.status, u.status_text
+    SELECT u.id, u.username, u.avatar, u.status, u.status_text, u.last_seen
     FROM users u
     JOIN chat_participants cp ON u.id = cp.user_id
     WHERE cp.chat_id = ?
@@ -4903,7 +5069,8 @@ function getChatWithDetails(chatId, userId = null) {
     username: String(row.username || ''),
     avatar: String(row.avatar || ''),
     status: String(row.status || 'offline'),
-    status_text: row.status_text || ''
+    status_text: row.status_text || '',
+    last_seen: row.last_seen || null
   }));
 
   // Получаем непрочитанные
@@ -4939,6 +5106,7 @@ function getChatWithDetails(chatId, userId = null) {
     type: String(chat.type || ''),
     name: String(chat.name || ''),
     avatar: chat.avatar || '',
+    created_by: chat.created_by || null,
     participants: participants.map(p => p.username),
     participantsDetails: participants,
     unreadCount,
@@ -4961,7 +5129,7 @@ function getUserChats(userId) {
   return chats.map(chat => {
     // Получаем участников с полными данными
     const participants = db.prepare(`
-      SELECT u.id, u.username, u.avatar, u.status, u.status_text, u.full_name, u.birth_date, u.position
+      SELECT u.id, u.username, u.avatar, u.status, u.status_text, u.full_name, u.birth_date, u.position, u.last_seen
       FROM users u
       JOIN chat_participants cp ON u.id = cp.user_id
       WHERE cp.chat_id = ?
@@ -5105,7 +5273,7 @@ function getChatMessages(chatId, limit = 100, userId = null) {
 }
 
 function getAllUsers() {
-  return db.prepare('SELECT id, username, avatar, status, full_name, birth_date, work_phone, mobile_phone, status_text, about FROM users').all();
+  return db.prepare('SELECT id, username, avatar, status, full_name, birth_date, work_phone, mobile_phone, status_text, about, last_seen FROM users').all();
 }
 
 // ============================================
@@ -5705,8 +5873,8 @@ io.on('connection', (socket) => {
       const expiresAtStr = expiresAt || null;
       db.run(`
         INSERT INTO messages (id, chat_id, sender_id, text, file_data, reply_to, timestamp, forwarded_from, e2ee, e2ee_nonce, e2ee_ephemeral, expires_at)
-        VALUES (?, ?, ?, ?, ${fileDataStr ? `'${fileDataStr}'` : 'NULL'}, ${replyToStr ? `'${replyToStr.replace(/'/g, "''")}'` : 'NULL'}, ?, ${forwardedFromStr ? `'${forwardedFromStr}'` : 'NULL'}, ?, ?, ?, ?)
-      `, [messageId, chatId, onlineUser.id, storedText, timestamp, storedE2EE, storedNonce, storedEphemeral, expiresAtStr]);
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [messageId, chatId, onlineUser.id, storedText, fileDataStr, replyToStr, timestamp, forwardedFromStr, storedE2EE, storedNonce, storedEphemeral, expiresAtStr]);
 
       // Помечаем активность БД — перезапускает таймер автосохранения
       markDbActivity();
@@ -5761,12 +5929,14 @@ io.on('connection', (socket) => {
         });
       });
 
-      // Добавляем непрочитанные для всех кроме отправителя
-      participants.forEach((pUserId) => {
-        if (pUserId !== onlineUser.id) {
-          db.prepare('INSERT OR IGNORE INTO unread_messages (user_id, message_id, chat_id) VALUES (?, ?, ?)').run(pUserId, messageId, chatId);
-        }
-      });
+      // Добавляем непрочитанные для всех кроме отправителя (батч)
+      const unreadValues = participants
+        .filter(pUserId => pUserId !== onlineUser.id)
+        .map(pUserId => `('${pUserId.replace(/'/g, "''")}', '${messageId}', '${chatId}')`)
+        .join(',');
+      if (unreadValues) {
+        db.run(`INSERT OR IGNORE INTO unread_messages (user_id, message_id, chat_id) VALUES ${unreadValues}`);
+      }
       markDbActivity();
 
       // Форматируем сообщение
@@ -5816,7 +5986,29 @@ io.on('connection', (socket) => {
           sendFcmNotification(pUserId, chatName, (formattedMessage.senderName || '') + ': ' + (formattedMessage.text || '📎 Файл'), { chatId, messageId, senderId: formattedMessage.senderId });
         }
       });
-    
+
+      // @mentions: уведомляем упомянутых пользователей
+      if (formattedMessage.text && !isE2EE) {
+        const mentionRegex = /@(\S+)/g;
+        let match;
+        const participantsWithUsers = db.prepare(`
+          SELECT u.id, u.username FROM chat_participants cp JOIN users u ON cp.user_id = u.id WHERE cp.chat_id = ?
+        `).all(chatId);
+        while ((match = mentionRegex.exec(formattedMessage.text)) !== null) {
+          const mentionedUsername = match[1];
+          const mentionedUser = participantsWithUsers.find(p => p.username === mentionedUsername);
+          if (mentionedUser && mentionedUser.id !== onlineUser.id) {
+            emitToUser(mentionedUser.id, 'user_mentioned', {
+              chatId,
+              messageId,
+              senderName: onlineUser.username,
+              senderAvatar: onlineUser.avatar || '',
+              text: formattedMessage.text
+            });
+          }
+        }
+      }
+      
     // ============================================
     // Обработка сообщений для бота-помощника
     // ============================================
@@ -6392,13 +6584,28 @@ io.on('connection', (socket) => {
     
     // Обновляем read_at для всех сообщений в чате от других пользователей
     const now = new Date().toISOString();
-    db.run(`
-      UPDATE messages 
-      SET read_at = ? 
-      WHERE chat_id = ? AND sender_id != ? AND read_at IS NULL
-    `, [now, chatId, onlineUser.id]);
-    
 
+    // Сначала получаем ID сообщений, которые будут отмечены как прочитанные
+    const affectedMessages = db.prepare(`
+      SELECT id, sender_id FROM messages WHERE chat_id = ? AND sender_id != ? AND read_at IS NULL
+    `).all(chatId, onlineUser.id);
+
+    if (affectedMessages.length > 0) {
+      db.run(`
+        UPDATE messages 
+        SET read_at = ? 
+        WHERE chat_id = ? AND sender_id != ? AND read_at IS NULL
+      `, [now, chatId, onlineUser.id]);
+
+      // Сохраняем факт прочтения для каждого сообщения
+      const insertRead = db.prepare('INSERT OR IGNORE INTO message_reads (message_id, user_id, read_at) VALUES (?, ?, ?)');
+      const batchInsert = db.transaction((msgs) => {
+        for (const msg of msgs) {
+          insertRead.run(msg.id, onlineUser.id, now);
+        }
+      });
+      batchInsert(affectedMessages);
+    }
 
     // Уведомляем отправителей о прочтении (все сессии)
     const senderRows = db.prepare(`
@@ -6418,6 +6625,7 @@ io.on('connection', (socket) => {
   // Отключение
   socket.on('disconnect', () => {
     wsRateMap.delete(socket.id);
+    const now = new Date().toISOString();
     const onlineUser = onlineUsers.get(socket.id);
     if (onlineUser) {
       // Удаляем из userSocketMap
@@ -6466,11 +6674,12 @@ io.on('connection', (socket) => {
       // Проверяем, есть ли у пользователя другие активные сокеты
       const remainingSockets = userSocketMap.get(onlineUser.id);
       if (!remainingSockets || remainingSockets.size === 0) {
-        db.run('UPDATE users SET status = ?, last_seen = CURRENT_TIMESTAMP WHERE id = ?', ['offline', onlineUser.id]);
+        db.run("UPDATE users SET status = 'offline', last_seen = ? WHERE id = ?", [now, onlineUser.id]);
         io.emit('user_status_changed', {
           userId: onlineUser.id,
           username: onlineUser.username,
-          status: 'offline'
+          status: 'offline',
+          last_seen: now
         });
         userActivity.delete(onlineUser.id);
       }
@@ -6942,6 +7151,16 @@ try {
   // State machine + аналитика бота
   const { BotAnalytics } = require('./bot/state');
   conversationStates = new Map();
+  // Фоновая очистка заброшенных диалогов с ботом (каждые 5 мин)
+  setInterval(() => {
+    const now = Date.now();
+    for (const [key, state] of conversationStates) {
+      const age = state.lastActivity ? now - state.lastActivity : 0;
+      if (age > 60 * 60 * 1000) {
+        conversationStates.delete(key);
+      }
+    }
+  }, 5 * 60 * 1000);
   botAnalytics = new BotAnalytics();
 
   // Инициализация бота-помощника (после того как db готов)

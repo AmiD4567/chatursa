@@ -2700,6 +2700,7 @@
   display: flex;
   flex-direction: column;
   background: var(--page-bg);
+  color: var(--page-text-primary);
   border-radius: 16px;
   margin: 16px;
   overflow: hidden;
@@ -3867,6 +3868,7 @@
 
 .admin-full-page .admin-table td {
   font-size: 13px;
+  color: var(--page-text-primary);
 }
 
 .admin-full-page .user-cell {
@@ -6213,5 +6215,73 @@
 }
 [data-theme="light"] .poll-toggle {
   color: #333;
+}
+
+/* Manage participants modal */
+.manage-participant-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 4px;
+}
+.manage-participant-row.clickable {
+  cursor: pointer;
+  border-radius: 8px;
+  padding: 8px 8px;
+}
+.manage-participant-row.clickable:hover {
+  background: var(--hover-bg, rgba(0,0,0,0.04));
+}
+.manage-participant-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.manage-participant-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+.manage-participant-name {
+  font-size: 14px;
+  color: var(--text-primary, #333);
+}
+.manage-participant-badge {
+  font-size: 11px;
+  color: #667eea;
+  font-weight: 500;
+}
+.manage-participant-remove {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: #dc3545;
+  cursor: pointer;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s;
+}
+.manage-participant-remove:hover {
+  background: #ffe6e6;
+}
+
+.modal-input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color, #e0e0e0);
+  border-radius: 8px;
+  font-size: 14px;
+  background: var(--input-bg, #fff);
+  color: var(--text-primary, #333);
+  outline: none;
+  box-sizing: border-box;
+}
+.modal-input:focus {
+  border-color: #667eea;
 }
 

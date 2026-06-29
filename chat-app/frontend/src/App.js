@@ -43,6 +43,23 @@ function formatTimeRemaining(expiresAt) {
   return `${days} д`;
 }
 
+// Форматирование времени последнего визита
+function getLastSeenText(lastSeen) {
+  if (!lastSeen) return 'Офлайн';
+  const now = Date.now();
+  const diff = now - new Date(lastSeen).getTime();
+  if (diff < 0) return 'Офлайн';
+  const secs = Math.floor(diff / 1000);
+  if (secs < 60) return 'только что';
+  const mins = Math.floor(secs / 60);
+  if (mins < 5) return `${mins} мин. назад`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours} ч. назад`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days} д. назад`;
+  return new Date(lastSeen).toLocaleDateString('ru-RU');
+}
+
 // Получить или создать идентификатор устройства (persistent в localStorage)
 function getDeviceId() {
   let deviceId = localStorage.getItem('chat_device_id');
@@ -324,6 +341,22 @@ function App() {
   const readByChatRef = useRef(new Map());
   // Версия статуса прочтения — триггерит ре-рендер при получении messages_read
   const [readStatusVersion, setReadStatusVersion] = useState(0);
+  const [readByPopup, setReadByPopup] = useState(null); // { messageId, readers: [{username, avatar}], x, y }
+
+  // Закрытие readByPopup по Escape
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key === 'Escape') setReadByPopup(null);
+    };
+    if (readByPopup) {
+      window.addEventListener('keydown', handler);
+      return () => window.removeEventListener('keydown', handler);
+    }
+  }, [readByPopup]);
+  const [showManageParticipants, setShowManageParticipants] = useState(false);
+  const [showAddParticipant, setShowAddParticipant] = useState(false);
+  const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
+  const [participantSearch, setParticipantSearch] = useState('');
   const [statusEmoji, setStatusEmoji] = useState('');
   const [statusDescription, setStatusDescription] = useState('');
   const [showStatusEmojiPicker, setShowStatusEmojiPicker] = useState(false);
@@ -338,7 +371,12 @@ function App() {
   const [searchResults, setSearchResults] = useState([]);
   const [currentSearchIndex, setCurrentSearchIndex] = useState(0);
   const [isSearching, setIsSearching] = useState(false);
+  const [chatSearchActive, setChatSearchActive] = useState(false);
+  const [chatSearchQuery, setChatSearchQuery] = useState('');
+  const [chatSearchResults, setChatSearchResults] = useState([]);
+  const [chatSearchIndex, setChatSearchIndex] = useState(-1);
   const [userSearchResults, setUserSearchResults] = useState([]);
+  const [mentionPopup, setMentionPopup] = useState({ show: false, filter: '', x: 0, y: 0 });
   const [showShareTaskModal, setShowShareTaskModal] = useState(false);
   const [taskToShare, setTaskToShare] = useState(null);
   const [availableUsers, setAvailableUsers] = useState([]);
@@ -1632,14 +1670,13 @@ function App() {
       }
     });
 
-    newSocket.on('user_status_changed', ({ userId, username, status, statusText }) => {
+    newSocket.on('user_status_changed', ({ userId, username, status, statusText, last_seen }) => {
       // Обновляем список пользователей
       setUsers(prev => prev.map(u => {
         if (u.id === userId) {
           const updated = { ...u, status };
-          if (statusText !== undefined) {
-            updated.status_text = statusText;
-          }
+          if (statusText !== undefined) updated.status_text = statusText;
+          if (last_seen !== undefined) updated.last_seen = last_seen;
           return updated;
         }
         return u;
@@ -1651,9 +1688,8 @@ function App() {
           const updatedParticipants = chat.participantsDetails.map(p => {
             if (p.id === userId) {
               const updated = { ...p, status };
-              if (statusText !== undefined) {
-                updated.status_text = statusText;
-              }
+              if (statusText !== undefined) updated.status_text = statusText;
+              if (last_seen !== undefined) updated.last_seen = last_seen;
               return updated;
             }
             return p;
@@ -1667,9 +1703,8 @@ function App() {
       if (currentUserRef.current && currentUserRef.current.id === userId) {
         setCurrentUser(prev => {
           const updated = { ...prev, status };
-          if (statusText !== undefined) {
-            updated.status_text = statusText;
-          }
+          if (statusText !== undefined) updated.status_text = statusText;
+          if (last_seen !== undefined) updated.last_seen = last_seen;
           return updated;
         });
       }
@@ -1756,6 +1791,51 @@ function App() {
           ? { ...msg, text: displayText, edited: true, editedAt }
           : msg
       ));
+    });
+
+    // Обработка событий группы
+    newSocket.on('participant_left', ({ chatId, userId }) => {
+      setChats(prev => prev.map(chat => {
+        if (chat.id !== chatId || !chat.participantsDetails) return chat;
+        return {
+          ...chat,
+          participantsDetails: chat.participantsDetails.filter(p => p.id !== userId),
+          participants: chat.participantsDetails.filter(p => p.id !== userId).map(p => p.username)
+        };
+      }));
+      setUsers(prev => prev.filter(u => u.id !== userId));
+    });
+
+    newSocket.on('participant_added', ({ chatId, userId }) => {
+      // Обновим чаты принудительно (перезагрузка списка произойдёт при следующем входе)
+      setChats(prev => prev.map(chat => {
+        if (chat.id === chatId) {
+          return { ...chat, _refresh: Date.now() };
+        }
+        return chat;
+      }));
+    });
+
+    newSocket.on('removed_from_chat', ({ chatId }) => {
+      setChats(prev => prev.filter(c => c.id !== chatId));
+      if (activeChatIdRef.current === chatId) {
+        setActiveChatId(null);
+        setMessages([]);
+      }
+    });
+
+    // Обработка @mention
+    newSocket.on('user_mentioned', ({ chatId, messageId, senderName, text }) => {
+      if (chatId === activeChatIdRef.current) {
+        // Если мы в нужном чате — подсветим сообщение
+        setTimeout(() => {
+          const el = document.getElementById(`message-${messageId}`);
+          if (el) {
+            el.classList.add('message-highlight');
+            setTimeout(() => el.classList.remove('message-highlight'), 3000);
+          }
+        }, 500);
+      }
     });
 
     // === ОБРАБОТКА ОПРОСОВ ===
@@ -3199,12 +3279,185 @@ function App() {
     setCurrentSearchIndex(0);
   };
 
+  // Per-chat search
+  const handleChatSearch = async (query) => {
+    if (!query.trim() || !activeChatId || !currentUser) {
+      setChatSearchResults([]);
+      setChatSearchIndex(-1);
+      return;
+    }
+    try {
+      const resp = await fetch(`${SOCKET_URL}/api/search/messages?userId=${currentUser.id}&chatId=${activeChatId}&query=${encodeURIComponent(query.trim())}`);
+      if (resp.ok) {
+        const data = await resp.json();
+        setChatSearchResults(data.messages || []);
+        setChatSearchIndex(data.messages?.length > 0 ? 0 : -1);
+      }
+    } catch (err) {
+      console.error('Ошибка поиска:', err);
+    }
+  };
+
+  const handleChatSearchNext = () => {
+    if (chatSearchResults.length === 0) return;
+    const next = (chatSearchIndex + 1) % chatSearchResults.length;
+    setChatSearchIndex(next);
+    scrollToSearchResult(chatSearchResults[next]);
+  };
+
+  const handleChatSearchPrev = () => {
+    if (chatSearchResults.length === 0) return;
+    const prev = (chatSearchIndex - 1 + chatSearchResults.length) % chatSearchResults.length;
+    setChatSearchIndex(prev);
+    scrollToSearchResult(chatSearchResults[prev]);
+  };
+
+  const scrollToSearchResult = (result) => {
+    if (result.chatId !== activeChatIdRef.current) return;
+    const el = document.getElementById(`message-${result.id}`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.classList.add('message-highlight');
+      setTimeout(() => el.classList.remove('message-highlight'), 2000);
+    }
+  };
+
+  const toggleChatSearch = () => {
+    setChatSearchActive(prev => !prev);
+    if (chatSearchActive) {
+      setChatSearchQuery('');
+      setChatSearchResults([]);
+      setChatSearchIndex(-1);
+    }
+  };
+
   // Проверка, есть ли контент в поле ввода (текст или эмодзи-изображения)
   const hasInputContent = () => {
     if (inputText.trim()) return true;
     // Проверяем наличие изображений (эмодзи) в contentEditable div
     if (messageInputRef.current && messageInputRef.current.querySelectorAll('img.emoji').length > 0) return true;
     return false;
+  };
+
+  // Определение контекста @mention
+  const getMentionContext = () => {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount || !messageInputRef.current || !messageInputRef.current.contains(sel.anchorNode)) {
+      return null;
+    }
+    const range = sel.getRangeAt(0);
+    const node = range.startContainer;
+    const offset = range.startOffset;
+
+    // Получаем текст от начала узла до курсора
+    let textBefore = '';
+    if (node.nodeType === Node.TEXT_NODE) {
+      textBefore = node.textContent.slice(0, offset);
+    } else {
+      textBefore = node.textContent ? node.textContent.slice(0, offset) : '';
+    }
+
+    // Ищем последний @ перед курсором
+    const atIdx = textBefore.lastIndexOf('@');
+    if (atIdx === -1) return null;
+    // Проверяем, что перед @ пробел или начало строки
+    if (atIdx > 0 && textBefore[atIdx - 1] !== ' ' && textBefore[atIdx - 1] !== '\n') return null;
+
+    const filter = textBefore.slice(atIdx + 1);
+    // Если после @ уже есть пробел — не показываем
+    if (filter.includes(' ')) return null;
+
+    // Позиция для попапа
+    let popupX = 0, popupY = 0;
+    try {
+      const caretRange = document.createRange();
+      caretRange.setStart(node, offset);
+      caretRange.setEnd(node, offset);
+      const rect = caretRange.getBoundingClientRect();
+      popupX = rect.left;
+      popupY = rect.bottom + 4;
+    } catch (e) {
+      const inputRect = messageInputRef.current.getBoundingClientRect();
+      popupX = inputRect.left;
+      popupY = inputRect.top - 200;
+    }
+
+    return { filter, x: popupX, y: popupY };
+  };
+
+  const handleMentionSelect = (username) => {
+    if (!messageInputRef.current) return;
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount) return;
+    const range = sel.getRangeAt(0);
+    const node = range.startContainer;
+    const offset = range.startOffset;
+
+    // Находим начало @фильтр
+    let text = node.textContent || '';
+    const textBefore = text.slice(0, offset);
+    const atIdx = textBefore.lastIndexOf('@');
+    if (atIdx === -1) return;
+
+    // Удаляем текст @фильтр
+    const afterText = text.slice(offset);
+    const newText = text.slice(0, atIdx);
+    node.textContent = newText + afterText;
+
+    // Создаём mention span
+    const span = document.createElement('span');
+    span.className = 'mention';
+    span.contentEditable = false;
+    span.textContent = '@' + username;
+
+    // Вставляем span на место удалённого текста
+    const textRange = document.createRange();
+    textRange.setStart(node, atIdx);
+    textRange.setEnd(node, atIdx);
+    textRange.deleteContents();
+    textRange.insertNode(span);
+
+    // Добавляем пробел после mention
+    const space = document.createTextNode('\u00A0');
+    span.parentNode.insertBefore(space, span.nextSibling);
+
+    // Ставим курсор после пробела
+    const newRange = document.createRange();
+    newRange.setStartAfter(space);
+    newRange.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(newRange);
+
+    setInputText(getMessageText());
+    setMentionPopup({ show: false, filter: '', x: 0, y: 0 });
+  };
+
+  const handleInputKeyDown = (e) => {
+    if (mentionPopup.show) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        const participants = (activeChat?.participantsDetails || []).filter(
+          p => p.id !== currentUser?.id && p.username.toLowerCase().includes(mentionPopup.filter.toLowerCase())
+        );
+        if (participants.length > 0) {
+          handleMentionSelect(participants[0].username);
+        }
+        return;
+      }
+      if (e.key === 'Escape') {
+        setMentionPopup({ show: false, filter: '', x: 0, y: 0 });
+        e.preventDefault();
+        return;
+      }
+    }
+    if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.altKey) {
+      e.preventDefault();
+      handleSendMessage(e);
+    }
   };
 
   // Получение текста сообщения (включая эмодзи из изображений)
@@ -5626,6 +5879,93 @@ function App() {
     }
   };
 
+  // Управление участниками группы
+  const handleManageParticipants = () => {
+    setShowManageParticipants(true);
+    setShowChatMenu(false);
+  };
+
+  const handleRemoveParticipant = async (targetUserId) => {
+    if (!activeChat || !currentUser) return;
+    try {
+      const resp = await fetch(`${SOCKET_URL}/api/chats/${activeChat.id}/participants/${targetUserId}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requesterId: currentUser.id })
+      });
+      if (resp.ok) {
+        setChats(prev => prev.map(chat => {
+          if (chat.id !== activeChat.id || !chat.participantsDetails) return chat;
+          return {
+            ...chat,
+            participantsDetails: chat.participantsDetails.filter(p => p.id !== targetUserId),
+            participants: chat.participantsDetails.filter(p => p.id !== targetUserId).map(p => p.username)
+          };
+        }));
+      } else {
+        const err = await resp.json();
+        alert(err.error || 'Ошибка удаления участника');
+      }
+    } catch (err) {
+      console.error('Ошибка удаления участника:', err);
+    }
+  };
+
+  // Выход из группы
+  const handleLeaveGroup = () => {
+    setShowLeaveConfirm(true);
+    setShowChatMenu(false);
+  };
+
+  const confirmLeaveGroup = async () => {
+    if (!activeChat || !currentUser) return;
+    try {
+      const resp = await fetch(`${SOCKET_URL}/api/chats/${activeChat.id}/leave`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: currentUser.id })
+      });
+      if (resp.ok) {
+        setChats(prev => prev.filter(c => c.id !== activeChat.id));
+        setActiveChatId(null);
+        setMessages([]);
+      } else {
+        const err = await resp.json();
+        alert(err.error || 'Ошибка выхода из группы');
+      }
+    } catch (err) {
+      console.error('Ошибка выхода из группы:', err);
+    } finally {
+      setShowLeaveConfirm(false);
+    }
+  };
+
+  // Добавление участника в группу
+  const handleAddParticipant = async (targetUserId) => {
+    if (!activeChat || !currentUser) return;
+    try {
+      const resp = await fetch(`${SOCKET_URL}/api/chats/${activeChat.id}/participants`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: targetUserId, requesterId: currentUser.id })
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        setChats(prev => prev.map(chat => {
+          if (chat.id !== activeChat.id) return chat;
+          return data.chat;
+        }));
+        setShowAddParticipant(false);
+        setParticipantSearch('');
+      } else {
+        const err = await resp.json();
+        alert(err.error || 'Ошибка добавления участника');
+      }
+    } catch (err) {
+      console.error('Ошибка добавления участника:', err);
+    }
+  };
+
   const handleMessageMenuClick = (e, message) => {
     e.stopPropagation();
     const rect = e.currentTarget.getBoundingClientRect();
@@ -5813,26 +6153,35 @@ function App() {
   };
 
   // Отображение статуса доставки сообщения
+  const showReadByPopup = async (messageId, e) => {
+    e.stopPropagation();
+    const rect = e.currentTarget.getBoundingClientRect();
+    try {
+      const resp = await fetch(`${SOCKET_URL}/api/messages/${messageId}/read-by`);
+      if (resp.ok) {
+        const data = await resp.json();
+        setReadByPopup({ messageId, readers: data.readers, x: rect.left, y: rect.bottom + 4 });
+      }
+    } catch (err) {
+      console.error('Ошибка загрузки читателей:', err);
+    }
+  };
+
   const renderMessageStatus = (message) => {
-    // readStatusVersion — зависимость для ре-рендера при получении messages_read
     void readStatusVersion;
 
-    // Показываем статус только для своих сообщений
     if (message.senderId !== currentUser?.id) return null;
 
-    // Проверяем по прямому полю read_at
-    if (message.read_at) {
-      return <span className="message-status read">✓✓</span>;
+    const isRead = message.read_at || (readByChatRef.current.get(message.chatId)?.size > 0);
+
+    if (isRead) {
+      return (
+        <span className="message-status read" onClick={(e) => showReadByPopup(message.id, e)} title="Кто прочитал">
+          ✓✓
+        </span>
+      );
     }
 
-    // Проверяем глобальный набор читателей: если кто-то читал сообщения в этом чате,
-    // значит наши сообщения тоже прочитаны (статус должен обновиться через messages_read, но на всякий случай)
-    const readers = readByChatRef.current.get(message.chatId);
-    if (readers && readers.size > 0) {
-      return <span className="message-status read">✓✓</span>;
-    }
-
-    // Иначе одна галочка (доставлено но не прочитано)
     return <span className="message-status">✓</span>;
   };
 
@@ -7666,24 +8015,40 @@ function App() {
                     </div>
                     {chat.type === 'direct' && chat.participantsDetails && (() => {
                       const otherUser = chat.participantsDetails.find(p => p.username !== currentUser?.username);
-                      if (otherUser && otherUser.status_text) {
-                        const statusText = otherUser.status_text;
-                        const maxLength = 20;
-                        const displayStatus = statusText.length > maxLength
-                          ? statusText.substring(0, maxLength) + ' ...'
-                          : statusText;
-                        return (
-                          <div className="chat-status-row">
-                            <span className="chat-status-text">
-                              {displayStatus.split('').map((char, idx) => {
-                                if (/[\p{Emoji}]/u.test(char)) {
-                                  return renderEmoji(char);
-                                }
-                                return char;
-                              })}
-                            </span>
-                          </div>
-                        );
+                      if (otherUser) {
+                        if (otherUser.status_text) {
+                          const statusText = otherUser.status_text;
+                          const maxLength = 20;
+                          const displayStatus = statusText.length > maxLength
+                            ? statusText.substring(0, maxLength) + ' ...'
+                            : statusText;
+                          return (
+                            <div className="chat-status-row">
+                              <span className="chat-status-text">
+                                {displayStatus.split('').map((char, idx) => {
+                                  if (/[\p{Emoji}]/u.test(char)) {
+                                    return renderEmoji(char);
+                                  }
+                                  return char;
+                                })}
+                              </span>
+                            </div>
+                          );
+                        } else if (otherUser.status !== 'online' && otherUser.last_seen) {
+                          return (
+                            <div className="chat-status-row">
+                              <span className="chat-status-text offline">
+                                Был(а) {getLastSeenText(otherUser.last_seen)}
+                              </span>
+                            </div>
+                          );
+                        } else if (otherUser.status !== 'online') {
+                          return (
+                            <div className="chat-status-row">
+                              <span className="chat-status-text offline">Офлайн</span>
+                            </div>
+                          );
+                        }
                       }
                       return null;
                     })()}
@@ -7886,10 +8251,11 @@ function App() {
                               );
                             }
                           } else {
-                            // Показываем онлайн/офлайн
+                            // Показываем онлайн/офлайн с last_seen
+                            const lastSeenText = isOnline ? 'Онлайн' : (otherUser.last_seen ? `Был(а) ${getLastSeenText(otherUser.last_seen)}` : 'Офлайн');
                             return (
                               <span className={`user-status-text ${isOnline ? 'online' : 'offline'}`}>
-                                {isOnline ? 'Онлайн' : 'Офлайн'}
+                                {lastSeenText}
                               </span>
                             );
                           }
@@ -7905,14 +8271,64 @@ function App() {
                 </div>
               </div>
 
-              <button
-                className="chat-menu-btn"
-                onClick={handleOpenChatMenu}
-                title="Меню чата"
-              >
-                ⋮
-              </button>
+              <div className="chat-header-actions">
+                <button
+                  className={`chat-search-btn ${chatSearchActive ? 'active' : ''}`}
+                  onClick={toggleChatSearch}
+                  title="Поиск в чате"
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="11" cy="11" r="8"/>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                  </svg>
+                </button>
+                <button
+                  className="chat-menu-btn"
+                  onClick={handleOpenChatMenu}
+                  title="Меню чата"
+                >
+                  ⋮
+                </button>
+              </div>
             </header>
+
+            {/* Per-chat search bar */}
+            {chatSearchActive && (
+              <div className="chat-search-bar">
+                <div className="chat-search-input-wrap">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, opacity: 0.5 }}>
+                    <circle cx="11" cy="11" r="8"/>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                  </svg>
+                  <input
+                    type="text"
+                    className="chat-search-input"
+                    placeholder="Поиск в чате..."
+                    value={chatSearchQuery}
+                    onChange={e => setChatSearchQuery(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') handleChatSearch(chatSearchQuery); }}
+                    autoFocus
+                  />
+                  {chatSearchQuery && (
+                    <button className="chat-search-clear" onClick={() => { setChatSearchQuery(''); setChatSearchResults([]); setChatSearchIndex(-1); }}>✕</button>
+                  )}
+                </div>
+                {chatSearchResults.length > 0 && (
+                  <div className="chat-search-meta">
+                    <span className="chat-search-count">{chatSearchIndex + 1} / {chatSearchResults.length}</span>
+                    <button className="chat-search-nav" onClick={handleChatSearchPrev} disabled={chatSearchResults.length <= 1}>↑</button>
+                    <button className="chat-search-nav" onClick={handleChatSearchNext} disabled={chatSearchResults.length <= 1}>↓</button>
+                    <button className="chat-search-close" onClick={toggleChatSearch}>✕</button>
+                  </div>
+                )}
+                {chatSearchQuery && chatSearchResults.length === 0 && chatSearchActive && (
+                  <div className="chat-search-meta">
+                    <span className="chat-search-count">Нет результатов</span>
+                    <button className="chat-search-close" onClick={() => { setChatSearchActive(false); setChatSearchQuery(''); setChatSearchResults([]); setChatSearchIndex(-1); }}>✕</button>
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="messages-container-main" key={activeChatId || 'no-chat'}>
               {/* Панель закреплённых сообщений */}
@@ -8153,6 +8569,44 @@ function App() {
               <div ref={messagesEndRef} />
             </div>
 
+            {/* Попап "Кто прочитал" */}
+            {readByPopup && (
+              <>
+                <div className="read-by-overlay" onClick={() => setReadByPopup(null)} />
+                <div className="read-by-popup" style={{ left: readByPopup.x, top: readByPopup.y }}>
+                  <div className="read-by-header">Прочитано</div>
+                  {readByPopup.readers.length === 0 ? (
+                    <div className="read-by-empty">Нет данных</div>
+                  ) : (
+                    readByPopup.readers.map(r => (
+                      <div key={r.user_id} className="read-by-user">
+                        <img src={r.avatar || `https://ui-avatars.com/api/?name=${r.username}`} alt={r.username} className="read-by-avatar" />
+                        <span className="read-by-name">{r.username}</span>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </>
+            )}
+
+            {/* @mention popup */}
+            {mentionPopup.show && (() => {
+              const participants = (activeChat?.participantsDetails || []).filter(
+                p => p.id !== currentUser?.id && p.username.toLowerCase().includes(mentionPopup.filter.toLowerCase())
+              );
+              if (participants.length === 0) return null;
+              return (
+                <div className="mention-dropdown" style={{ left: mentionPopup.x, top: mentionPopup.y }}>
+                  {participants.slice(0, 10).map(p => (
+                    <div key={p.id} className="mention-item" onClick={() => handleMentionSelect(p.username)} onMouseDown={e => e.preventDefault()}>
+                      <img src={p.avatar || `https://ui-avatars.com/api/?name=${p.username}`} alt={p.username} className="mention-avatar" />
+                      <span className="mention-name">{p.username}</span>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+
             <div
               className={`message-form-drop-zone ${isDragOver ? 'drag-over' : ''}`}
               onDragOver={handleDragOver}
@@ -8160,12 +8614,7 @@ function App() {
               onDragLeave={handleDragLeave}
               onDrop={handleDrop}
             >
-              <form className="message-form-main" style={{ position: 'relative' }} onSubmit={handleSendMessage} onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.altKey) {
-                e.preventDefault();
-                handleSendMessage(e);
-              }
-            }}>
+              <form className="message-form-main" style={{ position: 'relative' }} onSubmit={handleSendMessage}>
               {/* Inline picker смайлов */}
               <EmojiInlinePicker
                 show={showEmojiPicker}
@@ -8243,10 +8692,19 @@ function App() {
                 data-placeholder="Введите сообщение..."
                 onContextMenu={handleInputContextMenu}
                 onPaste={handleImagePaste}
+                onKeyDown={handleInputKeyDown}
                 onInput={(e) => {
                   const text = e.currentTarget.textContent;
                   setInputText(text);
-                  
+
+                  // Detect @mention context
+                  const ctx = getMentionContext();
+                  if (ctx) {
+                    setMentionPopup({ show: true, filter: ctx.filter, x: ctx.x, y: ctx.y });
+                  } else {
+                    setMentionPopup(prev => prev.show ? { show: false, filter: '', x: 0, y: 0 } : prev);
+                  }
+
                   if (!isTyping) {
                     setIsTyping(true);
                     socket.emit('typing', { chatId: activeChatId, isTyping: true });
@@ -8351,6 +8809,20 @@ function App() {
                     </span>
                     <span>{e2eeEnabled[activeChatId] ? '🔒 E2EE включено' : '🔓 E2EE шифрование'}</span>
                   </div>
+                )}
+                {activeChat?.type === 'group' && (
+                  <>
+                    {activeChat.created_by === currentUser?.id && (
+                      <div className="chat-menu-item" onClick={handleManageParticipants}>
+                        <span className="menu-icon"><span className="emoji-animated">👥</span></span>
+                        <span>Управление участниками</span>
+                      </div>
+                    )}
+                    <div className="chat-menu-item" onClick={handleLeaveGroup}>
+                      <span className="menu-icon"><span className="emoji-animated">🚪</span></span>
+                      <span>Выйти из группы</span>
+                    </div>
+                  </>
                 )}
                 <div className="chat-menu-divider"></div>
                 <div className="chat-menu-item danger" onClick={handleDeleteChat}>
@@ -10554,6 +11026,92 @@ function App() {
               </button>
               <button className="delete-btn" onClick={messageToDelete ? confirmDeleteMessage : confirmDeleteChat}>
                 Удалить
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Подтверждение выхода из группы */}
+      {showLeaveConfirm && (
+        <div className="modal-overlay" onClick={() => setShowLeaveConfirm(false)}>
+          <div className="modal-content confirm-modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>🚪 Выход из группы</h3>
+              <button onClick={() => setShowLeaveConfirm(false)}>✕</button>
+            </div>
+            <div className="modal-body">
+              <p className="confirm-message">
+                Вы уверены, что хотите выйти из группы «{activeChat?.name}»?
+              </p>
+            </div>
+            <div className="modal-footer">
+              <button className="cancel-btn" onClick={() => setShowLeaveConfirm(false)}>Отмена</button>
+              <button className="delete-btn" onClick={confirmLeaveGroup}>Выйти</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Модальное окно управления участниками */}
+      {showManageParticipants && (
+        <div className="modal-overlay" onClick={() => { setShowManageParticipants(false); setShowAddParticipant(false); setParticipantSearch(''); }}>
+          <div className="modal-content" style={{ maxWidth: 420 }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>👥 Участники группы</h3>
+              <button onClick={() => { setShowManageParticipants(false); setShowAddParticipant(false); setParticipantSearch(''); }}>✕</button>
+            </div>
+            <div className="modal-body">
+              {activeChat?.participantsDetails?.map(p => (
+                <div key={p.id} className="manage-participant-row">
+                  <img src={p.avatar || `https://ui-avatars.com/api/?name=${p.username}`} alt={p.username} className="manage-participant-avatar" />
+                  <div className="manage-participant-info">
+                    <span className="manage-participant-name">{p.username}</span>
+                    {activeChat.created_by === p.id && <span className="manage-participant-badge">Создатель</span>}
+                  </div>
+                  {activeChat.created_by === currentUser?.id && p.id !== currentUser?.id && (
+                    <button className="manage-participant-remove" onClick={() => handleRemoveParticipant(p.id)} title="Удалить из группы">✕</button>
+                  )}
+                </div>
+              ))}
+            </div>
+            <div className="modal-footer" style={{ flexDirection: 'column', gap: 8 }}>
+              {activeChat?.created_by === currentUser?.id && !showAddParticipant && (
+                <button className="create-btn" style={{ width: '100%' }} onClick={() => setShowAddParticipant(true)}>
+                  + Добавить участника
+                </button>
+              )}
+              {showAddParticipant && (
+                <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <input
+                    type="text"
+                    className="modal-input"
+                    placeholder="Поиск пользователей..."
+                    value={participantSearch}
+                    onChange={e => setParticipantSearch(e.target.value)}
+                    autoFocus
+                  />
+                  <div style={{ maxHeight: 200, overflowY: 'auto' }}>
+                    {users
+                      .filter(u => u.id !== currentUser?.id && !activeChat?.participantsDetails?.find(p => p.id === u.id) && u.username.toLowerCase().includes(participantSearch.toLowerCase()))
+                      .slice(0, 20)
+                      .map(u => (
+                        <div key={u.id} className="manage-participant-row clickable" onClick={() => handleAddParticipant(u.id)}>
+                          <img src={u.avatar || `https://ui-avatars.com/api/?name=${u.username}`} alt={u.username} className="manage-participant-avatar" />
+                          <span className="manage-participant-name">{u.username}</span>
+                        </div>
+                      ))}
+                    {participantSearch && users.filter(u => u.id !== currentUser?.id && !activeChat?.participantsDetails?.find(p => p.id === u.id) && u.username.toLowerCase().includes(participantSearch.toLowerCase())).length === 0 && (
+                      <div style={{ padding: '12px', textAlign: 'center', color: '#888' }}>Пользователи не найдены</div>
+                    )}
+                  </div>
+                  <button className="cancel-btn" style={{ width: '100%' }} onClick={() => { setShowAddParticipant(false); setParticipantSearch(''); }}>
+                    Отмена
+                  </button>
+                </div>
+              )}
+              <button className="cancel-btn" style={{ width: '100%' }} onClick={() => { setShowManageParticipants(false); setShowAddParticipant(false); setParticipantSearch(''); }}>
+                Закрыть
               </button>
             </div>
           </div>

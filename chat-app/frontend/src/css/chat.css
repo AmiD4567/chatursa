@@ -1136,6 +1136,10 @@
   color: #ffffff;
 }
 
+.message-status.read {
+  cursor: pointer;
+}
+
 .message-main.own .message-status {
   color: #ffffff !important;
 }
@@ -2195,5 +2199,214 @@
   font-size: 11px;
   opacity: 0.6;
   font-style: italic;
+}
+
+/* Попап "Кто прочитал" */
+.read-by-overlay {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  z-index: 999;
+  background: transparent;
+}
+
+.read-by-popup {
+  position: fixed;
+  z-index: 1000;
+  background: var(--card-bg, #fff);
+  border: 1px solid var(--border-color, #e0e0e0);
+  border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+  padding: 8px 0;
+  min-width: 180px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.read-by-header {
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary, #888);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.read-by-empty {
+  padding: 12px 14px;
+  font-size: 13px;
+  color: var(--text-secondary, #888);
+  text-align: center;
+}
+
+.read-by-user {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  cursor: default;
+}
+
+.read-by-user:hover {
+  background: var(--hover-bg, rgba(0,0,0,0.04));
+}
+
+.read-by-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.read-by-name {
+  font-size: 14px;
+  color: var(--text-primary, #333);
+}
+
+/* Chat search bar */
+.chat-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  background: var(--card-bg, #fff);
+  border-bottom: 1px solid var(--border-color, #e0e0e0);
+  flex-shrink: 0;
+}
+
+.chat-search-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  background: var(--input-bg, #f5f5f5);
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+
+.chat-search-input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  outline: none;
+  font-size: 13px;
+  color: var(--text-primary, #333);
+}
+
+.chat-search-clear {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--text-secondary, #888);
+  padding: 2px 4px;
+}
+
+.chat-search-meta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.chat-search-count {
+  font-size: 12px;
+  color: var(--text-secondary, #888);
+  white-space: nowrap;
+}
+
+.chat-search-nav {
+  border: none;
+  background: var(--input-bg, #f5f5f5);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: var(--text-primary, #333);
+}
+
+.chat-search-nav:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.chat-search-close {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--text-secondary, #888);
+  padding: 2px 6px;
+}
+
+/* @Mention dropdown */
+.mention-dropdown {
+  position: fixed;
+  z-index: 2000;
+  background: var(--card-bg, #fff);
+  border: 1px solid var(--border-color, #e0e0e0);
+  border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+  padding: 4px 0;
+  min-width: 180px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.mention-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.mention-item:hover {
+  background: var(--hover-bg, rgba(0,0,0,0.04));
+}
+
+.mention-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.mention-name {
+  font-size: 14px;
+  color: var(--text-primary, #333);
+}
+
+/* Mention span in input */
+.mention {
+  color: #667eea;
+  background: rgba(102, 126, 234, 0.12);
+  border-radius: 4px;
+  padding: 1px 2px;
+  cursor: default;
+}
+
+/* Header search button */
+.chat-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.chat-search-btn {
+  background: transparent;
+  border: none;
+  font-size: 20px;
+  color: var(--text-secondary, #666);
+  cursor: pointer;
+  padding: 8px 10px;
+  border-radius: 8px;
+  transition: background 0.2s, color 0.2s;
+}
+
+.chat-search-btn:hover,
+.chat-search-btn.active {
+  background: var(--hover-bg, #f0f0f0);
+  color: var(--page-text-primary, #333);
 }
 

@@ -5,6 +5,7 @@ class ConversationState {
     this.step = 'idle';
     this.context = {};
     this.timeoutId = null;
+    this.lastActivity = Date.now();
   }
 
   reset(delayMs = 30000) {
@@ -325,6 +326,8 @@ function processConversationState(conversationStates, sendBotMessage, socket, ch
     return { handled: false };
   }
 
+  state.lastActivity = Date.now();
+
   const dialogName = state.context._dialog;
   const dialog = DIALOG_DEFINITIONS[dialogName];
   if (!dialog) {
@@ -381,6 +384,8 @@ function startConversation(conversationStates, sendBotMessage, socket, chatId, c
     state = new ConversationState();
     conversationStates.set(chatId, state);
   }
+
+  state.lastActivity = Date.now();
 
   const dialog = DIALOG_DEFINITIONS[command];
   if (!dialog) return;
