@@ -1,6 +1,6 @@
 {
     "name":  "chat-app",
-    "version":  "1.0.162",
+    "version":  "1.0.165",
     "description":  "Корпоративный мессенджер",
     "main":  "electron/main.js",
     "scripts":  {
@@ -55,8 +55,8 @@
                                 "frontend/build/**/*",
                                 "uploads/**/*"
                             ],
-                  "msi":  {
-                              "artifactName":  "${productName}-${version}.${ext}",
+"msi": {
+                               "artifactName":  "ChatApp-${version}.${ext}",
                               "createDesktopShortcut":  true,
                               "createStartMenuShortcut":  true,
                               "oneClick":  false,
@@ -65,9 +65,9 @@
                               "shortcutName":  "Chat App",
                               "upgradeCode":  "{8F3B5A7C-9D2E-4F1A-B6C3-5E8D7A9F2B4C}"
                           },
-                  "nsis":  {
-                               "allowToChangeInstallationDirectory":  true,
-                               "artifactName":  "${productName}-Setup-${version}.${ext}",
+"nsis":  {
+                                "allowToChangeInstallationDirectory":  true,
+                                "artifactName":  "ChatApp-Setup-${version}.${ext}",
                                "createDesktopShortcut":  true,
                                "createStartMenuShortcut":  true,
                                "installerHeaderIcon":  "electron/icon.ico",
@@ -79,7 +79,7 @@
                                "shortcutName":  "Chat App",
                                "uninstallerIcon":  "electron/icon.ico"
                            },
-                  "productName":  "Chat App",
+                  "productName":  "ChatApp",
                   "publish":  {
                                   "owner":  "AmiD4567",
                                   "private":  false,
