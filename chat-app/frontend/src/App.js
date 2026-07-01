@@ -9329,28 +9329,18 @@ function App() {
                           <span className="booking-time-range">{booking.start_time} – {booking.end_time}</span>
                           {(participants.length > 0 || booking.reminder_minutes) && (
                             <div className="booking-participants">
-                              {participants.length > 0 && (
-                                <>
-                                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="participants-icon">
-                                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
-                                    <circle cx="9" cy="7" r="4"/>
-                                    <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
-                                    <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
-                                  </svg>
-                                  {participants.map((p, i) => (
-                                    <span key={p.user_id} className="booking-participant">
-                                      {p.username}{i < participants.length - 1 ? ', ' : ''}
-                                    </span>
-                                  ))}
-                                </>
+                              {participants.length > 0 && participants.map((p, i) => (
+                                <span key={p.user_id} className="booking-participant">
+                                  {p.username}
+                                </span>
+                              ))}
+                              {booking.reminder_minutes && participants.length > 0 && (
+                                <div className="participant-separator">·</div>
                               )}
                               {booking.reminder_minutes && (
-                                <>
-                                  {participants.length > 0 && <span className="participant-separator">·</span>}
-                                  <span className="booking-reminder" title={`Напоминание за ${booking.reminder_minutes} мин до начала`}>
-                                    🔔 {booking.reminder_minutes} мин
-                                  </span>
-                                </>
+                                <span className="booking-reminder" title={`Напоминание за ${booking.reminder_minutes} мин до начала`}>
+                                  🔔 {booking.reminder_minutes} мин
+                                </span>
                               )}
                             </div>
                           )}
