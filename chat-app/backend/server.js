@@ -562,14 +562,44 @@ function initDatabase() {
       description TEXT,
       meeting_date TEXT NOT NULL,
       start_time TEXT NOT NULL,
-      end_time TEXT NOT NULL,
+      end_// la l'_time TEXT NOT NULL,
       organizer_id TEXT,
       organizer_name TEXT,
+      reminder_minutes INTEGER DEFAULT NULL,
+      reminder_time TEXT DEFAULT NULL,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (organizer_id) REFERENCES users(id)
     );
-    CREATE INDEX IF NOT EXISTS idx_meeting_room_organizer_date ON meeting_room_bookings(organizer_id, meeting_date);
+    CREATE INDEX IF NOT EXISTS idx_meeting_room_organizer_// la la l't_date ON meeting_room_bookings(organizer_id, meeting_date);
   `);
+
+  // Таблица участников бронирования переговорной
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS meeting_room_booking_participants (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        booking_id INTEGER NOT NULL,
+        user_id TEXT NOT NULL,
+        username TEXT NOT NULL,
+        FOREIGN KEY (booking_id) REFERENCES meeting_room_bookings(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_booking_participants_booking ON meeting_room_booking_participants(booking_id);
+    `);
+  } catch (e) {
+    console.log('Таблица участников бронирования уже существует');
+  }
+
+  // Добавляем колонки reminder, если их нет (миграция)
+  try {
+    db.exec(`ALTER TABLE meeting_room_bookings ADD COLUMN reminder_minutes INTEGER DEFAULT NULL`);
+  } catch (e) {
+    // колонка уже существует — игнорируем
+  }
+  try {
+    db.exec(`ALTER TABLE meeting_room_bookings ADD COLUMN reminder_time TEXT DEFAULT NULL`);
+  } catch (e) {
+    // колонка уже существует — игнорируем
+  }
 
   // Таблица общих задач
   db.exec(`
@@ -2777,12 +2807,19 @@ app.get('/api/meeting-room/bookings', (req, res) => {
 
   const bookings = db.prepare(query).all(params);
 
-  res.json({ bookings });
+  // Добавляем участников к каждому бронированию
+  const getParticipants = db.prepare('SELECT user_id, username FROM meeting_room_booking_participants WHERE booking_id = ?');
+  const enriched = bookings.map(b => ({
+    ...b,
+    participants_list: getParticipants.all(b.id)
+  }));
+
+  res.json({ bookings: enriched });
 });
 
 // Создать бронирование переговорной
 app.post('/api/meeting-room/bookings', (req, res) => {
-  const { organizerId, organizerName, title, description, meetingDate, startTime, endTime } = req.body;
+  const { organizerId, organizerName, title, description, meetingDate, startTime, endTime, participants, reminderMinutes } = req.body;
 
   if (!organizerId || !title || !meetingDate || !startTime || !endTime) {
     return res.status(400).json({ error: 'organizerId, title, meetingDate, startTime и endTime обязательны' });
@@ -2811,13 +2848,32 @@ app.post('/api/meeting-room/bookings', (req, res) => {
     return res.status(409).json({ error: 'Это время уже забронировано' });
   }
 
+  // Рассчитываем reminder_time если выбрано напоминание
+  let reminderTime = null;
+  if (reminderMinutes && parseInt(reminderMinutes) > 0) {
+    const baseDate = new Date(`${meetingDate}T${startTime}`);
+    reminderTime = new Date(baseDate.getTime() - parseInt(reminderMinutes) * 60 * 1000).toISOString().slice(0, 19);
+  }
+
   try {
     const insertResult = db.run(`
-      INSERT INTO meeting_room_bookings (organizer_id, organizer_name, title, description, meeting_date, start_time, end_time)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `, [organizerId, organizerName || 'Аноним', title, description || null, meetingDate, startTime, endTime]);
+      INSERT INTO meeting_room_bookings (organizer_id, organizer_name, title, description, meeting_date, start_time, end_time, reminder_minutes, reminder_time)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [organizerId, organizerName || 'Аноним', title, description || null, meetingDate, startTime, endTime, reminderMinutes || null, reminderTime]);
     
     const newId = insertResult.lastInsertRowid;
+    
+    // Добавляем участников
+    if (participants && Array.isArray(participants) && participants.length > 0) {
+      const insertParticipant = db.prepare('INSERT INTO meeting_room_booking_participants (booking_id, user_id, username) VALUES (?, ?, ?)');
+      const getUser = db.prepare('SELECT username FROM users WHERE id = ?');
+      for (const userId of participants) {
+        const userRow = getUser.get(userId);
+        if (userRow) {
+          insertParticipant.run(newId, userId, userRow.username);
+        }
+      }
+    }
     
     const newBooking = db.prepare('SELECT * FROM meeting_room_bookings WHERE id = ?').get(newId);
     
@@ -2850,6 +2906,8 @@ app.delete('/api/meeting-room/bookings/:id', (req, res) => {
   }
 
   try {
+    // Удаляем связанных участников
+    db.run(`DELETE FROM meeting_room_booking_participants WHERE booking_id = ?`, [id]);
     db.run(`DELETE FROM meeting_room_bookings WHERE id = ?`, [id]);
 
     res.json({ success: true });
@@ -2862,7 +2920,7 @@ app.delete('/api/meeting-room/bookings/:id', (req, res) => {
 // Обновить бронирование
 app.put('/api/meeting-room/bookings/:id', (req, res) => {
   const { id } = req.params;
-  const { title, description, meetingDate, startTime, endTime } = req.body;
+  const { title, description, meetingDate, startTime, endTime, participants, reminderMinutes } = req.body;
   const organizerId = req.body.organizerId || req.query.organizerId;
 
   if (!title || !meetingDate || !startTime || !endTime) {
@@ -2894,12 +2952,37 @@ app.put('/api/meeting-room/bookings/:id', (req, res) => {
     return res.status(409).json({ error: 'Это время уже забронировано' });
   }
 
+  // Рассчитываем reminder_time если выбрано напоминание
+  let reminderTime = null;
+  if (reminderMinutes && parseInt(reminderMinutes) > 0) {
+    const baseDate = new Date(`${meetingDate}T${startTime}`);
+    reminderTime = new Date(baseDate.getTime() - parseInt(reminderMinutes) * 60 * 1000).toISOString().slice(0, 19);
+  }
+
   try {
     db.run(`
       UPDATE meeting_room_bookings 
-      SET title = ?, description = ?, meeting_date = ?, start_time = ?, end_time = ?
+      SET title = ?, description = ?, meeting_date = ?, start_time = ?, end_time = ?, reminder_minutes = ?, reminder_time = ?
       WHERE id = ?
-    `, [title, description || null, meetingDate, startTime, endTime, id]);
+    `, [title, description || null, meetingDate, startTime, endTime, reminderMinutes || null, reminderTime, id]);
+    
+    // Синхронизируем участников
+    const participantsList = req.body.participants;
+    if (participantsList && Array.isArray(participantsList)) {
+      // Удаляем старых участников
+      db.run('DELETE FROM meeting_room_booking_participants WHERE booking_id = ?', [id]);
+      // Добавляем новых
+      if (participantsList.length > 0) {
+        const insertParticipant = db.prepare('INSERT INTO meeting_room_booking_participants (booking_id, user_id, username) VALUES (?, ?, ?)');
+        const getUser = db.prepare('SELECT username FROM users WHERE id = ?');
+        for (const userId of participantsList) {
+          const userRow = getUser.get(userId);
+          if (userRow) {
+            insertParticipant.run(id, userId, userRow.username);
+          }
+        }
+      }
+    }
     
     const updatedBooking = db.prepare('SELECT * FROM meeting_room_bookings WHERE id = ?').get(id);
     
@@ -2913,7 +2996,9 @@ app.put('/api/meeting-room/bookings/:id', (req, res) => {
         start_time: updatedBooking.start_time,
         end_time: updatedBooking.end_time,
         organizer_id: updatedBooking.organizer_id,
-        organizer_name: updatedBooking.organizer_name
+        organizer_name: updatedBooking.organizer_name,
+        reminder_minutes: updatedBooking.reminder_minutes,
+        reminder_time: updatedBooking.reminder_time
       } : null
     });
   } catch (err) {
@@ -3029,8 +3114,6 @@ app.put('/api/calendar/tasks/:taskId', (req, res) => {
     res.status(500).json({ error: 'Ошибка при обновлении задачи' });
   }
 });
-
-// API для удаления задачи
 app.delete('/api/calendar/tasks/:taskId', (req, res) => {
   const { taskId } = req.params;
 
@@ -3363,31 +3446,6 @@ app.post('/api/calendar/tasks/shared/:shareId/decline', (req, res) => {
   } catch (err) {
     console.error('Ошибка отклонения задачи:', err);
     res.status(500).json({ error: 'Ошибка при отклонении задачи' });
-  }
-});
-
-// API для обновления задачи
-app.put('/api/calendar/tasks/:taskId', (req, res) => {
-  const { taskId } = req.params;
-  const { title, description, taskDate, taskTime, color } = req.body;
-
-  if (!title || !taskDate) {
-    return res.status(400).json({ error: 'title и taskDate обязательны' });
-  }
-
-  try {
-    db.run(`
-      UPDATE calendar_tasks
-      SET title = ?, description = ?, task_date = ?, task_time = ?, color = ?
-      WHERE id = ?
-    `, [title, description || null, taskDate, taskTime || null, color || '#667eea', taskId]);
-
-
-    const task = db.prepare('SELECT * FROM calendar_tasks WHERE id = ?').get(taskId);
-    res.json({ success: true, task });
-  } catch (err) {
-    console.error('Ошибка обновления задачи:', err);
-    res.status(500).json({ error: 'Ошибка при обновлении задачи' });
   }
 });
 

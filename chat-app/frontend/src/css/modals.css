@@ -3630,15 +3630,15 @@
   padding: 10px 12px;
   margin-bottom: 6px;
   border-radius: 10px;
-  background: #f0faf0;
-  border: 1px solid #d0e8d8;
+  background: #f8f9ff;
+  border: 1px solid #e8e8f0;
   cursor: pointer;
   transition: all 0.2s ease;
 }
 
 .meeting-room-bookings .booking-item:hover {
-  background: #e8f5e8;
-  border-color: #a0d0b0;
+  background: #f0f1ff;
+  border-color: #c8c8e8;
   box-shadow: 0 2px 6px rgba(0,0,0,0.06);
 }
 
@@ -3652,10 +3652,30 @@
   display: inline-block;
   font-size: 11px;
   font-weight: 600;
-  color: #27ae60;
-  background: rgba(39,174,96,0.1);
+  color: #667eea;
+  background: rgba(102,126,234,0.1);
   padding: 2px 8px;
   border-radius: 4px;
+  white-space: nowrap;
+}
+
+.meeting-room-bookings .booking-participants {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+  font-size: 10px;
+  color: #888;
+  line-height: 1.2;
+}
+
+.meeting-room-bookings .booking-participants .participants-icon {
+  flex-shrink: 0;
+  opacity: 0.6;
+}
+
+.meeting-room-bookings .booking-participant {
   white-space: nowrap;
 }
 
@@ -3671,15 +3691,18 @@
   gap: 8px;
 }
 
-.meeting-room-bookings .booking-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: #1a2e1a;
+.meeting-room-bookings .booking-title,
+.meeting-room-bookings h6.booking-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #1a1a2e;
+  line-height: 1.3;
+  margin: 0;
 }
 
 .meeting-room-bookings .booking-description {
-  font-size: 12px;
-  color: #456;
+  font-size: 13px;
+  color: #666;
   margin-top: 4px;
   line-height: 1.4;
   display: -webkit-box;
@@ -3690,8 +3713,16 @@
 
 .meeting-room-bookings .booking-organizer {
   font-size: 11px;
-  color: #678;
+  color: #888;
   margin-top: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.meeting-room-bookings .booking-organizer .organizer-icon {
+  flex-shrink: 0;
+  opacity: 0.6;
 }
 
 .meeting-room-bookings .booking-actions {
@@ -3710,7 +3741,7 @@
   border: none;
   border-radius: 6px;
   background: transparent;
-  color: #8a9;
+  color: #999;
   cursor: pointer;
   transition: all 0.2s ease;
   padding: 0;
@@ -3740,9 +3771,9 @@
   color: rgba(102, 102, 102, 0.8);
   text-align: center;
   padding: 40px 20px;
-  background: rgba(39, 174, 96, 0.05);
+  background: rgba(102, 126, 234, 0.05);
   border-radius: 16px;
-  border: 1px dashed rgba(39, 174, 96, 0.2);
+  border: 1px dashed rgba(102, 126, 234, 0.2);
 }
 
 /* Стандартные стили элементов */

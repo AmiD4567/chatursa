@@ -311,7 +311,8 @@ function App() {
     meetingDate: '',
     startTime: '',
     endTime: '',
-    organizer: ''
+    organizer: '',
+    reminderMinutes: ''
   });
   const [canBookMeetingRoom, setCanBookMeetingRoom] = useState(false); // Право на бронирование
   const [canEditWiki, setCanEditWiki] = useState(false); // Право на редактирование wiki
@@ -381,6 +382,7 @@ function App() {
   const [taskToShare, setTaskToShare] = useState(null);
   const [availableUsers, setAvailableUsers] = useState([]);
   const [selectedUsersForShare, setSelectedUsersForShare] = useState([]);
+  const [selectedMeetingParticipants, setSelectedMeetingParticipants] = useState([]);
   const [sharedTasksReceived, setSharedTasksReceived] = useState([]);
   const [showSharedTasksModal, setShowSharedTasksModal] = useState(false);
   const [showDocuments, setShowDocuments] = useState(false);
@@ -5239,8 +5241,11 @@ function App() {
       meetingDate: booking.meeting_date,
       startTime: booking.start_time,
       endTime: booking.end_time,
-      organizer: booking.organizer_name
+      organizer: booking.organizer_name,
+      reminderMinutes: booking.reminder_minutes ? String(booking.reminder_minutes) : ''
     });
+    setSelectedMeetingParticipants((booking.participants_list || []).map(p => p.user_id));
+    fetchAvailableUsers();
     setShowEditMeetingModal(true);
   };
 
@@ -5282,7 +5287,9 @@ function App() {
           description: meetingForm.description,
           meetingDate: meetingForm.meetingDate,
           startTime: meetingForm.startTime,
-          endTime: meetingForm.endTime
+          endTime: meetingForm.endTime,
+          participants: selectedMeetingParticipants,
+          reminderMinutes: meetingForm.reminderMinutes || null
         })
       });
 
@@ -5298,8 +5305,10 @@ function App() {
           meetingDate: '',
           startTime: '',
           endTime: '',
-          organizer: ''
+          organizer: '',
+          reminderMinutes: ''
         });
+        setSelectedMeetingParticipants([]);
         setEditingBooking(null);
         setShowEditMeetingModal(false);
         alert('Бронирование обновлено!');
@@ -5485,6 +5494,14 @@ function App() {
 
   const toggleUserForShare = (userId) => {
     setSelectedUsersForShare(prev =>
+      prev.find(id => id === userId)
+        ? prev.filter(id => id !== userId)
+        : [...prev, userId]
+    );
+  };
+
+  const toggleMeetingParticipant = (userId) => {
+    setSelectedMeetingParticipants(prev =>
       prev.find(id => id === userId)
         ? prev.filter(id => id !== userId)
         : [...prev, userId]
@@ -9280,7 +9297,7 @@ function App() {
                     : 'Выберите день для просмотра бронирований'}
                 </h5>
                 {selectedDate && (canBookMeetingRoom || currentUser?.username === 'Root' || currentUser?.is_admin === 1) && (
-                  <button className="add-task-btn" onClick={() => setShowMeetingModal(true)}>
+                  <button className="add-task-btn" onClick={() => { fetchAvailableUsers(); setShowMeetingModal(true); }}>
                     + Забронировать
                   </button>
                 )}
@@ -9304,10 +9321,39 @@ function App() {
                 
                 return dayBookings.length > 0 ? (
                   <div className="bookings-list">
-                    {dayBookings.map(booking => (
+                    {dayBookings.map(booking => {
+                      const participants = booking.participants_list || [];
+                      return (
                       <div key={booking.id} className="booking-item">
                         <div className="booking-time-block">
                           <span className="booking-time-range">{booking.start_time} – {booking.end_time}</span>
+                          {(participants.length > 0 || booking.reminder_minutes) && (
+                            <div className="booking-participants">
+                              {participants.length > 0 && (
+                                <>
+                                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="participants-icon">
+                                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                                    <circle cx="9" cy="7" r="4"/>
+                                    <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+                                    <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+                                  </svg>
+                                  {participants.map((p, i) => (
+                                    <span key={p.user_id} className="booking-participant">
+                                      {p.username}{i < participants.length - 1 ? ', ' : ''}
+                                    </span>
+                                  ))}
+                                </>
+                              )}
+                              {booking.reminder_minutes && (
+                                <>
+                                  {participants.length > 0 && <span className="participant-separator">·</span>}
+                                  <span className="booking-reminder" title={`Напоминание за ${booking.reminder_minutes} мин до начала`}>
+                                    🔔 {booking.reminder_minutes} мин
+                                  </span>
+                                </>
+                              )}
+                            </div>
+                          )}
                         </div>
                         <div className="booking-content">
                           <div className="booking-title-row">
@@ -9341,10 +9387,17 @@ function App() {
                           {booking.description && (
                             <p className="booking-description">{booking.description}</p>
                           )}
-                          <span className="booking-organizer">👤 {booking.organizer_name}</span>
+                          <span className="booking-organizer">
+                            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="organizer-icon">
+                              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                              <circle cx="12" cy="7" r="4"/>
+                            </svg>
+                            {' '}{booking.organizer_name}
+                          </span>
                         </div>
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 ) : (
                   <p className="no-bookings-text">На этот день нет бронирований</p>
@@ -10664,11 +10717,11 @@ function App() {
 
       {/* Модальное окно бронирования переговорной */}
       {showMeetingModal && (
-        <div className="modal-overlay" onClick={() => setShowMeetingModal(false)}>
+        <div className="modal-overlay" onClick={() => { setShowMeetingModal(false); setSelectedMeetingParticipants([]); }}>
           <div className="modal-content task-modal" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <h3>🏢 Забронировать переговорную</h3>
-              <button onClick={() => setShowMeetingModal(false)}>✕</button>
+              <button onClick={() => { setShowMeetingModal(false); setSelectedMeetingParticipants([]); }}>✕</button>
             </div>
 
             <form onSubmit={async (e) => {
@@ -10685,7 +10738,9 @@ function App() {
                     description: meetingForm.description,
                     meetingDate: meetingForm.meetingDate,
                     startTime: meetingForm.startTime,
-                    endTime: meetingForm.endTime
+                    endTime: meetingForm.endTime,
+                    participants: selectedMeetingParticipants,
+                    reminderMinutes: meetingForm.reminderMinutes || null
                   })
                 });
                 
@@ -10705,8 +10760,10 @@ function App() {
                     meetingDate: '',
                     startTime: '',
                     endTime: '',
-                    organizer: ''
+                    organizer: '',
+                    reminderMinutes: ''
                   });
+                  setSelectedMeetingParticipants([]);
                   
                   setShowMeetingModal(false);
                   alert('Переговорная успешно забронирована!');
@@ -10782,13 +10839,55 @@ function App() {
                     disabled
                   />
                 </div>
+
+                {/* Напоминание */}
+                <div className="form-group">
+                  <label>Напоминание</label>
+                  <select
+                    value={meetingForm.reminderMinutes || ''}
+                    onChange={(e) => setMeetingForm({...meetingForm, reminderMinutes: e.target.value})}
+                  >
+                    <option value="">Без напоминания</option>
+                    <option value="5">За 5 минут до начала</option>
+                    <option value="10">За 10 минут до начала</option>
+                    <option value="15">За 15 минут до начала</option>
+                    <option value="30">За 30 минут до начала</option>
+                    <option value="60">За 1 час до начала</option>
+                  </select>
+                </div>
+
+                {/* Выбор участников */}
+                <div className="form-group">
+                  <label>Участники</label>
+                  <div className="share-users-list" style={{maxHeight: '150px', overflowY: 'auto'}}>
+                    {availableUsers.length === 0 && <p style={{color: '#888', fontSize: '13px'}}>Загрузка пользователей...</p>}
+                    {availableUsers.map(user => (
+                      <div
+                        key={user.id}
+                        className={`share-user-item ${selectedMeetingParticipants.find(id => id === user.id) ? 'selected' : ''}`}
+                        onClick={() => toggleMeetingParticipant(user.id)}
+                      >
+                        <img
+                          src={user.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(user.username)}`}
+                          alt={user.username}
+                          className="share-user-avatar"
+                          onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || 'U')}`; }}
+                        />
+                        <span className="share-user-name">{user.username}</span>
+                        {selectedMeetingParticipants.find(id => id === user.id) && (
+                          <span className="share-checkmark">✓</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
 
               <div className="modal-footer">
                 <button
                   type="button"
                   className="cancel-btn"
-                  onClick={() => setShowMeetingModal(false)}
+                  onClick={() => { setShowMeetingModal(false); setSelectedMeetingParticipants([]); }}
                 >
                   Отмена
                 </button>
@@ -10807,11 +10906,11 @@ function App() {
 
       {/* Модальное окно редактирования бронирования */}
       {showEditMeetingModal && (
-        <div className="modal-overlay" onClick={() => { setShowEditMeetingModal(false); setEditingBooking(null); }}>
+        <div className="modal-overlay" onClick={() => { setShowEditMeetingModal(false); setEditingBooking(null); setSelectedMeetingParticipants([]); }}>
           <div className="modal-content task-modal" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <h3>✏️ Редактировать бронирование</h3>
-              <button onClick={() => { setShowEditMeetingModal(false); setEditingBooking(null); }}>✕</button>
+              <button onClick={() => { setShowEditMeetingModal(false); setEditingBooking(null); setSelectedMeetingParticipants([]); }}>✕</button>
             </div>
 
             <form onSubmit={handleUpdateBooking}>
@@ -10878,13 +10977,55 @@ function App() {
                     disabled
                   />
                 </div>
+
+                {/* Напоминание */}
+                <div className="form-group">
+                  <label>Напоминание</label>
+                  <select
+                    value={meetingForm.reminderMinutes || ''}
+                    onChange={(e) => setMeetingForm({...meetingForm, reminderMinutes: e.target.value})}
+                  >
+                    <option value="">Без напоминания</option>
+                    <option value="5">За 5 минут до начала</option>
+                    <option value="10">За 10 минут до начала</option>
+                    <option value="15">За 15 минут до начала</option>
+                    <option value="30">За 30 минут до начала</option>
+                    <option value="60">За 1 час до начала</option>
+                  </select>
+                </div>
+
+                {/* Выбор участников */}
+                <div className="form-group">
+                  <label>Участники</label>
+                  <div className="share-users-list" style={{maxHeight: '150px', overflowY: 'auto'}}>
+                    {availableUsers.length === 0 && <p style={{color: '#888', fontSize: '13px'}}>Загрузка пользователей...</p>}
+                    {availableUsers.map(user => (
+                      <div
+                        key={user.id}
+                        className={`share-user-item ${selectedMeetingParticipants.find(id => id === user.id) ? 'selected' : ''}`}
+                        onClick={() => toggleMeetingParticipant(user.id)}
+                      >
+                        <img
+                          src={user.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(user.username)}`}
+                          alt={user.username}
+                          className="share-user-avatar"
+                          onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || 'U')}`; }}
+                        />
+                        <span className="share-user-name">{user.username}</span>
+                        {selectedMeetingParticipants.find(id => id === user.id) && (
+                          <span className="share-checkmark">✓</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
 
               <div className="modal-footer">
                 <button
                   type="button"
                   className="cancel-btn"
-                  onClick={() => { setShowEditMeetingModal(false); setEditingBooking(null); }}
+                  onClick={() => { setShowEditMeetingModal(false); setEditingBooking(null); setSelectedMeetingParticipants([]); }}
                 >
                   Отмена
                 </button>

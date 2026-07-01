@@ -128,43 +128,54 @@
   border-color: rgba(102, 126, 234, 0.25);
 }
 
-/* Бронирования переговорной — карточка */
+/* Бронирования переговорной — карточка (единая гамма с задачами) */
 [data-theme="dark"] .meeting-room-bookings .booking-item {
-  background: rgba(30, 50, 30, 0.95);
-  border-color: rgba(39, 174, 96, 0.2);
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+  background: var(--page-card-bg);
+  border-color: var(--page-card-border);
+  box-shadow: var(--page-card-shadow);
 }
 
 [data-theme="dark"] .meeting-room-bookings .booking-item:hover {
-  background: rgba(255, 255, 255, 0.06);
-  border-color: rgba(39, 174, 96, 0.35);
-  box-shadow: 0 4px 16px rgba(39, 174, 96, 0.15);
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(102, 126, 234, 0.3);
+  box-shadow: 0 4px 16px rgba(102, 126, 234, 0.2);
 }
 
 [data-theme="dark"] .meeting-room-bookings .booking-time-range {
-  color: #2ecc71;
-  background: rgba(39, 174, 96, 0.15);
+  color: #8b9cf7;
+  background: rgba(102, 126, 234, 0.15);
 }
 
 [data-theme="dark"] .meeting-room-bookings .booking-title {
   color: var(--page-text-primary);
+  font-size: 16px;
+  font-weight: 700;
 }
 
 [data-theme="dark"] .meeting-room-bookings .booking-description {
   color: var(--page-text-secondary);
+  font-size: 13px;
 }
 
 [data-theme="dark"] .meeting-room-bookings .booking-organizer {
   color: var(--page-text-tertiary);
 }
 
+[data-theme="dark"] .meeting-room-bookings .booking-participants {
+  color: var(--page-text-tertiary);
+}
+
+[data-theme="dark"] .meeting-room-bookings .booking-participants .participants-icon {
+  opacity: 0.5;
+}
+
 [data-theme="dark"] .meeting-room-bookings .booking-action-btn {
-  color: #6c8c6c;
+  color: #8b9cf7;
   background: transparent;
 }
 
 [data-theme="dark"] .meeting-room-bookings .booking-action-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(102, 126, 234, 0.25);
 }
 
 [data-theme="dark"] .meeting-room-bookings .booking-action-btn.edit:hover {
@@ -173,13 +184,13 @@
 
 [data-theme="dark"] .meeting-room-bookings .booking-action-btn.delete:hover {
   color: #e8727d;
-  background: rgba(220, 53, 69, 0.15);
+  background: rgba(220, 53, 69, 0.2);
 }
 
 [data-theme="dark"] .meeting-room-bookings .no-bookings-text {
   color: var(--page-text-secondary);
-  background: rgba(39, 174, 96, 0.08);
-  border-color: rgba(39, 174, 96, 0.2);
+  background: rgba(102, 126, 234, 0.08);
+  border-color: rgba(102, 126, 234, 0.25);
 }
 
 /* Status Picker Theme */

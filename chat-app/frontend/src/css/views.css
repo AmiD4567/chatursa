@@ -162,19 +162,19 @@
   padding: 10px 12px;
   margin-bottom: 6px;
   border-radius: 10px;
-  background: var(--booking-bg, #f0faf0);
-  border: 1px solid var(--border-color, #d8eed8);
+  background: var(--task-bg, #f8f9ff);
+  border: 1px solid var(--border-color, #e8e8f0);
   cursor: default;
   transition: all 0.2s ease;
 }
 
 .booking-item:hover {
-  background: var(--booking-hover-bg, #e4f5e4);
-  border-color: var(--booking-hover-border, #b0d8b0);
+  background: var(--task-hover-bg, #f0f1ff);
+  border-color: var(--task-hover-border, #c8c8e8);
   box-shadow: 0 2px 6px rgba(0,0,0,0.06);
 }
 
-.booking-time {
+.booking-time-block {
   flex-shrink: 0;
   min-width: 80px;
   padding-top: 2px;
@@ -184,11 +184,48 @@
   display: inline-block;
   font-size: 11px;
   font-weight: 600;
-  color: var(--time-color, #27ae60);
-  background: var(--time-bg, rgba(39,174,96,0.1));
+  color: var(--time-color, #667eea);
+  background: var(--time-bg, rgba(102,126,234,0.1));
   padding: 2px 8px;
   border-radius: 4px;
   white-space: nowrap;
+}
+
+/* Участники бронирования */
+.booking-participants {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+  font-size: 10px;
+  color: var(--text-tertiary, #888);
+  line-height: 1.2;
+}
+
+.booking-participants .participants-icon {
+  flex-shrink: 0;
+  opacity: 0.6;
+}
+
+.booking-participant {
+  white-space: nowrap;
+}
+
+.participant-separator {
+  color: var(--text-tertiary, #aaa);
+  margin: 0 2px;
+}
+
+.booking-reminder {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  color: var(--text-secondary, #667eea);
+  background: rgba(102, 126, 234, 0.08);
+  padding: 1px 6px;
+  border-radius: 4px;
 }
 
 .booking-content {
@@ -203,10 +240,11 @@
   gap: 8px;
 }
 
-.booking-title {
+.booking-title,
+h6.booking-title {
   margin: 0;
-  font-size: 14px;
-  font-weight: 600;
+  font-size: 15px;
+  font-weight: 700;
   color: var(--text-primary, #1a1a2e);
   line-height: 1.3;
 }
@@ -227,7 +265,12 @@
   color: var(--text-tertiary, #888);
   display: inline-flex;
   align-items: center;
-  gap: 2px;
+  gap: 3px;
+}
+
+.booking-organizer .organizer-icon {
+  flex-shrink: 0;
+  opacity: 0.6;
 }
 
 .booking-actions {
@@ -311,19 +354,19 @@
   }
   
   .booking-item {
-    background: var(--booking-bg, #1a2e1a);
-    border-color: var(--border-color, #2a3e2a);
+    background: var(--task-bg, #1a1a2e);
+    border-color: var(--border-color, #2a2a3e);
   }
   
   .booking-item:hover {
-    background: var(--booking-hover-bg, #223e22);
-    border-color: var(--booking-hover-border, #3a5e3a);
+    background: var(--task-hover-bg, #222240);
+    border-color: var(--task-hover-border, #3a3a5e);
     box-shadow: 0 2px 6px rgba(0,0,0,0.2);
   }
   
   .booking-time-range {
-    color: var(--time-color, #2ecc71);
-    background: var(--time-bg, rgba(39,174,96,0.15));
+    color: var(--time-color, #8890ff);
+    background: var(--time-bg, rgba(102,126,234,0.15));
   }
   
   .booking-title {
@@ -331,7 +374,15 @@
   }
   
   .booking-action-btn:hover {
-    background: rgba(255,255,255,0.08);
+    background: rgba(102,126,234,0.25);
+  }
+  
+  .booking-participants {
+    color: var(--text-tertiary, #6a7);
+  }
+  
+  .booking-participants .participants-icon {
+    opacity: 0.5;
   }
   
   .selected-day-header {
@@ -2167,4 +2218,15 @@ body,
 [data-theme="light"] .wiki-access-badge.selected {
   color: #5a6fd6;
 }
+
+/* Dark theme overrides for booking participants/reminder */
+[data-theme="dark"] .booking-reminder {
+  background: rgba(102, 126, 234, 0.15);
+  color: #8fa4ff;
+}
+[data-theme="light"] .booking-reminder {
+  background: rgba(102, 126, 234, 0.08);
+  color: #667eea;
+}
+
 
