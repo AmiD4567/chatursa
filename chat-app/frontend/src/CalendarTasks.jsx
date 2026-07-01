@@ -228,52 +228,48 @@ function CalendarTasks({
                           >
                             {(task.task_time || task.task_end_time) && (
                               <div className="calendar-task-time-block">
-                                <div className="calendar-task-time-start">{task.task_time || '--:--'}</div>
-                                {(task.task_time && task.task_end_time) && (
-                                  <div className="calendar-task-time-separator">-</div>
-                                )}
-                                <div className="calendar-task-time-end">{task.task_end_time || '--:--'}</div>
+                                <span className="calendar-task-time-range">{task.task_time || '--:--'} – {task.task_end_time || '--:--'}</span>
                               </div>
                             )}
                             <div className="calendar-task-content">
                               <div className="calendar-task-title-row">
                                 <div className="calendar-task-title">{task.title}</div>
+                                <div className="calendar-task-actions">
+                                  <button
+                                    className="task-action-btn share"
+                                    onClick={(e) => { e.stopPropagation(); onShareTask(task); }}
+                                    title="Поделиться"
+                                  >
+                                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                      <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/>
+                                      <polyline points="16,6 12,2 8,6"/>
+                                      <line x1="12" y1="2" x2="12" y2="15"/>
+                                    </svg>
+                                  </button>
+                                  <button
+                                    className="task-action-btn edit"
+                                    onClick={(e) => { e.stopPropagation(); onEditTask(task); }}
+                                    title="Редактировать"
+                                  >
+                                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                      <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>
+                                    </svg>
+                                  </button>
+                                  <button
+                                    className="task-action-btn delete"
+                                    onClick={(e) => { e.stopPropagation(); onDeleteTask(task.id); }}
+                                    title="Удалить"
+                                  >
+                                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                      <polyline points="3,6 5,6 21,6"/>
+                                      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                                    </svg>
+                                  </button>
+                                </div>
                               </div>
                               {task.description && (
                                 <div className="calendar-task-description">{task.description}</div>
                               )}
-                            </div>
-                            <div className="calendar-task-actions">
-                              <button
-                                className="task-share-btn"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  onShareTask(task);
-                                }}
-                                title="Поделиться"
-                              >
-                                📤
-                              </button>
-                              <button
-                                className="task-edit-btn"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  onEditTask(task);
-                                }}
-                                title="Редактировать"
-                              >
-                                ✏️
-                              </button>
-                              <button
-                                className="task-delete-btn"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  onDeleteTask(task.id);
-                                }}
-                                title="Удалить"
-                              >
-                                🗑️
-                              </button>
                             </div>
                           </div>
                         ))}
@@ -316,38 +312,43 @@ function CalendarTasks({
                   <div className="bookings-list">
                     {dayBookings.map(booking => (
                       <div key={booking.id} className="booking-item">
-                        <div className="booking-time">
-                          <span className="booking-time-start">{booking.start_time}</span>
-                          <span className="booking-separator">-</span>
-                          <span className="booking-time-end">{booking.end_time}</span>
+                        <div className="booking-time-block">
+                          <span className="booking-time-range">{booking.start_time} – {booking.end_time}</span>
                         </div>
-                        <div className="booking-info">
-                          <h6 className="booking-title">{booking.title}</h6>
+                        <div className="booking-content">
+                          <div className="booking-title-row">
+                            <h6 className="booking-title">{booking.title}</h6>
+                            {/* Кнопки действий */}
+                            {(canBookMeetingRoom || currentUser?.username === 'Root' || currentUser?.is_admin === 1) && (
+                              booking.organizer_id === currentUser?.id || isAdmin) && (
+                              <div className="booking-actions">
+                                <button
+                                  className="booking-action-btn edit"
+                                  onClick={() => onEditBooking(booking)}
+                                  title="Редактировать"
+                                >
+                                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>
+                                  </svg>
+                                </button>
+                                <button
+                                  className="booking-action-btn delete"
+                                  onClick={() => onDeleteBooking(booking.id)}
+                                  title="Удалить"
+                                >
+                                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <polyline points="3,6 5,6 21,6"/>
+                                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                                  </svg>
+                                </button>
+                              </div>
+                            )}
+                          </div>
                           {booking.description && (
                             <p className="booking-description">{booking.description}</p>
                           )}
                           <span className="booking-organizer">👤 {booking.organizer_name}</span>
                         </div>
-                        {/* Кнопки действий показываем только если пользователь имеет право на бронирование И является организатором ИЛИ админ */}
-                        {(canBookMeetingRoom || currentUser?.username === 'Root' || currentUser?.is_admin === 1) && (
-                          booking.organizer_id === currentUser?.id || isAdmin) && (
-                          <div className="booking-actions">
-                            <button
-                              className="booking-action-btn edit"
-                              onClick={() => onEditBooking(booking)}
-                              title="Редактировать"
-                            >
-                              ✏️
-                            </button>
-                            <button
-                              className="booking-action-btn delete"
-                              onClick={() => onDeleteBooking(booking.id)}
-                              title="Удалить"
-                            >
-                              🗑️
-                            </button>
-                          </div>
-                        )}
                       </div>
                     ))}
                   </div>

@@ -73,20 +73,10 @@
   background: rgba(102, 126, 234, 0.2);
 }
 
-/* Блок времени задачи */
-[data-theme="dark"] .full-page-tasks .calendar-task-time-block {
-  background: var(--page-card-bg);
-  border-color: rgba(102, 126, 234, 0.25);
-  color: #667eea;
-}
-
-[data-theme="dark"] .full-page-tasks .calendar-task-time-start,
-[data-theme="dark"] .full-page-tasks .calendar-task-time-end {
+/* Блок времени задачи — компактный */
+[data-theme="dark"] .full-page-tasks .calendar-task-time-range {
   color: #8b9cf7;
-}
-
-[data-theme="dark"] .full-page-tasks .calendar-task-time-separator {
-  color: rgba(102, 126, 234, 0.5);
+  background: rgba(102, 126, 234, 0.15);
 }
 
 /* Карточка задачи */
@@ -110,35 +100,25 @@
   color: var(--page-text-secondary);
 }
 
-[data-theme="dark"] .full-page-tasks .calendar-task-time {
-  color: var(--page-text-tertiary);
-  border-top-color: rgba(102, 126, 234, 0.2);
-}
-
-/* Кнопки действий задачи */
-[data-theme="dark"] .full-page-tasks .task-share-btn,
-[data-theme="dark"] .full-page-tasks .task-edit-btn,
-[data-theme="dark"] .full-page-tasks .task-delete-btn {
-  background: rgba(102, 126, 234, 0.15);
-  border-color: rgba(102, 126, 234, 0.25);
+/* Кнопки действий задачи — инлайн в заголовке */
+[data-theme="dark"] .full-page-tasks .task-action-btn {
   color: #8b9cf7;
+  background: transparent;
 }
 
-[data-theme="dark"] .full-page-tasks .task-share-btn:hover,
-[data-theme="dark"] .full-page-tasks .task-edit-btn:hover,
-[data-theme="dark"] .full-page-tasks .task-delete-btn:hover {
+[data-theme="dark"] .full-page-tasks .task-action-btn:hover {
   background: rgba(102, 126, 234, 0.25);
-  border-color: rgba(102, 126, 234, 0.4);
 }
 
-[data-theme="dark"] .full-page-tasks .task-delete-btn:hover {
+[data-theme="dark"] .full-page-tasks .task-action-btn.delete:hover {
   background: rgba(220, 53, 69, 0.2);
-  border-color: rgba(220, 53, 69, 0.4);
   color: #e8727d;
 }
 
 [data-theme="dark"] .full-page-tasks .calendar-task-actions {
-  border-top-color: rgba(102, 126, 234, 0.2);
+  border-top: none;
+  margin-top: 0;
+  padding-top: 0;
 }
 
 /* Сообщение "нет задач" */
@@ -148,10 +128,58 @@
   border-color: rgba(102, 126, 234, 0.25);
 }
 
-/* Бронирования переговорной */
-[data-theme="dark"] .meeting-room-bookings .calendar-task-organizer {
+/* Бронирования переговорной — карточка */
+[data-theme="dark"] .meeting-room-bookings .booking-item {
+  background: rgba(30, 50, 30, 0.95);
+  border-color: rgba(39, 174, 96, 0.2);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+}
+
+[data-theme="dark"] .meeting-room-bookings .booking-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(39, 174, 96, 0.35);
+  box-shadow: 0 4px 16px rgba(39, 174, 96, 0.15);
+}
+
+[data-theme="dark"] .meeting-room-bookings .booking-time-range {
+  color: #2ecc71;
+  background: rgba(39, 174, 96, 0.15);
+}
+
+[data-theme="dark"] .meeting-room-bookings .booking-title {
+  color: var(--page-text-primary);
+}
+
+[data-theme="dark"] .meeting-room-bookings .booking-description {
+  color: var(--page-text-secondary);
+}
+
+[data-theme="dark"] .meeting-room-bookings .booking-organizer {
   color: var(--page-text-tertiary);
-  border-top-color: rgba(102, 126, 234, 0.2);
+}
+
+[data-theme="dark"] .meeting-room-bookings .booking-action-btn {
+  color: #6c8c6c;
+  background: transparent;
+}
+
+[data-theme="dark"] .meeting-room-bookings .booking-action-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+[data-theme="dark"] .meeting-room-bookings .booking-action-btn.edit:hover {
+  color: #f0a500;
+}
+
+[data-theme="dark"] .meeting-room-bookings .booking-action-btn.delete:hover {
+  color: #e8727d;
+  background: rgba(220, 53, 69, 0.15);
+}
+
+[data-theme="dark"] .meeting-room-bookings .no-bookings-text {
+  color: var(--page-text-secondary);
+  background: rgba(39, 174, 96, 0.08);
+  border-color: rgba(39, 174, 96, 0.2);
 }
 
 /* Status Picker Theme */

@@ -1037,51 +1037,6 @@
 }
 
 /* ========================================
-   MEETING ROOM BOOKINGS
-   ======================================== */
-
-.meeting-room-bookings {
-  flex: 1;
-  overflow-y: auto;
-  padding: 24px;
-}
-
-.bookings-list {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  margin-top: 20px;
-}
-
-.booking-time {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  min-width: 100px;
-  padding: 12px;
-  background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
-  border-radius: var(--radius-md);
-}
-
-.booking-time-start,
-.booking-time-end {
-  font-size: 16px;
-  font-weight: 700;
-  color: var(--primary-color);
-}
-
-.booking-separator {
-  font-size: 12px;
-  color: #999;
-}
-
-.booking-info {
-  flex: 1;
-  min-width: 0;
-}
-
-/* ========================================
    MEETING ROOM RIGHTS TOGGLE
    ======================================== */
 
@@ -3528,165 +3483,133 @@
 .full-page-tasks .calendar-tasks-list {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 6px;
 }
 
-/* Блок времени задачи - как в бронировании */
+/* Блок времени задачи — компактный (колонка-обёртка) */
 .full-page-tasks .calendar-task-time-block {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  margin-right: 12px;
-  font-size: 14px;
-  font-weight: 700;
-  color: rgba(102, 126, 234, 0.9);
-  background: rgba(255, 255, 255, 0.8);
-  padding: 12px 14px;
-  border-radius: 10px;
-  min-width: 80px;
-  text-align: center;
   flex-shrink: 0;
-  border: 1px solid rgba(102, 126, 234, 0.15);
+  min-width: 80px;
+  padding-top: 2px;
+  display: block;
 }
 
-.full-page-tasks .calendar-task-time-start,
-.full-page-tasks .calendar-task-time-end {
-  font-size: 16px;
-  font-weight: 700;
-  color: rgba(102, 126, 234, 0.95);
-}
-
-.full-page-tasks .calendar-task-time-separator {
-  font-size: 12px;
-  color: rgba(102, 126, 234, 0.6);
+.full-page-tasks .calendar-task-time-range {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  color: #667eea;
+  background: rgba(102,126,234,0.1);
+  padding: 2px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
 }
 
 .full-page-tasks .calendar-task-item {
-  padding: 16px;
-  margin-bottom: 12px;
-  background: rgba(255, 255, 255, 0.95);
-  border-radius: 12px;
-  border: 1px solid rgba(102, 126, 234, 0.15);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  cursor: pointer;
-  transition: all 0.2s;
-  height: auto;
-  min-height: 80px;
   display: flex;
   align-items: flex-start;
-  gap: 12px;
+  gap: 10px;
+  padding: 10px 12px;
+  margin-bottom: 6px;
+  border-radius: 10px;
+  background: #f8f9ff;
+  border: 1px solid #e8e8f0;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  min-height: auto;
+  backdrop-filter: none;
 }
 
 .full-page-tasks .calendar-task-item:hover {
-  background: rgba(255, 255, 255, 1);
-  transform: translateX(4px);
-  box-shadow: 0 4px 16px rgba(102, 126, 234, 0.15);
+  background: #f0f1ff;
+  border-color: #c8c8e8;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+  transform: none;
 }
 
-.full-page-tasks .calendar-task-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: rgba(51, 51, 51, 0.95);
-  margin-bottom: 6px;
-}
-
-.full-page-tasks .calendar-task-description {
-  font-size: 13px;
-  color: rgba(102, 102, 102, 0.8);
-  margin-top: 6px;
-  line-height: 1.5;
-  white-space: normal;
-  overflow: visible;
-  text-overflow: clip;
-  word-wrap: break-word;
-  word-break: normal;
-}
-
-.full-page-tasks .calendar-task-time {
-  font-size: 12px;
-  color: rgba(102, 102, 102, 0.7);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid rgba(102, 126, 234, 0.15);
-}
-
-/* Кнопки действий задачи */
-.full-page-tasks .task-share-btn,
-.full-page-tasks .task-edit-btn,
-.full-page-tasks .task-delete-btn {
-  padding: 6px 10px;
-  background: rgba(102, 126, 234, 0.08);
-  border: 1px solid rgba(102, 126, 234, 0.15);
-  border-radius: 8px;
-  cursor: pointer;
-  transition: all 0.2s;
-  color: rgba(102, 126, 234, 0.8);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  line-height: 1;
-}
-
-.full-page-tasks .task-share-btn .nav-btn-icon,
-.full-page-tasks .task-edit-btn .nav-btn-icon,
-.full-page-tasks .task-delete-btn .nav-btn-icon {
-  width: 18px;
-  height: 18px;
-}
-
-.full-page-tasks .task-share-btn .nav-btn-icon svg,
-.full-page-tasks .task-edit-btn .nav-btn-icon svg,
-.full-page-tasks .task-delete-btn .nav-btn-icon svg {
-  width: 16px;
-  height: 16px;
-}
-
-.full-page-tasks .task-share-btn:hover,
-.full-page-tasks .task-edit-btn:hover,
-.full-page-tasks .task-delete-btn:hover {
-  background: rgba(102, 126, 234, 0.15);
-  border-color: rgba(102, 126, 234, 0.25);
-  color: rgba(102, 126, 234, 0.95);
-  transform: scale(1.05);
-}
-
-.full-page-tasks .task-delete-btn:hover {
-  background: rgba(220, 53, 69, 0.1);
-  border-color: rgba(220, 53, 69, 0.25);
-  color: rgba(220, 53, 69, 0.9);
-}
-
-.full-page-tasks .calendar-task-actions {
-  display: flex;
-  gap: 8px;
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid rgba(102, 126, 234, 0.15);
-  justify-content: flex-end;
-  align-items: center;
+.full-page-tasks .calendar-task-content {
+  flex: 1;
+  min-width: 0;
 }
 
 .full-page-tasks .calendar-task-title-row {
   display: flex;
-  justify-content: space-between;
   align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
-/* Выравнивание кнопок в одну линию */
-.full-page-tasks .task-share-btn,
-.full-page-tasks .task-edit-btn,
-.full-page-tasks .task-delete-btn {
+.full-page-tasks .calendar-task-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1a1a2e;
+  margin-bottom: 0;
+  line-height: 1.3;
+  word-break: break-word;
+}
+
+.full-page-tasks .calendar-task-description {
+  font-size: 12px;
+  color: #666;
+  margin-top: 4px;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: normal;
+  word-wrap: break-word;
+}
+
+/* Кнопки действий — инлайн, без обёртки в виде блока под карточкой */
+.full-page-tasks .calendar-task-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  border-top: none;
+  margin-top: 0;
+  padding-top: 0;
+  justify-content: flex-start;
+}
+
+.full-page-tasks .task-action-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 32px;
-  width: 36px;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #999;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  padding: 0;
+  line-height: 1;
+}
+
+.full-page-tasks .task-action-btn:hover {
+  background: rgba(0,0,0,0.06);
+  transform: none;
+}
+
+.full-page-tasks .task-action-btn.share:hover {
+  color: #667eea;
+}
+
+.full-page-tasks .task-action-btn.edit:hover {
+  color: #f0a500;
+}
+
+.full-page-tasks .task-action-btn.delete:hover {
+  color: #e74c3c;
+}
+
+.full-page-tasks .task-action-btn svg {
+  display: block;
+  width: 16px;
+  height: 16px;
 }
 
 .full-page-tasks .no-tasks-message {
@@ -3700,20 +3623,116 @@
 }
 
 /* Бронирования переговорной */
-.meeting-room-bookings .calendar-task-organizer {
-  font-size: 12px;
-  color: var(--text-tertiary);
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid rgba(102, 126, 234, 0.1);
+.meeting-room-bookings .booking-item {
   display: flex;
-  align-items: center;
-  gap: 6px;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  margin-bottom: 6px;
+  border-radius: 10px;
+  background: #f0faf0;
+  border: 1px solid #d0e8d8;
+  cursor: pointer;
+  transition: all 0.2s ease;
 }
 
-.meeting-room-bookings .calendar-task-organizer::before {
-  content: '👤';
-  font-size: 13px;
+.meeting-room-bookings .booking-item:hover {
+  background: #e8f5e8;
+  border-color: #a0d0b0;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+}
+
+.meeting-room-bookings .booking-time-block {
+  flex-shrink: 0;
+  min-width: 80px;
+  padding-top: 2px;
+}
+
+.meeting-room-bookings .booking-time-range {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  color: #27ae60;
+  background: rgba(39,174,96,0.1);
+  padding: 2px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.meeting-room-bookings .booking-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.meeting-room-bookings .booking-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.meeting-room-bookings .booking-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1a2e1a;
+}
+
+.meeting-room-bookings .booking-description {
+  font-size: 12px;
+  color: #456;
+  margin-top: 4px;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.meeting-room-bookings .booking-organizer {
+  font-size: 11px;
+  color: #678;
+  margin-top: 4px;
+}
+
+.meeting-room-bookings .booking-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.meeting-room-bookings .booking-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #8a9;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  padding: 0;
+}
+
+.meeting-room-bookings .booking-action-btn:hover {
+  background: rgba(0,0,0,0.06);
+}
+
+.meeting-room-bookings .booking-action-btn.edit:hover {
+  color: #f0a500;
+}
+
+.meeting-room-bookings .booking-action-btn.delete:hover {
+  color: #e74c3c;
+  background: rgba(220,53,69,0.08);
+}
+
+.meeting-room-bookings .booking-action-btn svg {
+  display: block;
+  width: 16px;
+  height: 16px;
 }
 
 .meeting-room-bookings .no-bookings-text {
@@ -3721,20 +3740,19 @@
   color: rgba(102, 102, 102, 0.8);
   text-align: center;
   padding: 40px 20px;
-  background: rgba(102, 126, 234, 0.05);
+  background: rgba(39, 174, 96, 0.05);
   border-radius: 16px;
-  border: 1px dashed rgba(102, 126, 234, 0.2);
+  border: 1px dashed rgba(39, 174, 96, 0.2);
 }
 
 /* Стандартные стили элементов */
-.full-page-tasks .calendar-task-item,
-.full-page-tasks .calendar-birthday-item {
-  background: rgba(255, 255, 255, 0.9);
-  border-color: rgba(102, 126, 234, 0.2);
+.full-page-tasks .calendar-task-item {
+  background: #f8f9ff;
+  border-color: #e8e8f0;
 }
 
 .full-page-tasks .calendar-task-item:hover {
-  background: rgba(255, 255, 255, 1);
+  background: #f0f1ff;
 }
 
 /* Админ-панель на полной странице */
@@ -6284,4 +6302,4 @@
 .modal-input:focus {
   border-color: #667eea;
 }
-
+
