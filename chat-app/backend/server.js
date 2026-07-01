@@ -562,7 +562,7 @@ function initDatabase() {
       description TEXT,
       meeting_date TEXT NOT NULL,
       start_time TEXT NOT NULL,
-      end_// la l'_time TEXT NOT NULL,
+      end_time TEXT NOT NULL,
       organizer_id TEXT,
       organizer_name TEXT,
       reminder_minutes INTEGER DEFAULT NULL,
@@ -570,7 +570,7 @@ function initDatabase() {
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (organizer_id) REFERENCES users(id)
     );
-    CREATE INDEX IF NOT EXISTS idx_meeting_room_organizer_// la la l't_date ON meeting_room_bookings(organizer_id, meeting_date);
+    CREATE INDEX IF NOT EXISTS idx_meeting_room_organizer_date ON meeting_room_bookings(organizer_id, meeting_date);
   `);
 
   // Таблица участников бронирования переговорной
