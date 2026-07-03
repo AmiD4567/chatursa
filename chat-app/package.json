@@ -1,7 +1,7 @@
-{
+﻿{
     "name": "chat-app",
-    "version": "1.0.177",
-    "description": "Корпоративный мессенджер",
+    "version": "1.0.178",
+    "description": "РљРѕСЂРїРѕСЂР°С‚РёРІРЅС‹Р№ РјРµСЃСЃРµРЅРґР¶РµСЂ",
     "main": "electron/main.js",
     "scripts": {
         "build": "cd frontend && npm run build",
@@ -105,3 +105,4 @@
         "wait-on": "^7.2.0"
     }
 }
+
