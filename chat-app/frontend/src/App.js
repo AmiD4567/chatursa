@@ -16,6 +16,55 @@ import InAppNotification from './InAppNotification';
 const SOCKET_URL = 'http://192.168.210.48:3001';
 const STORAGE_KEY = 'chat_user_data';
 
+// CSRF токен для защиты от межсайтовой подделки запросов
+let csrfToken = '';
+
+async function fetchCsrfToken() {
+  try {
+    const res = await fetch(`${SOCKET_URL}/api/csrf-token`, { credentials: 'include' });
+    if (res.ok) {
+      const data = await res.json();
+      csrfToken = data.csrfToken;
+    }
+  } catch (e) {
+    console.warn('Не удалось получить CSRF-токен:', e.message);
+  }
+}
+fetchCsrfToken();
+
+function addCsrfHeader(init) {
+  if (init.headers instanceof Headers) {
+    if (!init.headers.has('X-CSRF-Token')) {
+      init.headers.set('X-CSRF-Token', csrfToken);
+    }
+  } else if (Array.isArray(init.headers)) {
+    init.headers.push(['X-CSRF-Token', csrfToken]);
+  } else {
+    init.headers = { ...(init.headers || {}), 'X-CSRF-Token': csrfToken };
+  }
+  return init;
+}
+
+// Автоматически добавляем CSRF-токен во все мутирующие fetch-запросы
+const originalFetch = window.fetch;
+window.fetch = function(input, init = {}) {
+  const method = (init.method || 'GET').toUpperCase();
+  const isMutating = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
+
+  if (isMutating && csrfToken) {
+    init = addCsrfHeader(init);
+  }
+
+  return originalFetch.call(window, input, init).then(async (res) => {
+    if (res.status === 403 && isMutating && csrfToken) {
+      await fetchCsrfToken();
+      const retryInit = addCsrfHeader({ ...init });
+      return originalFetch.call(window, input, retryInit);
+    }
+    return res;
+  });
+};
+
 const SELF_DESTRUCT_OPTIONS = [
   { label: '5 секунд', value: 5000 },
   { label: '30 секунд', value: 30000 },
@@ -167,7 +216,7 @@ function App() {
   const [showLoginForm, setShowLoginForm] = useState(false); // Показывать форму входа
   const [showAuthForm, setShowAuthForm] = useState(false); // Свернуто/развернуто форма входа/регистрации
   const [appVersion, setAppVersion] = useState('1.0.8');
-  const [updateStatus, setUpdateStatus] = useState(null); // null | 'checking' | 'available' | 'downloading' | 'ready' | 'no-update' | 'error'
+  const [updateStatus, setUpdateStatus] = useState(null); // null | 'checking' | 'idle' | 'downloading' | 'ready' | 'installing' | 'no-update' | 'error'
   const [updateProgress, setUpdateProgress] = useState(0);
   const [showUpdateBanner, setShowUpdateBanner] = useState(false);
   // Electron update info (версия + нуты)
@@ -383,6 +432,8 @@ function App() {
   const [availableUsers, setAvailableUsers] = useState([]);
   const [selectedUsersForShare, setSelectedUsersForShare] = useState([]);
   const [selectedMeetingParticipants, setSelectedMeetingParticipants] = useState([]);
+  const [participantSearchText, setParticipantSearchText] = useState('');
+  const [showParticipantDropdown, setShowParticipantDropdown] = useState(false);
   const [sharedTasksReceived, setSharedTasksReceived] = useState([]);
   const [showSharedTasksModal, setShowSharedTasksModal] = useState(false);
   const [showDocuments, setShowDocuments] = useState(false);
@@ -927,51 +978,13 @@ function App() {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // Получение версии приложения и настройка обновлений
+  // Получение версии приложения
   useEffect(() => {
     const initApp = async () => {
-      // Получаем версию из Electron API если доступно
       if (window.electronAPI) {
         try {
           const version = await window.electronAPI.getAppVersion();
           setAppVersion(version);
-
-          // Подписываемся на обновления
-          window.electronAPI.onUpdateChecking(() => {
-            setUpdateStatus('checking');
-            console.log('Проверка обновлений...');
-          });
-
-          window.electronAPI.onUpdateAvailable((event, info) => {
-            setUpdateStatus('available');
-            console.log('Доступно обновление:', info);
-          });
-
-          window.electronAPI.onUpdateNotAvailable((event, info) => {
-            setUpdateStatus('no-update');
-            console.log('Обновлений не найдено');
-          });
-
-          window.electronAPI.onDownloadProgress((event, progress) => {
-            setUpdateStatus('downloading');
-            setUpdateProgress(progress.percent);
-            console.log('Загрузка обновления:', progress.percent);
-          });
-
-          window.electronAPI.onUpdateDownloaded((event, info) => {
-            setUpdateStatus('ready');
-            console.log('Обновление готово к установке');
-          });
-
-          window.electronAPI.onUpdatePostponed((event, info) => {
-            setUpdateStatus(null);
-            console.log('Пользователь отложил установку обновления');
-          });
-
-          window.electronAPI.onUpdateError((event, error) => {
-            setUpdateStatus(null);
-            console.error('Ошибка обновления:', error);
-          });
         } catch (err) {
           console.error('Ошибка получения версии:', err);
         }
@@ -984,7 +997,6 @@ function App() {
             console.log(`app visibility: ${visible}`);
           });
         }
-        // Запрос текущего статуса видимости при инициализации
         if (window.electronAPI.getAppVisibilityStatus) {
           window.electronAPI.getAppVisibilityStatus();
         }
@@ -998,7 +1010,7 @@ function App() {
   // Система автообновлений (Electron + Browser)
   // ============================================
 
-  // Слушатели событий Electron autoUpdater
+  // Единый источник подписок на события Electron autoUpdater
   useEffect(() => {
     if (!window.electronAPI) return;
 
@@ -1009,7 +1021,8 @@ function App() {
     const cleanupAvailable = window.electronAPI.onUpdateAvailable((info) => {
       setElectronUpdateInfo(info);
       setBrowserUpdateInfo(null);
-      setUpdateStatus('downloading');
+      setUpdateStatus('available');
+      // autoDownload = false, пользователь нажмёт «Скачать» вручную
     });
 
     const cleanupNotAvailable = window.electronAPI.onUpdateNotAvailable(() => {
@@ -1019,12 +1032,12 @@ function App() {
 
     const cleanupDownloaded = window.electronAPI.onUpdateDownloaded((info) => {
       setElectronUpdateInfo(info);
-      setUpdateStatus('ready');
+      setUpdateStatus('installing'); // Установка начнётся автоматически (main.js вызывает quitAndInstall)
     });
 
     const cleanupProgress = window.electronAPI.onDownloadProgress((progressObj) => {
-      setUpdateProgress(progressObj.percent);
-      if (updateStatus !== 'downloading') {
+      if (progressObj && typeof progressObj.percent === 'number') {
+        setUpdateProgress(progressObj.percent);
         setUpdateStatus('downloading');
       }
     });
@@ -1034,6 +1047,15 @@ function App() {
       setUpdateStatus('error');
     });
 
+    const cleanupPostponed = window.electronAPI.onUpdatePostponed(() => {
+      setUpdateStatus('idle');
+    });
+
+    const cleanupInstallPrepare = window.electronAPI.onInstallPrepare(() => {
+      // Бэкенд останавливается, сейчас начнётся установка
+      setUpdateStatus('installing');
+    });
+
     return () => {
       cleanupChecking?.();
       cleanupAvailable?.();
@@ -1041,6 +1063,8 @@ function App() {
       cleanupDownloaded?.();
       cleanupProgress?.();
       cleanupError?.();
+      cleanupPostponed?.();
+      cleanupInstallPrepare?.();
     };
   }, []);
 
@@ -1382,6 +1406,19 @@ function App() {
       }
     });
 
+    newSocket.on('meeting_reminder', ({ bookingId, title, organizerName, meetingDate, startTime, endTime, reminderMinutes }) => {
+      // Показываем уведомление о скорой встрече
+      const msg = `🔔 Напоминание о встрече\n\n📌 ${title}\n📅 ${meetingDate} ${startTime}-${endTime}\n👤 Организатор: ${organizerName}`;
+      alert(msg);
+      // Если разрешены push-уведомления — показываем и их
+      if (Notification.permission === 'granted') {
+        new Notification('🔔 Скоро встреча!', {
+          body: `${title}\n${meetingDate} ${startTime}-${endTime}`,
+          icon: '/favicon.ico'
+        });
+      }
+    });
+
     newSocket.on('new_message', async ({ message, chat, isOwnMessage }) => {
       // Расшифровываем E2EE сообщение
       if (message.e2ee && message.e2ee_nonce) {
@@ -1441,7 +1478,12 @@ function App() {
             });
 
             notif.onclick = () => {
-              window.focus();
+              // Фокусируем окно через main process (работает надёжнее, чем window.focus)
+              if (window.electronAPI?.focusWindow) {
+                window.electronAPI.focusWindow();
+              } else {
+                window.focus();
+              }
               const chatId = message.chatId;
               const chatToOpen = chats.find(c => c.id === chatId);
               if (chatToOpen) {
@@ -2989,6 +3031,7 @@ function App() {
   const handleSelectChat = async (chat) => {
     setActiveChatId(chat.id);
     activeChatIdRef.current = chat.id;
+    setActiveView('chats'); // Переключаемся на вид чатов
 
     // На мобильных — переключаемся на вид чата
     setShowChatList(false);
@@ -5245,6 +5288,8 @@ function App() {
       reminderMinutes: booking.reminder_minutes ? String(booking.reminder_minutes) : ''
     });
     setSelectedMeetingParticipants((booking.participants_list || []).map(p => p.user_id));
+    setParticipantSearchText('');
+    setShowParticipantDropdown(false);
     fetchAvailableUsers();
     setShowEditMeetingModal(true);
   };
@@ -5309,6 +5354,8 @@ function App() {
           reminderMinutes: ''
         });
         setSelectedMeetingParticipants([]);
+        setParticipantSearchText('');
+        setShowParticipantDropdown(false);
         setEditingBooking(null);
         setShowEditMeetingModal(false);
         alert('Бронирование обновлено!');
@@ -6695,6 +6742,20 @@ function App() {
               <button type="button" className="create-btn" onClick={installUpdate}>
                 Установить сейчас
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {updateStatus === 'installing' && window.electronAPI && (
+        <div className="modal-overlay">
+          <div className="modal-content update-install-modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>⏳ Подготовка к установке...</h3>
+            </div>
+            <div className="modal-body">
+              <p>Останавливается серверная часть приложения.</p>
+              <p className="update-hint">Пожалуйста, подождите — установка начнётся автоматически.</p>
+              <div className="update-spinner" style={{ margin: '16px auto' }}></div>
             </div>
           </div>
         </div>
@@ -9297,7 +9358,23 @@ function App() {
                     : 'Выберите день для просмотра бронирований'}
                 </h5>
                 {selectedDate && (canBookMeetingRoom || currentUser?.username === 'Root' || currentUser?.is_admin === 1) && (
-                  <button className="add-task-btn" onClick={() => { fetchAvailableUsers(); setShowMeetingModal(true); }}>
+                  <button className="add-task-btn" onClick={() => { 
+                    fetchAvailableUsers(); 
+                    setEditingBooking(null); 
+                    setMeetingForm({
+                      title: '',
+                      description: '',
+                      meetingDate: '',
+                      startTime: '',
+                      endTime: '',
+                      organizer: '',
+                      reminderMinutes: ''
+                    });
+                    setSelectedMeetingParticipants([]);
+                    setParticipantSearchText('');
+                    setShowParticipantDropdown(false);
+                    setShowMeetingModal(true); 
+                  }}>
                     + Забронировать
                   </button>
                 )}
@@ -10104,14 +10181,14 @@ function App() {
                     <div className="update-section">
                       <h3>Обновление приложения</h3>
 
-                      {updateStatus === null && (
+                      {updateStatus === null || updateStatus === 'idle' ? (
                         <button
                           className="btn-check-update"
                           onClick={checkForUpdates}
                         >
                           🔍 Проверить обновления
                         </button>
-                      )}
+                      ) : null}
 
                       {updateStatus === 'checking' && (
                         <div className="update-status">
@@ -10199,6 +10276,13 @@ function App() {
                           >
                             Повторить
                           </button>
+                        </div>
+                      )}
+
+                      {updateStatus === 'installing' && (
+                        <div className="update-downloading">
+                          <p>⏳ Установка... Останавливается сервер...</p>
+                          <div className="update-spinner" style={{ margin: '8px auto' }}></div>
                         </div>
                       )}
                     </div>
@@ -10610,7 +10694,7 @@ function App() {
       {/* Модальное окно создания/редактирования задачи */}
       {showTaskModal && (
         <div className="modal-overlay" onClick={() => setShowTaskModal(false)}>
-          <div className="modal-content task-modal" onClick={e => e.stopPropagation()}>
+          <div className="modal-content task-modal" onClick={e => e.stopPropagation()} style={{ maxHeight: '85vh', overflowY: 'auto' }}>
             <div className="modal-header">
               <h3>{editingTask ? 'Редактировать задачу' : 'Новая задача'}</h3>
               <button onClick={() => setShowTaskModal(false)}>✕</button>
@@ -10707,11 +10791,11 @@ function App() {
 
       {/* Модальное окно бронирования переговорной */}
       {showMeetingModal && (
-        <div className="modal-overlay" onClick={() => { setShowMeetingModal(false); setSelectedMeetingParticipants([]); }}>
-          <div className="modal-content task-modal" onClick={e => e.stopPropagation()}>
+        <div className="modal-overlay" onClick={() => { setShowMeetingModal(false); setMeetingForm({ title: '', description: '', meetingDate: '', startTime: '', endTime: '', organizer: '', reminderMinutes: '' }); setSelectedMeetingParticipants([]); setParticipantSearchText(''); setShowParticipantDropdown(false); }}>
+          <div className="modal-content task-modal" onClick={e => e.stopPropagation()} style={{ maxHeight: '85vh', overflowY: 'auto' }}>
             <div className="modal-header">
               <h3>🏢 Забронировать переговорную</h3>
-              <button onClick={() => { setShowMeetingModal(false); setSelectedMeetingParticipants([]); }}>✕</button>
+              <button onClick={() => { setShowMeetingModal(false); setMeetingForm({ title: '', description: '', meetingDate: '', startTime: '', endTime: '', organizer: '', reminderMinutes: '' }); setSelectedMeetingParticipants([]); setParticipantSearchText(''); setShowParticipantDropdown(false); }}>✕</button>
             </div>
 
             <form onSubmit={async (e) => {
@@ -10754,6 +10838,8 @@ function App() {
                     reminderMinutes: ''
                   });
                   setSelectedMeetingParticipants([]);
+                  setParticipantSearchText('');
+                  setShowParticipantDropdown(false);
                   
                   setShowMeetingModal(false);
                   alert('Переговорная успешно забронирована!');
@@ -10846,29 +10932,63 @@ function App() {
                   </select>
                 </div>
 
-                {/* Выбор участников */}
+                {/* Выбор участников — выпадающий список с поиском */}
                 <div className="form-group">
                   <label>Участники</label>
-                  <div className="share-users-list" style={{maxHeight: '150px', overflowY: 'auto'}}>
-                    {availableUsers.length === 0 && <p style={{color: '#888', fontSize: '13px'}}>Загрузка пользователей...</p>}
-                    {availableUsers.map(user => (
-                      <div
-                        key={user.id}
-                        className={`share-user-item ${selectedMeetingParticipants.find(id => id === user.id) ? 'selected' : ''}`}
-                        onClick={() => toggleMeetingParticipant(user.id)}
-                      >
-                        <img
-                          src={user.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(user.username)}`}
-                          alt={user.username}
-                          className="share-user-avatar"
-                          onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || 'U')}`; }}
-                        />
-                        <span className="share-user-name">{user.username}</span>
-                        {selectedMeetingParticipants.find(id => id === user.id) && (
-                          <span className="share-checkmark">✓</span>
-                        )}
-                      </div>
-                    ))}
+                  <div style={{position: 'relative'}}>
+                    <div style={{display: 'flex', flexWrap: 'wrap', gap: '4px', padding: '6px 8px', border: '1px solid #555', borderRadius: '6px', background: '#2a2a2a', cursor: 'text', minHeight: '36px', alignItems: 'center'}} onClick={() => { setShowParticipantDropdown(true); document.getElementById('participant-search-input')?.focus(); }}>
+                      {selectedMeetingParticipants.map(userId => {
+                        const user = availableUsers.find(u => u.id === userId);
+                        return user ? (
+                          <span key={userId} style={{display: 'inline-flex', alignItems: 'center', gap: '4px', background: '#3a3f5c', borderRadius: '12px', padding: '2px 8px', fontSize: '13px', color: '#e0e0e0'}}>
+                            {user.username}
+                            <span style={{cursor: 'pointer', fontSize: '14px', color: '#aaa', marginLeft: '2px'}} onClick={(e) => { e.stopPropagation(); toggleMeetingParticipant(userId); }}>×</span>
+                          </span>
+                        ) : null;
+                      })}
+                      <input
+                        id="participant-search-input"
+                        type="text"
+                        value={participantSearchText}
+                        onChange={(e) => { setParticipantSearchText(e.target.value); setShowParticipantDropdown(true); }}
+                        onFocus={() => setShowParticipantDropdown(true)}
+                        placeholder={selectedMeetingParticipants.length === 0 ? 'Поиск участников...' : ''}
+                        style={{border: 'none', outline: 'none', background: 'transparent', color: '#e0e0e0', fontSize: '13px', flex: '1', minWidth: '80px', padding: '0'}}
+                      />
+                    </div>
+                    {showParticipantDropdown && (
+                      <>
+                        <div style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 999}} onClick={() => setShowParticipantDropdown(false)} />
+                        <div style={{position: 'absolute', top: '100%', left: 0, right: 0, maxHeight: '180px', overflowY: 'auto', background: '#2a2a2a', border: '1px solid #555', borderRadius: '6px', zIndex: 1000, marginTop: '4px'}}>
+                          {availableUsers.filter(u => u.username.toLowerCase().includes(participantSearchText.toLowerCase())).length === 0 && (
+                            <div style={{padding: '8px 12px', color: '#888', fontSize: '13px'}}>Никого не найдено</div>
+                          )}
+                          {availableUsers
+                            .filter(u => u.username.toLowerCase().includes(participantSearchText.toLowerCase()))
+                            .map(user => {
+                              const isSelected = selectedMeetingParticipants.find(id => id === user.id);
+                              return (
+                                <div
+                                  key={user.id}
+                                  onClick={() => toggleMeetingParticipant(user.id)}
+                                  style={{display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 12px', cursor: 'pointer', background: isSelected ? '#3a3f5c' : 'transparent', color: '#e0e0e0', fontSize: '13px'}}
+                                  onMouseEnter={(e) => e.currentTarget.style.background = isSelected ? '#4a4f6c' : '#333'}
+                                  onMouseLeave={(e) => e.currentTarget.style.background = isSelected ? '#3a3f5c' : 'transparent'}
+                                >
+                                  <img
+                                    src={user.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(user.username)}`}
+                                    alt={user.username}
+                                    style={{width: '24px', height: '24px', borderRadius: '50%'}}
+                                    onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || 'U')}`; }}
+                                  />
+                                  <span style={{flex: 1}}>{user.username}</span>
+                                  {isSelected && <span style={{color: '#4caf50'}}>✓</span>}
+                                </div>
+                              );
+                            })}
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
               </div>
@@ -10877,7 +10997,7 @@ function App() {
                 <button
                   type="button"
                   className="cancel-btn"
-                  onClick={() => { setShowMeetingModal(false); setSelectedMeetingParticipants([]); }}
+                  onClick={() => { setShowMeetingModal(false); setMeetingForm({ title: '', description: '', meetingDate: '', startTime: '', endTime: '', organizer: '', reminderMinutes: '' }); setSelectedMeetingParticipants([]); setParticipantSearchText(''); setShowParticipantDropdown(false); }}
                 >
                   Отмена
                 </button>
@@ -10896,11 +11016,11 @@ function App() {
 
       {/* Модальное окно редактирования бронирования */}
       {showEditMeetingModal && (
-        <div className="modal-overlay" onClick={() => { setShowEditMeetingModal(false); setEditingBooking(null); setSelectedMeetingParticipants([]); }}>
-          <div className="modal-content task-modal" onClick={e => e.stopPropagation()}>
+        <div className="modal-overlay" onClick={() => { setShowEditMeetingModal(false); setEditingBooking(null); setMeetingForm({ title: '', description: '', meetingDate: '', startTime: '', endTime: '', organizer: '', reminderMinutes: '' }); setSelectedMeetingParticipants([]); setParticipantSearchText(''); setShowParticipantDropdown(false); }}>
+          <div className="modal-content task-modal" onClick={e => e.stopPropagation()} style={{ maxHeight: '85vh', overflowY: 'auto' }}>
             <div className="modal-header">
               <h3>✏️ Редактировать бронирование</h3>
-              <button onClick={() => { setShowEditMeetingModal(false); setEditingBooking(null); setSelectedMeetingParticipants([]); }}>✕</button>
+              <button onClick={() => { setShowEditMeetingModal(false); setEditingBooking(null); setMeetingForm({ title: '', description: '', meetingDate: '', startTime: '', endTime: '', organizer: '', reminderMinutes: '' }); setSelectedMeetingParticipants([]); setParticipantSearchText(''); setShowParticipantDropdown(false); }}>✕</button>
             </div>
 
             <form onSubmit={handleUpdateBooking}>
@@ -10984,29 +11104,63 @@ function App() {
                   </select>
                 </div>
 
-                {/* Выбор участников */}
+                {/* Выбор участников — выпадающий список с поиском */}
                 <div className="form-group">
                   <label>Участники</label>
-                  <div className="share-users-list" style={{maxHeight: '150px', overflowY: 'auto'}}>
-                    {availableUsers.length === 0 && <p style={{color: '#888', fontSize: '13px'}}>Загрузка пользователей...</p>}
-                    {availableUsers.map(user => (
-                      <div
-                        key={user.id}
-                        className={`share-user-item ${selectedMeetingParticipants.find(id => id === user.id) ? 'selected' : ''}`}
-                        onClick={() => toggleMeetingParticipant(user.id)}
-                      >
-                        <img
-                          src={user.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(user.username)}`}
-                          alt={user.username}
-                          className="share-user-avatar"
-                          onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || 'U')}`; }}
-                        />
-                        <span className="share-user-name">{user.username}</span>
-                        {selectedMeetingParticipants.find(id => id === user.id) && (
-                          <span className="share-checkmark">✓</span>
-                        )}
-                      </div>
-                    ))}
+                  <div style={{position: 'relative'}}>
+                    <div style={{display: 'flex', flexWrap: 'wrap', gap: '4px', padding: '6px 8px', border: '1px solid #555', borderRadius: '6px', background: '#2a2a2a', cursor: 'text', minHeight: '36px', alignItems: 'center'}} onClick={() => { setShowParticipantDropdown(true); document.getElementById('participant-search-input-edit')?.focus(); }}>
+                      {selectedMeetingParticipants.map(userId => {
+                        const user = availableUsers.find(u => u.id === userId);
+                        return user ? (
+                          <span key={userId} style={{display: 'inline-flex', alignItems: 'center', gap: '4px', background: '#3a3f5c', borderRadius: '12px', padding: '2px 8px', fontSize: '13px', color: '#e0e0e0'}}>
+                            {user.username}
+                            <span style={{cursor: 'pointer', fontSize: '14px', color: '#aaa', marginLeft: '2px'}} onClick={(e) => { e.stopPropagation(); toggleMeetingParticipant(userId); }}>×</span>
+                          </span>
+                        ) : null;
+                      })}
+                      <input
+                        id="participant-search-input-edit"
+                        type="text"
+                        value={participantSearchText}
+                        onChange={(e) => { setParticipantSearchText(e.target.value); setShowParticipantDropdown(true); }}
+                        onFocus={() => setShowParticipantDropdown(true)}
+                        placeholder={selectedMeetingParticipants.length === 0 ? 'Поиск участников...' : ''}
+                        style={{border: 'none', outline: 'none', background: 'transparent', color: '#e0e0e0', fontSize: '13px', flex: '1', minWidth: '80px', padding: '0'}}
+                      />
+                    </div>
+                    {showParticipantDropdown && (
+                      <>
+                        <div style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 999}} onClick={() => setShowParticipantDropdown(false)} />
+                        <div style={{position: 'absolute', top: '100%', left: 0, right: 0, maxHeight: '180px', overflowY: 'auto', background: '#2a2a2a', border: '1px solid #555', borderRadius: '6px', zIndex: 1000, marginTop: '4px'}}>
+                          {availableUsers.filter(u => u.username.toLowerCase().includes(participantSearchText.toLowerCase())).length === 0 && (
+                            <div style={{padding: '8px 12px', color: '#888', fontSize: '13px'}}>Никого не найдено</div>
+                          )}
+                          {availableUsers
+                            .filter(u => u.username.toLowerCase().includes(participantSearchText.toLowerCase()))
+                            .map(user => {
+                              const isSelected = selectedMeetingParticipants.find(id => id === user.id);
+                              return (
+                                <div
+                                  key={user.id}
+                                  onClick={() => toggleMeetingParticipant(user.id)}
+                                  style={{display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 12px', cursor: 'pointer', background: isSelected ? '#3a3f5c' : 'transparent', color: '#e0e0e0', fontSize: '13px'}}
+                                  onMouseEnter={(e) => e.currentTarget.style.background = isSelected ? '#4a4f6c' : '#333'}
+                                  onMouseLeave={(e) => e.currentTarget.style.background = isSelected ? '#3a3f5c' : 'transparent'}
+                                >
+                                  <img
+                                    src={user.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(user.username)}`}
+                                    alt={user.username}
+                                    style={{width: '24px', height: '24px', borderRadius: '50%'}}
+                                    onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || 'U')}`; }}
+                                  />
+                                  <span style={{flex: 1}}>{user.username}</span>
+                                  {isSelected && <span style={{color: '#4caf50'}}>✓</span>}
+                                </div>
+                              );
+                            })}
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
               </div>
@@ -11015,7 +11169,7 @@ function App() {
                 <button
                   type="button"
                   className="cancel-btn"
-                  onClick={() => { setShowEditMeetingModal(false); setEditingBooking(null); setSelectedMeetingParticipants([]); }}
+                  onClick={() => { setShowEditMeetingModal(false); setEditingBooking(null); setMeetingForm({ title: '', description: '', meetingDate: '', startTime: '', endTime: '', organizer: '', reminderMinutes: '' }); setSelectedMeetingParticipants([]); setParticipantSearchText(''); setShowParticipantDropdown(false); }}
                 >
                   Отмена
                 </button>

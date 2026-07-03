@@ -17,7 +17,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   downloadUpdate: () => ipcRenderer.send('start-update'),
   quitAndInstall: () => ipcRenderer.send('quit-and-install'),
   onUpdateChecking: (callback) => {
-    const handler = (_, info) => callback(info);
+    const handler = () => callback();
     ipcRenderer.on('checking-for-update', handler);
     return () => ipcRenderer.removeListener('checking-for-update', handler);
   },
@@ -47,9 +47,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('update-error', handler);
   },
   onUpdatePostponed: (callback) => {
-    const handler = (_, info) => callback(info);
+    const handler = () => callback();
     ipcRenderer.on('update-postponed', handler);
     return () => ipcRenderer.removeListener('update-postponed', handler);
+  },
+  // Установка вот-вот начнётся (идут финальные приготовления — остановка бэкенда)
+  onInstallPrepare: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('install-prepare', handler);
+    return () => ipcRenderer.removeListener('install-prepare', handler);
   },
 
   // Открытие чата из уведомления
@@ -58,6 +64,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('open-chat-from-notification', handler);
     return () => ipcRenderer.removeListener('open-chat-from-notification', handler);
   },
+
+  // Фокус окна приложения (из уведомления)
+  focusWindow: () => ipcRenderer.send('focus-app-window'),
 
   // Обновление индикатора непрочитанных сообщений
   setUnreadCount: (count) => ipcRenderer.send('set-unread-count', count),

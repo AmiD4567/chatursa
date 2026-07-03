@@ -129,17 +129,6 @@ let logFlushTimer = null;        // таймер периодического с
 let isFlushing = false;          // флаг: идёт запись в файл
 
 /**
- * emitLog — асинхронный вывод строки в консоль (через setImmediate).
- * Не блокирует event loop даже при выводе в stdout/stderr.
- */
-function emitLog(line) {
-  setImmediate((() => {
-    // eslint-disable-next-line no-console
-    process.stdout.write(line);
-  })());
-}
-
-/**
  * enqueue — добавить сообщение в очередь логирования.
  * Не блокирует event loop, запись происходит асинхронно.
  */
@@ -390,8 +379,6 @@ const io = new Server(server, {
   }
 });
 
-startIdleChecker();
-
 let db = null;
 
 // Вспомогательная функция для проверки прав админа
@@ -600,6 +587,11 @@ function initDatabase() {
   } catch (e) {
     // колонка уже существует — игнорируем
   }
+  try {
+    db.exec(`ALTER TABLE meeting_room_bookings ADD COLUMN reminder_sent INTEGER DEFAULT 0`);
+  } catch (e) {
+    // колонка уже существует — игнорируем
+  }
 
   // Таблица общих задач
   db.exec(`
@@ -687,7 +679,7 @@ function initDatabase() {
       PRIMARY KEY (user_id, message_id)
     );
 
-    CREATE TABLE IF NOT EXISTS user_sessions (
+    CREATE TABLE IF NOT EXISTS admin_user_sessions (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
       socket_id TEXT,
@@ -918,11 +910,6 @@ function initDatabase() {
   console.log('База данных инициализирована');
 }
 
-// Сохранение базы данных (better-sqlite3 в WAL mode сохраняет автоматически)
-function markDbActivity() {
-  // better-sqlite3 в WAL mode не нуждается в ручном сохранении
-}
-
 function saveDatabaseSync() {
   // better-sqlite3 синхронизирует данные через WAL, но для гарантии вызываем checkpoint
   if (db) {
@@ -1056,6 +1043,8 @@ function emitToUser(userId, event, data) {
 // Время последней активности каждого пользователя (userId -> timestamp)
 const userActivity = new Map();
 
+startIdleChecker();
+
 // Общий объём загруженных файлов на пользователя (userId -> bytes)
 const userTotalUploadSize = new Map(); // загружается из БД при старте
 const DEFAULT_UPLOAD_QUOTA = 500 * 1024 * 1024; // 500MB
@@ -1184,15 +1173,28 @@ app.use(cors({
 // Cookie parser для CSRF
 app.use(cookieParser());
 
-// CSRF защита: генерация токена (опционально для SPA с токеновой аутентификацией)
-const csrfTokens = new Set();
+// CSRF защита: двойная отправка cookie (double-submit cookie pattern)
+// Сервер устанавливает httpOnly cookie, фронтенд читает токен из JSON-ответа
+// и отправляет его в заголовке X-CSRF-Token; сервер сверяет cookie и заголовок.
 app.get('/api/csrf-token', (req, res) => {
   const token = uuidv4();
-  csrfTokens.add(token);
-  if (csrfTokens.size > 1000) csrfTokens.clear();
-  res.cookie('X-CSRF-Token', token, { httpOnly: true, sameSite: 'strict', maxAge: 3600000, secure: useHttps });
+  res.cookie('X-CSRF-Token', token, { httpOnly: true, sameSite: 'strict', maxAge: 86400000, secure: useHttps });
   res.json({ csrfToken: token });
 });
+
+// Проверка CSRF для всех мутирующих запросов к API
+function csrfMiddleware(req, res, next) {
+  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
+    const headerToken = req.headers['x-csrf-token'];
+    const cookieToken = req.cookies?.['X-CSRF-Token'];
+    if (!headerToken || !cookieToken || headerToken !== cookieToken) {
+      return res.status(403).json({ error: 'Недействительный CSRF-токен' });
+    }
+  }
+  next();
+}
+
+app.use('/api/', csrfMiddleware);
 
 // Общий rate-limiter для всех API-эндпоинтов: 100 запросов/мин на IP
 const apiLimiter = rateLimit({
@@ -1628,7 +1630,7 @@ app.get('/api/admin/sessions', (req, res) => {
     const sessionsList = db.prepare(`
       SELECT s.id, s.user_id, s.ip_address, s.browser, s.login_time, s.last_activity,
              u.username, u.avatar
-      FROM user_sessions s
+      FROM admin_user_sessions s
       LEFT JOIN users u ON s.user_id = u.id
       ORDER BY s.last_activity DESC
     `).all().map(row => ({
@@ -1659,7 +1661,7 @@ app.delete('/api/admin/sessions/:sessionId', (req, res) => {
   }
 
   try {
-    db.run('DELETE FROM user_sessions WHERE id = ?', [sessionId]);
+    db.run('DELETE FROM admin_user_sessions WHERE id = ?', [sessionId]);
 
 
     // Логируем событие
@@ -2274,7 +2276,7 @@ app.put('/api/e2ee/group-key', (req, res) => {
     });
     tx(keys);
     db.run('UPDATE chats SET e2ee = 1 WHERE id = ?', [chatId]);
-    markDbActivity();
+    
     res.json({ success: true });
   } catch (err) {
     console.error('Ошибка сохранения групповых ключей:', err);
@@ -2288,7 +2290,7 @@ app.delete('/api/e2ee/group-key/:chatId', (req, res) => {
   try {
     db.run('DELETE FROM group_e2ee_keys WHERE chat_id = ?', [chatId]);
     db.run('UPDATE chats SET e2ee = 0 WHERE id = ?', [chatId]);
-    markDbActivity();
+    
     res.json({ success: true });
   } catch (err) {
     console.error('Ошибка удаления групповых ключей:', err);
@@ -2704,9 +2706,10 @@ function trimFilenameCache() {
 
 function findOriginalFilenameByUuid(uuid) {
   if (filenameCache.has(uuid)) return filenameCache.get(uuid);
+  if (typeof uuid !== 'string' || !/^[0-9a-fA-F-]+$/.test(uuid)) return null;
 
   try {
-    const searchPattern = `%"url":"${uuid.replace(/"/g, '""')}"%`;
+    const searchPattern = `%"url":"${uuid}"%`;
     const row = db.prepare(
       "SELECT file_data FROM messages WHERE file_data LIKE ? LIMIT 1"
     ).get(searchPattern);
@@ -2962,7 +2965,7 @@ app.put('/api/meeting-room/bookings/:id', (req, res) => {
   try {
     db.run(`
       UPDATE meeting_room_bookings 
-      SET title = ?, description = ?, meeting_date = ?, start_time = ?, end_time = ?, reminder_minutes = ?, reminder_time = ?
+      SET title = ?, description = ?, meeting_date = ?, start_time = ?, end_time = ?, reminder_minutes = ?, reminder_time = ?, reminder_sent = 0
       WHERE id = ?
     `, [title, description || null, meetingDate, startTime, endTime, reminderMinutes || null, reminderTime, id]);
     
@@ -3972,14 +3975,21 @@ function fetchHtml(url, timeoutMs = 5000) {
 // GET /api/link-preview?url=...
 const linkPreviewCache = new Map();
 const LINK_PREVIEW_CACHE_TTL = 60 * 60 * 1000; // 1 час
+const LINK_PREVIEW_CACHE_MAX = 500; // макс. записей
 
-// Фоновая очистка просроченных записей linkPreviewCache
+// Фоновая очистка просроченных и лишних записей linkPreviewCache
 setInterval(() => {
   const now = Date.now();
   for (const [key, cached] of linkPreviewCache) {
     if (now - cached.ts > LINK_PREVIEW_CACHE_TTL) {
       linkPreviewCache.delete(key);
     }
+  }
+  if (linkPreviewCache.size > LINK_PREVIEW_CACHE_MAX) {
+    const toRemove = [...linkPreviewCache.entries()]
+      .sort((a, b) => a[1].ts - b[1].ts)
+      .slice(0, linkPreviewCache.size - LINK_PREVIEW_CACHE_MAX);
+    for (const [key] of toRemove) linkPreviewCache.delete(key);
   }
 }, 10 * 60 * 1000);
 
@@ -4920,7 +4930,7 @@ app.post('/api/polls', (req, res) => {
       }
     });
 
-    markDbActivity();
+    
 
     const pollData = getPollWithVotes(pollId, userId);
 
@@ -5187,7 +5197,7 @@ function getUserChats(userId) {
   return chats.map(chat => {
     // Получаем участников с полными данными
     const participants = db.prepare(`
-      SELECT u.id, u.username, u.avatar, u.status, u.status_text, u.full_name, u.birth_date, u.position, u.last_seen
+      SELECT u.id, u.username, u.avatar, u.status, u.status_text, u.full_name, u.birth_date, u.last_seen
       FROM users u
       JOIN chat_participants cp ON u.id = cp.user_id
       WHERE cp.chat_id = ?
@@ -5420,10 +5430,50 @@ function checkWsRateLimit(socketId) {
   return true;
 }
 
+// Создаёт чат с ботом-помощником для пользователя, если ещё не существует
+function ensureBotChat(userId) {
+  const botRow = db.prepare("SELECT id FROM users WHERE username = 'Помощник'").get();
+  const botId = botRow ? botRow.id : null;
+  const botChatId = `bot-chat-${userId}`;
+  const botChatCheck = db.prepare('SELECT * FROM chats WHERE id = ?').get(botChatId);
+  if (!botChatCheck) {
+    db.run(`INSERT INTO chats (id, type, name, created_by, created_at) VALUES (?, 'direct', 'Помощник', ?, CURRENT_TIMESTAMP)`, [botChatId, userId]);
+    db.run(`INSERT OR IGNORE INTO chat_participants (chat_id, user_id) VALUES (?, ?)`, [botChatId, userId]);
+    if (botId) {
+      db.run(`INSERT OR IGNORE INTO chat_participants (chat_id, user_id) VALUES (?, ?)`, [botChatId, botId]);
+    }
+    return true;
+  }
+  return false;
+}
+
+// Фоновая очистка устаревших записей wsRateMap
+setInterval(() => {
+  const cutoff = Date.now() - 300000;
+  for (const [key, entry] of wsRateMap) {
+    if (entry.resetAt < cutoff) wsRateMap.delete(key);
+  }
+}, 60000);
+
 // Socket.IO подключение
 io.on('connection', (socket) => {
   const clientIp = socket.handshake?.address?.replace(/^::ffff:/, '') || 'unknown';
   const userAgent = socket.handshake?.headers?.['user-agent'] || 'unknown';
+
+  // Middleware: проверка членства в чате для отправки сообщений
+  socket.use(([event, data], next) => {
+    if (event === 'send_message' && data && data.chatId) {
+      const onlineUser = onlineUsers.get(socket.id);
+      if (onlineUser) {
+        const isParticipant = db.prepare('SELECT 1 FROM chat_participants WHERE chat_id = ? AND user_id = ?').get(data.chatId, onlineUser.id);
+        if (!isParticipant) {
+          console.warn(`WS middleware: socket ${socket.id} пытается отправить сообщение в чат ${data.chatId} без членства`);
+          return;
+        }
+      }
+    }
+    next();
+  });
 
   // Пытаемся получить имя компьютера через reverse DNS lookup
   if (clientIp !== 'unknown' && clientIp !== '127.0.0.1' && !clientIp.startsWith('::')) {
@@ -5513,6 +5563,18 @@ io.on('connection', (socket) => {
         console.error('Ошибка сохранения сессии:', e.message);
       }
 
+      // Сохраняем запись для админ-панели сессий
+      try {
+        const adminSessionId = uuidv4();
+        const ipAddr = socket.handshake?.address || '';
+        const browserInfo = socket.handshake?.headers?.['user-agent'] || '';
+        db.run(`INSERT OR IGNORE INTO admin_user_sessions (id, user_id, socket_id, ip_address, browser, login_time, last_activity)
+                VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [adminSessionId, user.id, socket.id, ipAddr, browserInfo, new Date().toISOString(), new Date().toISOString()]);
+      } catch (e) {
+        console.error('Ошибка сохранения админ-сессии:', e.message);
+      }
+
       // Сохраняем устройство/сессию (multi-device)
       const resolvedDeviceId = deviceId || `unknown-${socket.id}`;
       const resolvedDeviceName = deviceName || 'Unknown Device';
@@ -5537,23 +5599,13 @@ io.on('connection', (socket) => {
 
       // Обновляем статус в БД
       db.run('UPDATE users SET status = ? WHERE id = ?', ['online', user.id]);
-      markDbActivity();
+      
 
       // Отправляем пользователю его чаты
       let userChats = getUserChats(user.id);
 
       // Создаём чат с помощником если не существует
-      const botRow = db.prepare("SELECT id FROM users WHERE username = 'Помощник'").get();
-      const botId = botRow ? botRow.id : null;
-      const botChatId = `bot-chat-${user.id}`;
-      const botChatCheck = db.prepare('SELECT * FROM chats WHERE id = ?').get(botChatId);
-      if (!botChatCheck) {
-        db.run(`INSERT INTO chats (id, type, name, created_by, created_at) VALUES (?, 'direct', 'Помощник', ?, CURRENT_TIMESTAMP)`, [botChatId, user.id]);
-        db.run(`INSERT OR IGNORE INTO chat_participants (chat_id, user_id) VALUES (?, ?)`, [botChatId, user.id]);
-        if (botId) {
-          db.run(`INSERT OR IGNORE INTO chat_participants (chat_id, user_id) VALUES (?, ?)`, [botChatId, botId]);
-        }
-        markDbActivity();
+      if (ensureBotChat(user.id)) {
         userChats = getUserChats(user.id);
       }
 
@@ -5640,6 +5692,18 @@ io.on('connection', (socket) => {
         status: 'online'
       });
       userActivity.set(user.id, Date.now());
+
+      // Сохраняем запись для админ-панели сессий
+      try {
+        const adminSessionId = uuidv4();
+        const ipAddr = socket.handshake?.address || '';
+        const browserInfo = socket.handshake?.headers?.['user-agent'] || '';
+        db.run(`INSERT OR IGNORE INTO admin_user_sessions (id, user_id, socket_id, ip_address, browser, login_time, last_activity)
+                VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [adminSessionId, user.id, socket.id, ipAddr, browserInfo, new Date().toISOString(), new Date().toISOString()]);
+      } catch (e) {
+        console.error('Ошибка сохранения админ-сессии:', e.message);
+      }
     }
 
     // Добавляем пользователя в общий чат если еще не там
@@ -5656,20 +5720,7 @@ io.on('connection', (socket) => {
     let userChats = getUserChats(user.id);
 
     // Создаём чат с помощником если не существует
-    const botRow = db.prepare("SELECT id FROM users WHERE username = 'Помощник'").get();
-    const botId = botRow ? botRow.id : null;
-    const botChatId = `bot-chat-${user.id}`;
-    const botChatCheck = db.prepare('SELECT * FROM chats WHERE id = ?').get(botChatId);
-    if (!botChatCheck) {
-      db.run(`
-        INSERT INTO chats (id, type, name, created_by, created_at)
-        VALUES (?, 'direct', 'Помощник', ?, CURRENT_TIMESTAMP)
-      `, [botChatId, user.id]);
-
-      db.run(`INSERT OR IGNORE INTO chat_participants (chat_id, user_id) VALUES (?, ?)`, [botChatId, user.id]);
-      if (botId) {
-        db.run(`INSERT OR IGNORE INTO chat_participants (chat_id, user_id) VALUES (?, ?)`, [botChatId, botId]);
-      }
+    if (ensureBotChat(user.id)) {
       userChats = getUserChats(user.id);
     }
 
@@ -5835,12 +5886,12 @@ io.on('connection', (socket) => {
     
     if (!isParticipant) {
       db.run('INSERT INTO chat_participants (chat_id, user_id) VALUES (?, ?)', [chatId, onlineUser.id]);
-      markDbActivity();
+      
     }
 
     // Очищаем непрочитанные
     db.run('DELETE FROM unread_messages WHERE user_id = ? AND chat_id = ?', [onlineUser.id, chatId]);
-    markDbActivity();
+    
 
     
     // Отправляем историю сообщений
@@ -5935,7 +5986,7 @@ io.on('connection', (socket) => {
       `, [messageId, chatId, onlineUser.id, storedText, fileDataStr, replyToStr, timestamp, forwardedFromStr, storedE2EE, storedNonce, storedEphemeral, expiresAtStr]);
 
       // Помечаем активность БД — перезапускает таймер автосохранения
-      markDbActivity();
+      
 
       // Получаем информацию о сообщении
       const msgRow = db.prepare(`
@@ -5947,8 +5998,9 @@ io.on('connection', (socket) => {
         WHERE m.id = ?
       `).get(messageId);
       let messageRow = null;
+      let isE2EE = false;
       if (msgRow) {
-        const isE2EE = msgRow.e2ee === 1 || msgRow.e2ee === true;
+        isE2EE = msgRow.e2ee === 1 || msgRow.e2ee === true;
         messageRow = {
           id: String(msgRow.id || ''),
           chat_id: String(msgRow.chat_id || ''),
@@ -5995,7 +6047,7 @@ io.on('connection', (socket) => {
       if (unreadValues) {
         db.run(`INSERT OR IGNORE INTO unread_messages (user_id, message_id, chat_id) VALUES ${unreadValues}`);
       }
-      markDbActivity();
+      
 
       // Форматируем сообщение
       const formattedMessage = {
@@ -6300,7 +6352,7 @@ io.on('connection', (socket) => {
       db.run(`INSERT INTO chats (id, type, created_at) VALUES (?, 'direct', CURRENT_TIMESTAMP)`, [chatId]);
       db.run(`INSERT INTO chat_participants (chat_id, user_id) VALUES (?, ?)`, [chatId, onlineUser.id]);
       db.run(`INSERT INTO chat_participants (chat_id, user_id) VALUES (?, ?)`, [chatId, targetUserId]);
-      markDbActivity();
+      
       chat = { id: chatId, type: 'direct' };
     }
 
@@ -6357,7 +6409,7 @@ io.on('connection', (socket) => {
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [newMessageId, chat.id, onlineUser.id, forwardText, originalMessage.file_data || null, timestamp, JSON.stringify(forwardedFrom), forwardE2EE, forwardNonce, forwardEphemeral]
       );
-      markDbActivity();
+      
     } catch (insertErr) {
       console.error('Ошибка вставки пересланного сообщения:', insertErr.message);
       return;
@@ -6443,7 +6495,7 @@ io.on('connection', (socket) => {
       db.run(`INSERT INTO chats (id, type, created_at) VALUES (?, 'direct', CURRENT_TIMESTAMP)`, [chatId]);
       db.run(`INSERT INTO chat_participants (chat_id, user_id) VALUES (?, ?)`, [chatId, onlineUser.id]);
       db.run(`INSERT INTO chat_participants (chat_id, user_id) VALUES (?, ?)`, [chatId, targetUserId]);
-      markDbActivity();
+      
       chat = { id: chatId, type: 'direct' };
     }
 
@@ -6455,7 +6507,7 @@ io.on('connection', (socket) => {
 
     db.prepare(`INSERT INTO messages (id, chat_id, sender_id, text, timestamp) VALUES (?, ?, ?, ?, ?)`)
       .run(newMessageId, chat.id, onlineUser.id, text, timestamp);
-    markDbActivity();
+    
 
     const formattedMessage = {
       id: newMessageId,
@@ -7228,7 +7280,7 @@ try {
   // Загружаем квоты загрузок из БД
   try {
     const quotaRows = db.prepare(`
-      SELECT u.id, COALESCE(SUM(LENGTH(m.file_data)), 0) as total
+      SELECT u.id,       COALESCE(SUM(JSON_EXTRACT(m.file_data, '$.size')), 0) as total
       FROM users u
       LEFT JOIN messages m ON m.sender_id = u.id AND m.file_data IS NOT NULL
       GROUP BY u.id
@@ -7290,12 +7342,60 @@ try {
           });
         }
         if (expiredMessages.length > 0) {
-          markDbActivity();
+          
         }
       } catch (e) {
         console.error('Ошибка очистки self-destruct сообщений:', e.message);
       }
     }, 10000);
+
+    // Проверка напоминаний о встречах каждые 30 секунд
+    setInterval(() => {
+      try {
+        const now = new Date().toISOString().slice(0, 19);
+        const dueReminders = db.prepare(`
+          SELECT id, organizer_id, organizer_name, title, meeting_date, start_time, end_time, reminder_minutes
+          FROM meeting_room_bookings
+          WHERE reminder_time IS NOT NULL
+            AND reminder_time <= ?
+            AND (reminder_sent IS NULL OR reminder_sent = 0)
+        `).all(now);
+
+        for (const reminder of dueReminders) {
+          // Получаем участников встречи
+          const participants = db.prepare(`
+            SELECT user_id, username FROM meeting_room_booking_participants WHERE booking_id = ?
+          `).all(reminder.id);
+
+          // Собираем всех, кому отправить уведомление (организатор + участники)
+          const notifyUserIds = new Set();
+          notifyUserIds.add(reminder.organizer_id);
+          for (const p of participants) {
+            notifyUserIds.add(p.user_id);
+          }
+
+          const message = {
+            bookingId: reminder.id,
+            title: reminder.title,
+            organizerName: reminder.organizer_name,
+            meetingDate: reminder.meeting_date,
+            startTime: reminder.start_time,
+            endTime: reminder.end_time,
+            reminderMinutes: reminder.reminder_minutes
+          };
+
+          for (const userId of notifyUserIds) {
+            emitToUser(userId, 'meeting_reminder', message);
+          }
+
+          // Помечаем напоминание как отправленное
+          db.run('UPDATE meeting_room_bookings SET reminder_sent = 1 WHERE id = ?', [reminder.id]);
+          
+        }
+      } catch (e) {
+        console.error('Ошибка проверки напоминаний о встречах:', e.message);
+      }
+    }, 30000);
   });
 } catch (err) {
   console.error('Ошибка инициализации БД:', err);
