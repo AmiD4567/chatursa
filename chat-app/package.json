@@ -1,6 +1,6 @@
 {
     "name": "chat-app",
-    "version": "1.0.178",
+    "version": "1.0.179",
     "description": "РљРѕСЂРїРѕСЂР°С‚РёРІРЅС‹Р№ РјРµСЃСЃРµРЅРґР¶РµСЂ",
     "main": "electron/main.js",
     "scripts": {
@@ -105,4 +105,3 @@
         "wait-on": "^7.2.0"
     }
 }
-
