@@ -295,6 +295,16 @@ function createWindow() {
     mainWindow.loadURL(`file://${frontendBuildPath}/index.html`);
   }
 
+  // Отслеживание видимости окна (для уведомлений и непрочитанных)
+  const notifyVisibility = (visible) => {
+    mainWindow.webContents.send('app-visibility', visible);
+  };
+
+  mainWindow.on('minimize', () => notifyVisibility(false));
+  mainWindow.on('restore', () => notifyVisibility(true));
+  mainWindow.on('show', () => notifyVisibility(true));
+  mainWindow.on('hide', () => notifyVisibility(false));
+
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
     mainWindow.maximize();
@@ -335,12 +345,56 @@ ipcMain.on('focus-app-window', () => {
   }
 });
 
+// --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
+
+/**
+ * Загружает изображение по URL и возвращает NativeImage для использования в уведомлениях.
+ * Поддерживает локальные пути, file:// и удалённые URL.
+ */
+async function fetchImageAsNativeImage(url) {
+  if (!url) return null;
+  try {
+    // Локальный путь (начинается с /)
+    if (url.startsWith('/')) {
+      const fullPath = path.join(__dirname, '..', url);
+      if (fs.existsSync(fullPath)) {
+        return nativeImage.createFromPath(fullPath).resize({ width: 64, height: 64 });
+      }
+      return null;
+    }
+    // file:// URL
+    if (url.startsWith('file://')) {
+      const filePath = url.startsWith('file:///') ? url.slice(8) : url.slice(7);
+      if (fs.existsSync(filePath)) {
+        return nativeImage.createFromPath(filePath).resize({ width: 64, height: 64 });
+      }
+      return null;
+    }
+    // Удалённый URL — скачиваем через fetch
+    const response = await fetch(url, { signal: AbortSignal.timeout(3000) });
+    if (!response.ok) return null;
+    const buffer = Buffer.from(await response.arrayBuffer());
+    return nativeImage.createFromBuffer(buffer).resize({ width: 64, height: 64 });
+  } catch (e) {
+    logError(`Ошибка загрузки иконки уведомления: ${e.message}`);
+    return null;
+  }
+}
+
 // --- ДОПОЛНИТЕЛЬНЫЕ IPC HANDLERS ---
 
-ipcMain.on('show-notification', (event, data) => {
-  const { title, body, chatId } = data || {};
+ipcMain.on('show-notification', async (event, data) => {
+  const { title, body, chatId, icon } = data || {};
   if (Notification.isSupported()) {
-    const notification = new Notification({ title: title || 'Чат', body: body || '' });
+    const options = { title: title || 'Чат', body: body || '' };
+
+    // Загружаем аватар и добавляем в уведомление
+    if (icon) {
+      const img = await fetchImageAsNativeImage(icon);
+      if (img) options.icon = img;
+    }
+
+    const notification = new Notification(options);
     notification.on('click', () => {
       // Фокусируем окно
       if (mainWindow) {

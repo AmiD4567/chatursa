@@ -5377,6 +5377,7 @@ function App() {
     const startOfMonth = new Date(newMonth.getFullYear(), newMonth.getMonth(), 1);
     const endOfMonth = new Date(newMonth.getFullYear(), newMonth.getMonth() + 1, 0);
     fetchCalendarTasks(startOfMonth, endOfMonth);
+    fetchMeetingRoomBookings(startOfMonth, endOfMonth);
   };
 
   const handleNextMonth = () => {
@@ -5387,6 +5388,7 @@ function App() {
     const startOfMonth = new Date(newMonth.getFullYear(), newMonth.getMonth(), 1);
     const endOfMonth = new Date(newMonth.getFullYear(), newMonth.getMonth() + 1, 0);
     fetchCalendarTasks(startOfMonth, endOfMonth);
+    fetchMeetingRoomBookings(startOfMonth, endOfMonth);
   };
 
   const handleDateClick = (date) => {
@@ -9149,7 +9151,12 @@ function App() {
               </button>
               <button
                 className={`calendar-tab-btn ${calendarView === 'meeting-room' ? 'active' : ''}`}
-                onClick={() => setCalendarView('meeting-room')}
+                onClick={() => {
+                  setCalendarView('meeting-room');
+                  const startOfMonth = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1);
+                  const endOfMonth = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0);
+                  fetchMeetingRoomBookings(startOfMonth, endOfMonth);
+                }}
               >
                 🏢 Бронирование переговорной
               </button>
@@ -9189,6 +9196,7 @@ function App() {
                         const date = new Date(year, month, day);
                         const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
                         const dayTasks = calendarTasks.filter(t => t.task_date === dateStr);
+                        const dayBookings = meetingRoomBookings.filter(b => b.meeting_date === dateStr);
                         const isToday = new Date().toDateString() === date.toDateString();
                         const isSelected = selectedDate && selectedDate.toDateString() === date.toDateString();
 
@@ -9229,6 +9237,23 @@ function App() {
                           ))}
                           {dayTasks.length > 3 && (
                             <span className="calendar-tasks-more">+{dayTasks.length - 3}</span>
+                          )}
+                        </div>
+                        )}
+                        {/* Показываем точки бронирований в режиме переговорной */}
+                        {calendarView === 'meeting-room' && (
+                        <div className="calendar-tasks-preview">
+                          {dayBookings.length > 0 && <div style={{ width: '100%', fontSize: '7px', color: '#4ecdc4', fontWeight: 'bold' }}>● {dayBookings.length}</div>}
+                          {dayBookings.slice(0, 3).map(booking => (
+                            <div
+                              key={booking.id}
+                              className="calendar-meeting-dot"
+                              style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: '#4ecdc4', border: '1px solid #fff' }}
+                              title={`🏢 ${booking.title} (${booking.start_time}-${booking.end_time})`}
+                            ></div>
+                          ))}
+                          {dayBookings.length > 3 && (
+                            <span className="calendar-tasks-more">+{dayBookings.length - 3}</span>
                           )}
                         </div>
                         )}
@@ -9361,10 +9386,16 @@ function App() {
                   <button className="add-task-btn" onClick={() => { 
                     fetchAvailableUsers(); 
                     setEditingBooking(null); 
+                    const formatDate = (d) => {
+                      const y = d.getFullYear();
+                      const m = String(d.getMonth() + 1).padStart(2, '0');
+                      const day = String(d.getDate()).padStart(2, '0');
+                      return `${y}-${m}-${day}`;
+                    };
                     setMeetingForm({
                       title: '',
                       description: '',
-                      meetingDate: '',
+                      meetingDate: selectedDate ? formatDate(selectedDate) : '',
                       startTime: '',
                       endTime: '',
                       organizer: '',
@@ -10792,13 +10823,13 @@ function App() {
       {/* Модальное окно бронирования переговорной */}
       {showMeetingModal && (
         <div className="modal-overlay" onClick={() => { setShowMeetingModal(false); setMeetingForm({ title: '', description: '', meetingDate: '', startTime: '', endTime: '', organizer: '', reminderMinutes: '' }); setSelectedMeetingParticipants([]); setParticipantSearchText(''); setShowParticipantDropdown(false); }}>
-          <div className="modal-content task-modal" onClick={e => e.stopPropagation()} style={{ maxHeight: '85vh', overflowY: 'auto' }}>
+          <div className="modal-content task-modal" onClick={e => e.stopPropagation()} style={{ maxHeight: '85vh', height: '85vh' }}>
             <div className="modal-header">
               <h3>🏢 Забронировать переговорную</h3>
               <button onClick={() => { setShowMeetingModal(false); setMeetingForm({ title: '', description: '', meetingDate: '', startTime: '', endTime: '', organizer: '', reminderMinutes: '' }); setSelectedMeetingParticipants([]); setParticipantSearchText(''); setShowParticipantDropdown(false); }}>✕</button>
             </div>
 
-            <form onSubmit={async (e) => {
+            <form style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }} onSubmit={async (e) => {
               e.preventDefault();
               
               try {
@@ -11017,13 +11048,13 @@ function App() {
       {/* Модальное окно редактирования бронирования */}
       {showEditMeetingModal && (
         <div className="modal-overlay" onClick={() => { setShowEditMeetingModal(false); setEditingBooking(null); setMeetingForm({ title: '', description: '', meetingDate: '', startTime: '', endTime: '', organizer: '', reminderMinutes: '' }); setSelectedMeetingParticipants([]); setParticipantSearchText(''); setShowParticipantDropdown(false); }}>
-          <div className="modal-content task-modal" onClick={e => e.stopPropagation()} style={{ maxHeight: '85vh', overflowY: 'auto' }}>
+          <div className="modal-content task-modal" onClick={e => e.stopPropagation()} style={{ maxHeight: '85vh', height: '85vh' }}>
             <div className="modal-header">
               <h3>✏️ Редактировать бронирование</h3>
               <button onClick={() => { setShowEditMeetingModal(false); setEditingBooking(null); setMeetingForm({ title: '', description: '', meetingDate: '', startTime: '', endTime: '', organizer: '', reminderMinutes: '' }); setSelectedMeetingParticipants([]); setParticipantSearchText(''); setShowParticipantDropdown(false); }}>✕</button>
             </div>
 
-            <form onSubmit={handleUpdateBooking}>
+            <form style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }} onSubmit={handleUpdateBooking}>
               <div className="modal-body">
                 <div className="form-group">
                   <label>Тема встречи *</label>
