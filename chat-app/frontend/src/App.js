@@ -433,7 +433,8 @@ function App() {
   const [selectedUsersForShare, setSelectedUsersForShare] = useState([]);
   const [selectedMeetingParticipants, setSelectedMeetingParticipants] = useState([]);
   const [participantSearchText, setParticipantSearchText] = useState('');
-  const [showParticipantDropdown, setShowParticipantDropdown] = useState(false);
+  const [showParticipantModal, setShowParticipantModal] = useState(false);
+  const [draftParticipants, setDraftParticipants] = useState([]);
   const [sharedTasksReceived, setSharedTasksReceived] = useState([]);
   const [showSharedTasksModal, setShowSharedTasksModal] = useState(false);
   const [showDocuments, setShowDocuments] = useState(false);
@@ -1403,19 +1404,6 @@ function App() {
       if (type === 'support_request') {
         alert(`📞 Новое обращение в поддержку\n\n${title}\n${message}`);
         if (activeAdminTab === 'support') loadSupportRequests(supportActiveFilter || 'open');
-      }
-    });
-
-    newSocket.on('meeting_reminder', ({ bookingId, title, organizerName, meetingDate, startTime, endTime, reminderMinutes }) => {
-      // Показываем уведомление о скорой встрече
-      const msg = `🔔 Напоминание о встрече\n\n📌 ${title}\n📅 ${meetingDate} ${startTime}-${endTime}\n👤 Организатор: ${organizerName}`;
-      alert(msg);
-      // Если разрешены push-уведомления — показываем и их
-      if (Notification.permission === 'granted') {
-        new Notification('🔔 Скоро встреча!', {
-          body: `${title}\n${meetingDate} ${startTime}-${endTime}`,
-          icon: '/favicon.ico'
-        });
       }
     });
 
@@ -5289,7 +5277,6 @@ function App() {
     });
     setSelectedMeetingParticipants((booking.participants_list || []).map(p => p.user_id));
     setParticipantSearchText('');
-    setShowParticipantDropdown(false);
     fetchAvailableUsers();
     setShowEditMeetingModal(true);
   };
@@ -5355,7 +5342,6 @@ function App() {
         });
         setSelectedMeetingParticipants([]);
         setParticipantSearchText('');
-        setShowParticipantDropdown(false);
         setEditingBooking(null);
         setShowEditMeetingModal(false);
         alert('Бронирование обновлено!');
@@ -5549,12 +5535,39 @@ function App() {
     );
   };
 
-  const toggleMeetingParticipant = (userId) => {
-    setSelectedMeetingParticipants(prev =>
+  const toggleDraftParticipant = (userId) => {
+    setDraftParticipants(prev =>
       prev.find(id => id === userId)
         ? prev.filter(id => id !== userId)
         : [...prev, userId]
     );
+  };
+
+  const handleOpenParticipantModal = () => {
+    setDraftParticipants([...selectedMeetingParticipants]);
+    setParticipantSearchText('');
+    setShowParticipantModal(true);
+  };
+
+  const handleCloseParticipantModal = () => {
+    setShowParticipantModal(false);
+    setDraftParticipants([]);
+  };
+
+  const handleConfirmParticipants = () => {
+    setSelectedMeetingParticipants([...draftParticipants]);
+    setShowParticipantModal(false);
+  };
+
+  const handleSelectAllParticipants = () => {
+    const allIds = availableUsers
+      .filter(u => u.id !== currentUser?.id)
+      .map(u => u.id);
+    setDraftParticipants(allIds);
+  };
+
+  const handleDeselectAllParticipants = () => {
+    setDraftParticipants([]);
   };
 
   const confirmShareTask = async () => {
@@ -6267,8 +6280,39 @@ function App() {
   const formatBotText = (text) => {
     if (!text) return text;
     
-    // Разбиваем на строки для обработки
     const lines = text.split('\n');
+    
+    const openDirectChat = (username) => {
+      if (socket) {
+        socket.emit('create_chat', { type: 'direct', participants: [username] });
+      }
+    };
+    
+    // Хелпер для обработки ссылок вида [text](user:username) внутри текстовой строки
+    const renderTextWithUserLinks = (text, key) => {
+      const parts = text.split(/(\[[^\]]*\]\(user:[^)]*\))/g);
+      return parts.map((part, i) => {
+        const match = part.match(/^\[([^\]]*)\]\(user:([^)]*)\)$/);
+        if (match) {
+          const displayName = match[1];
+          const username = match[2];
+          return (
+            <a
+              key={`${key}-link-${i}`}
+              href="#"
+              onClick={(e) => {
+                e.preventDefault();
+                openDirectChat(username);
+              }}
+              style={{ color: '#667eea', cursor: 'pointer', textDecoration: 'underline' }}
+            >
+              {displayName}
+            </a>
+          );
+        }
+        return part;
+      });
+    };
     
     return lines.map((line, lineIndex) => {
       let formattedLine = line;
@@ -6278,13 +6322,14 @@ function App() {
         return <h4 key={lineIndex} style={{ margin: '10px 0 5px', color: '#667eea' }}>{formattedLine.slice(3, -3)}</h4>;
       }
       
-      // Обработка жирного текста (**текст**)
+      // Обработка жирного текста (**текст**) и ссылок [text](user:username)
       const parts = formattedLine.split(/(\*\*.*?\*\*)/g);
-      const formattedParts = parts.map((part, i) => {
+      const formattedParts = parts.flatMap((part, i) => {
         if (part.startsWith('**') && part.endsWith('**')) {
-          return <strong key={i}>{part.slice(2, -2)}</strong>;
+          const innerText = part.slice(2, -2);
+          return [<strong key={`bold-${lineIndex}-${i}`}>{renderTextWithUserLinks(innerText, `bold-${lineIndex}-${i}`)}</strong>];
         }
-        return part;
+        return renderTextWithUserLinks(part, `text-${lineIndex}-${i}`);
       });
       
       // Обработка списков
@@ -9403,7 +9448,6 @@ function App() {
                     });
                     setSelectedMeetingParticipants([]);
                     setParticipantSearchText('');
-                    setShowParticipantDropdown(false);
                     setShowMeetingModal(true); 
                   }}>
                     + Забронировать
@@ -10822,11 +10866,11 @@ function App() {
 
       {/* Модальное окно бронирования переговорной */}
       {showMeetingModal && (
-        <div className="modal-overlay" onClick={() => { setShowMeetingModal(false); setMeetingForm({ title: '', description: '', meetingDate: '', startTime: '', endTime: '', organizer: '', reminderMinutes: '' }); setSelectedMeetingParticipants([]); setParticipantSearchText(''); setShowParticipantDropdown(false); }}>
+        <div className="modal-overlay" onClick={() => { setShowMeetingModal(false); setMeetingForm({ title: '', description: '', meetingDate: '', startTime: '', endTime: '', organizer: '', reminderMinutes: '' }); setSelectedMeetingParticipants([]); setParticipantSearchText(''); }}>
           <div className="modal-content task-modal" onClick={e => e.stopPropagation()} style={{ maxHeight: '85vh', height: '85vh' }}>
             <div className="modal-header">
               <h3>🏢 Забронировать переговорную</h3>
-              <button onClick={() => { setShowMeetingModal(false); setMeetingForm({ title: '', description: '', meetingDate: '', startTime: '', endTime: '', organizer: '', reminderMinutes: '' }); setSelectedMeetingParticipants([]); setParticipantSearchText(''); setShowParticipantDropdown(false); }}>✕</button>
+              <button onClick={() => { setShowMeetingModal(false); setMeetingForm({ title: '', description: '', meetingDate: '', startTime: '', endTime: '', organizer: '', reminderMinutes: '' }); setSelectedMeetingParticipants([]); setParticipantSearchText(''); }}>✕</button>
             </div>
 
             <form style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }} onSubmit={async (e) => {
@@ -10870,7 +10914,6 @@ function App() {
                   });
                   setSelectedMeetingParticipants([]);
                   setParticipantSearchText('');
-                  setShowParticipantDropdown(false);
                   
                   setShowMeetingModal(false);
                   alert('Переговорная успешно забронирована!');
@@ -10963,64 +11006,38 @@ function App() {
                   </select>
                 </div>
 
-                {/* Выбор участников — выпадающий список с поиском */}
+                {/* Выбор участников */}
                 <div className="form-group">
                   <label>Участники</label>
-                  <div style={{position: 'relative'}}>
-                    <div style={{display: 'flex', flexWrap: 'wrap', gap: '4px', padding: '6px 8px', border: '1px solid #555', borderRadius: '6px', background: '#2a2a2a', cursor: 'text', minHeight: '36px', alignItems: 'center'}} onClick={() => { setShowParticipantDropdown(true); document.getElementById('participant-search-input')?.focus(); }}>
+                  <button type="button" onClick={() => { setDraftParticipants([...selectedMeetingParticipants]); setParticipantSearchText(''); setShowParticipantModal(true); }}
+                    style={{
+                      width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #555',
+                      background: '#2a2a2a', color: '#e0e0e0', fontSize: '14px', cursor: 'pointer',
+                      textAlign: 'left', display: 'flex', alignItems: 'center', gap: '8px'
+                    }}
+                  >
+                    👥 Выбрать участников
+                    {selectedMeetingParticipants.length > 0 && (
+                      <span style={{
+                        background: '#667eea', color: '#fff', borderRadius: '10px', padding: '1px 8px',
+                        fontSize: '12px', fontWeight: 'bold', marginLeft: 'auto'
+                      }}>
+                        {selectedMeetingParticipants.length}
+                      </span>
+                    )}
+                  </button>
+                  {selectedMeetingParticipants.length > 0 && (
+                    <div style={{display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '6px'}}>
                       {selectedMeetingParticipants.map(userId => {
                         const user = availableUsers.find(u => u.id === userId);
                         return user ? (
-                          <span key={userId} style={{display: 'inline-flex', alignItems: 'center', gap: '4px', background: '#3a3f5c', borderRadius: '12px', padding: '2px 8px', fontSize: '13px', color: '#e0e0e0'}}>
+                          <span key={userId} style={{display: 'inline-flex', alignItems: 'center', gap: '4px', background: '#3a3f5c', borderRadius: '12px', padding: '2px 8px', fontSize: '12px', color: '#e0e0e0'}}>
                             {user.username}
-                            <span style={{cursor: 'pointer', fontSize: '14px', color: '#aaa', marginLeft: '2px'}} onClick={(e) => { e.stopPropagation(); toggleMeetingParticipant(userId); }}>×</span>
                           </span>
                         ) : null;
                       })}
-                      <input
-                        id="participant-search-input"
-                        type="text"
-                        value={participantSearchText}
-                        onChange={(e) => { setParticipantSearchText(e.target.value); setShowParticipantDropdown(true); }}
-                        onFocus={() => setShowParticipantDropdown(true)}
-                        placeholder={selectedMeetingParticipants.length === 0 ? 'Поиск участников...' : ''}
-                        style={{border: 'none', outline: 'none', background: 'transparent', color: '#e0e0e0', fontSize: '13px', flex: '1', minWidth: '80px', padding: '0'}}
-                      />
                     </div>
-                    {showParticipantDropdown && (
-                      <>
-                        <div style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 999}} onClick={() => setShowParticipantDropdown(false)} />
-                        <div style={{position: 'absolute', top: '100%', left: 0, right: 0, maxHeight: '180px', overflowY: 'auto', background: '#2a2a2a', border: '1px solid #555', borderRadius: '6px', zIndex: 1000, marginTop: '4px'}}>
-                          {availableUsers.filter(u => u.username.toLowerCase().includes(participantSearchText.toLowerCase())).length === 0 && (
-                            <div style={{padding: '8px 12px', color: '#888', fontSize: '13px'}}>Никого не найдено</div>
-                          )}
-                          {availableUsers
-                            .filter(u => u.username.toLowerCase().includes(participantSearchText.toLowerCase()))
-                            .map(user => {
-                              const isSelected = selectedMeetingParticipants.find(id => id === user.id);
-                              return (
-                                <div
-                                  key={user.id}
-                                  onClick={() => toggleMeetingParticipant(user.id)}
-                                  style={{display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 12px', cursor: 'pointer', background: isSelected ? '#3a3f5c' : 'transparent', color: '#e0e0e0', fontSize: '13px'}}
-                                  onMouseEnter={(e) => e.currentTarget.style.background = isSelected ? '#4a4f6c' : '#333'}
-                                  onMouseLeave={(e) => e.currentTarget.style.background = isSelected ? '#3a3f5c' : 'transparent'}
-                                >
-                                  <img
-                                    src={user.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(user.username)}`}
-                                    alt={user.username}
-                                    style={{width: '24px', height: '24px', borderRadius: '50%'}}
-                                    onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || 'U')}`; }}
-                                  />
-                                  <span style={{flex: 1}}>{user.username}</span>
-                                  {isSelected && <span style={{color: '#4caf50'}}>✓</span>}
-                                </div>
-                              );
-                            })}
-                        </div>
-                      </>
-                    )}
-                  </div>
+                  )}
                 </div>
               </div>
 
@@ -11028,7 +11045,7 @@ function App() {
                 <button
                   type="button"
                   className="cancel-btn"
-                  onClick={() => { setShowMeetingModal(false); setMeetingForm({ title: '', description: '', meetingDate: '', startTime: '', endTime: '', organizer: '', reminderMinutes: '' }); setSelectedMeetingParticipants([]); setParticipantSearchText(''); setShowParticipantDropdown(false); }}
+                  onClick={() => { setShowMeetingModal(false); setMeetingForm({ title: '', description: '', meetingDate: '', startTime: '', endTime: '', organizer: '', reminderMinutes: '' }); setSelectedMeetingParticipants([]); setParticipantSearchText(''); }}
                 >
                   Отмена
                 </button>
@@ -11045,13 +11062,177 @@ function App() {
         </div>
       )}
 
+      {/* Модальное окно выбора участников */}
+      {showParticipantModal && (
+        <div className="modal-overlay" onClick={() => setShowParticipantModal(false)}>
+          <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxHeight: '80vh', height: '80vh', display: 'flex', flexDirection: 'column' }}>
+            <div className="modal-header">
+              <h3>👥 Выберите участников</h3>
+              <button onClick={() => setShowParticipantModal(false)}>✕</button>
+            </div>
+
+            <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+              {/* Поиск */}
+              <input
+                type="text"
+                value={participantSearchText}
+                onChange={(e) => setParticipantSearchText(e.target.value)}
+                placeholder="🔍 Поиск по имени или email..."
+                style={{
+                  width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #555',
+                  background: '#2a2a2a', color: '#e0e0e0', fontSize: '14px', outline: 'none',
+                  boxSizing: 'border-box', marginBottom: '12px'
+                }}
+              />
+
+              {/* Выбранные */}
+              {draftParticipants.length > 0 && (
+                <>
+                  <div style={{ fontSize: '12px', color: '#888', marginBottom: '6px' }}>
+                    Выбранные — {draftParticipants.length}
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '12px' }}>
+                    {draftParticipants.map(userId => {
+                      const user = availableUsers.find(u => u.id === userId);
+                      return user ? (
+                        <span key={userId} style={{
+                          display: 'inline-flex', alignItems: 'center', gap: '4px',
+                          background: '#3a3f5c', borderRadius: '12px', padding: '3px 10px',
+                          fontSize: '13px', color: '#e0e0e0'
+                        }}>
+                          <img
+                            src={user.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(user.username)}&background=667eea&color=fff`}
+                            alt={user.username}
+                            style={{ width: '18px', height: '18px', borderRadius: '50%' }}
+                            onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || 'U')}&background=667eea&color=fff`; }}
+                          />
+                          {user.username}
+                          <span style={{ cursor: 'pointer', fontSize: '14px', color: '#aaa', marginLeft: '2px' }}
+                            onClick={(e) => { e.stopPropagation(); toggleDraftParticipant(userId); }}>
+                            ×
+                          </span>
+                        </span>
+                      ) : null;
+                    })}
+                  </div>
+                </>
+              )}
+
+              {/* Выбрать всех / Снять всех */}
+              <div style={{ display: 'flex', gap: '12px', marginBottom: '8px' }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const filtered = availableUsers.filter(u =>
+                      u.username.toLowerCase().includes(participantSearchText.toLowerCase()) ||
+                      (u.email && u.email.toLowerCase().includes(participantSearchText.toLowerCase()))
+                    );
+                    setDraftParticipants(prev => {
+                      const newSet = new Set(prev);
+                      filtered.forEach(u => newSet.add(u.id));
+                      return Array.from(newSet);
+                    });
+                  }}
+                  style={{
+                    background: 'transparent', border: '1px solid #555', borderRadius: '6px',
+                    color: '#4caf50', padding: '4px 12px', cursor: 'pointer', fontSize: '12px'
+                  }}
+                >
+                  ✓ Выбрать всех
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const filteredIds = new Set(
+                      availableUsers
+                        .filter(u =>
+                          u.username.toLowerCase().includes(participantSearchText.toLowerCase()) ||
+                          (u.email && u.email.toLowerCase().includes(participantSearchText.toLowerCase()))
+                        )
+                        .map(u => u.id)
+                    );
+                    setDraftParticipants(prev => prev.filter(id => !filteredIds.has(id)));
+                  }}
+                  style={{
+                    background: 'transparent', border: '1px solid #555', borderRadius: '6px',
+                    color: '#f44336', padding: '4px 12px', cursor: 'pointer', fontSize: '12px'
+                  }}
+                >
+                  ○ Снять всех
+                </button>
+              </div>
+
+              {/* Список пользователей */}
+              <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+                {(() => {
+                  const filtered = availableUsers.filter(u =>
+                    u.username.toLowerCase().includes(participantSearchText.toLowerCase()) ||
+                    (u.email && u.email.toLowerCase().includes(participantSearchText.toLowerCase()))
+                  );
+                  if (filtered.length === 0) {
+                    return <div style={{ padding: '20px', textAlign: 'center', color: '#888', fontSize: '14px' }}>Никого не найдено</div>;
+                  }
+                  return filtered.map(user => {
+                    const isSelected = draftParticipants.find(id => id === user.id);
+                    return (
+                      <div
+                        key={user.id}
+                        onClick={() => toggleDraftParticipant(user.id)}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 8px',
+                          cursor: 'pointer', borderRadius: '6px', transition: 'background 0.15s',
+                          background: isSelected ? 'rgba(102, 126, 234, 0.15)' : 'transparent'
+                        }}
+                        onMouseEnter={(e) => { if (!isSelected) e.currentTarget.style.background = '#2a2a2a'; }}
+                        onMouseLeave={(e) => { if (!isSelected) e.currentTarget.style.background = 'transparent'; }}
+                      >
+                        <span style={{ color: isSelected ? '#4caf50' : '#555', fontSize: '16px', width: '20px', textAlign: 'center' }}>
+                          {isSelected ? '☑' : '☐'}
+                        </span>
+                        <img
+                          src={user.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(user.username)}&background=667eea&color=fff`}
+                          alt={user.username}
+                          style={{ width: '32px', height: '32px', borderRadius: '50%', flexShrink: 0 }}
+                          onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || 'U')}&background=667eea&color=fff`; }}
+                        />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ color: '#e0e0e0', fontSize: '14px' }}>{user.username}</div>
+                          {user.email && <div style={{ color: '#888', fontSize: '12px' }}>{user.email}</div>}
+                        </div>
+                      </div>
+                    );
+                  });
+                })()}
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="modal-footer" style={{ borderTop: '1px solid #333', padding: '12px 16px', display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+              <button type="button" className="cancel-btn" onClick={() => setShowParticipantModal(false)}>
+                Отмена
+              </button>
+              <button
+                type="button"
+                className="create-btn"
+                onClick={() => {
+                  setSelectedMeetingParticipants([...draftParticipants]);
+                  setShowParticipantModal(false);
+                }}
+              >
+                ✅ Готово
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Модальное окно редактирования бронирования */}
       {showEditMeetingModal && (
-        <div className="modal-overlay" onClick={() => { setShowEditMeetingModal(false); setEditingBooking(null); setMeetingForm({ title: '', description: '', meetingDate: '', startTime: '', endTime: '', organizer: '', reminderMinutes: '' }); setSelectedMeetingParticipants([]); setParticipantSearchText(''); setShowParticipantDropdown(false); }}>
+        <div className="modal-overlay" onClick={() => { setShowEditMeetingModal(false); setEditingBooking(null); setMeetingForm({ title: '', description: '', meetingDate: '', startTime: '', endTime: '', organizer: '', reminderMinutes: '' }); setSelectedMeetingParticipants([]); setParticipantSearchText(''); }}>
           <div className="modal-content task-modal" onClick={e => e.stopPropagation()} style={{ maxHeight: '85vh', height: '85vh' }}>
             <div className="modal-header">
               <h3>✏️ Редактировать бронирование</h3>
-              <button onClick={() => { setShowEditMeetingModal(false); setEditingBooking(null); setMeetingForm({ title: '', description: '', meetingDate: '', startTime: '', endTime: '', organizer: '', reminderMinutes: '' }); setSelectedMeetingParticipants([]); setParticipantSearchText(''); setShowParticipantDropdown(false); }}>✕</button>
+              <button onClick={() => { setShowEditMeetingModal(false); setEditingBooking(null); setMeetingForm({ title: '', description: '', meetingDate: '', startTime: '', endTime: '', organizer: '', reminderMinutes: '' }); setSelectedMeetingParticipants([]); setParticipantSearchText(''); }}>✕</button>
             </div>
 
             <form style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }} onSubmit={handleUpdateBooking}>
@@ -11135,64 +11316,38 @@ function App() {
                   </select>
                 </div>
 
-                {/* Выбор участников — выпадающий список с поиском */}
+                {/* Выбор участников */}
                 <div className="form-group">
                   <label>Участники</label>
-                  <div style={{position: 'relative'}}>
-                    <div style={{display: 'flex', flexWrap: 'wrap', gap: '4px', padding: '6px 8px', border: '1px solid #555', borderRadius: '6px', background: '#2a2a2a', cursor: 'text', minHeight: '36px', alignItems: 'center'}} onClick={() => { setShowParticipantDropdown(true); document.getElementById('participant-search-input-edit')?.focus(); }}>
+                  <button type="button" onClick={() => { setDraftParticipants([...selectedMeetingParticipants]); setParticipantSearchText(''); setShowParticipantModal(true); }}
+                    style={{
+                      width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #555',
+                      background: '#2a2a2a', color: '#e0e0e0', fontSize: '14px', cursor: 'pointer',
+                      textAlign: 'left', display: 'flex', alignItems: 'center', gap: '8px'
+                    }}
+                  >
+                    👥 Выбрать участников
+                    {selectedMeetingParticipants.length > 0 && (
+                      <span style={{
+                        background: '#667eea', color: '#fff', borderRadius: '10px', padding: '1px 8px',
+                        fontSize: '12px', fontWeight: 'bold', marginLeft: 'auto'
+                      }}>
+                        {selectedMeetingParticipants.length}
+                      </span>
+                    )}
+                  </button>
+                  {selectedMeetingParticipants.length > 0 && (
+                    <div style={{display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '6px'}}>
                       {selectedMeetingParticipants.map(userId => {
                         const user = availableUsers.find(u => u.id === userId);
                         return user ? (
-                          <span key={userId} style={{display: 'inline-flex', alignItems: 'center', gap: '4px', background: '#3a3f5c', borderRadius: '12px', padding: '2px 8px', fontSize: '13px', color: '#e0e0e0'}}>
+                          <span key={userId} style={{display: 'inline-flex', alignItems: 'center', gap: '4px', background: '#3a3f5c', borderRadius: '12px', padding: '2px 8px', fontSize: '12px', color: '#e0e0e0'}}>
                             {user.username}
-                            <span style={{cursor: 'pointer', fontSize: '14px', color: '#aaa', marginLeft: '2px'}} onClick={(e) => { e.stopPropagation(); toggleMeetingParticipant(userId); }}>×</span>
                           </span>
                         ) : null;
                       })}
-                      <input
-                        id="participant-search-input-edit"
-                        type="text"
-                        value={participantSearchText}
-                        onChange={(e) => { setParticipantSearchText(e.target.value); setShowParticipantDropdown(true); }}
-                        onFocus={() => setShowParticipantDropdown(true)}
-                        placeholder={selectedMeetingParticipants.length === 0 ? 'Поиск участников...' : ''}
-                        style={{border: 'none', outline: 'none', background: 'transparent', color: '#e0e0e0', fontSize: '13px', flex: '1', minWidth: '80px', padding: '0'}}
-                      />
                     </div>
-                    {showParticipantDropdown && (
-                      <>
-                        <div style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 999}} onClick={() => setShowParticipantDropdown(false)} />
-                        <div style={{position: 'absolute', top: '100%', left: 0, right: 0, maxHeight: '180px', overflowY: 'auto', background: '#2a2a2a', border: '1px solid #555', borderRadius: '6px', zIndex: 1000, marginTop: '4px'}}>
-                          {availableUsers.filter(u => u.username.toLowerCase().includes(participantSearchText.toLowerCase())).length === 0 && (
-                            <div style={{padding: '8px 12px', color: '#888', fontSize: '13px'}}>Никого не найдено</div>
-                          )}
-                          {availableUsers
-                            .filter(u => u.username.toLowerCase().includes(participantSearchText.toLowerCase()))
-                            .map(user => {
-                              const isSelected = selectedMeetingParticipants.find(id => id === user.id);
-                              return (
-                                <div
-                                  key={user.id}
-                                  onClick={() => toggleMeetingParticipant(user.id)}
-                                  style={{display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 12px', cursor: 'pointer', background: isSelected ? '#3a3f5c' : 'transparent', color: '#e0e0e0', fontSize: '13px'}}
-                                  onMouseEnter={(e) => e.currentTarget.style.background = isSelected ? '#4a4f6c' : '#333'}
-                                  onMouseLeave={(e) => e.currentTarget.style.background = isSelected ? '#3a3f5c' : 'transparent'}
-                                >
-                                  <img
-                                    src={user.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(user.username)}`}
-                                    alt={user.username}
-                                    style={{width: '24px', height: '24px', borderRadius: '50%'}}
-                                    onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || 'U')}`; }}
-                                  />
-                                  <span style={{flex: 1}}>{user.username}</span>
-                                  {isSelected && <span style={{color: '#4caf50'}}>✓</span>}
-                                </div>
-                              );
-                            })}
-                        </div>
-                      </>
-                    )}
-                  </div>
+                  )}
                 </div>
               </div>
 
@@ -11200,7 +11355,7 @@ function App() {
                 <button
                   type="button"
                   className="cancel-btn"
-                  onClick={() => { setShowEditMeetingModal(false); setEditingBooking(null); setMeetingForm({ title: '', description: '', meetingDate: '', startTime: '', endTime: '', organizer: '', reminderMinutes: '' }); setSelectedMeetingParticipants([]); setParticipantSearchText(''); setShowParticipantDropdown(false); }}
+                  onClick={() => { setShowEditMeetingModal(false); setEditingBooking(null); setMeetingForm({ title: '', description: '', meetingDate: '', startTime: '', endTime: '', organizer: '', reminderMinutes: '' }); setSelectedMeetingParticipants([]); setParticipantSearchText(''); }}
                 >
                   Отмена
                 </button>

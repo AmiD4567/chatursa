@@ -5770,7 +5770,7 @@ io.on('connection', (socket) => {
     // Приветствие нового пользователя в общем чате (только при первом входе)
     if (isFirstJoin) {
       setTimeout(() => {
-        const welcomeText = `👋 Коллеги, поприветствуйте нового участника — **${user.username}**!
+        const welcomeText = `👋 Коллеги, поприветствуйте нового участника — **[${user.username}](user:${user.username})**!
 
 Рады видеть вас в нашей команде! 🎉`;
 
@@ -7098,6 +7098,55 @@ function sendTaskReminder(userId, username, taskTitle, taskDate, taskTime) {
 }
 
 /**
+ * Отправить напоминание о встрече/бронировании переговорной через бота «Помощник»
+ */
+function sendMeetingReminder(userId, reminder) {
+  try {
+    const botChatId = `bot-chat-${userId}`;
+    const reminderText = `🔔 *Напоминание о встрече*\n\n📌 **${reminder.title}**\n📅 ${reminder.meeting_date} ${reminder.start_time}–${reminder.end_time}\n👤 Организатор: ${reminder.organizer_name}`;
+
+    const botResult = db.prepare("SELECT id FROM users WHERE username = 'Помощник'").get();
+    if (!botResult) return;
+
+    const botId = botResult.id;
+    const messageId = uuidv4();
+    const encryptedText = encryptText(reminderText || '');
+
+    // Убедимся что чат с ботом существует
+    ensureBotChat(userId);
+
+    db.run(`
+      INSERT INTO messages (id, chat_id, sender_id, text, timestamp)
+      VALUES (?, ?, ?, ?, ?)
+    `, [messageId, botChatId, botId, encryptedText, new Date().toISOString()]);
+
+    // Находим сокет пользователя и отправляем через WebSocket
+    const socketItem = Array.from(onlineUsers.entries()).find(([sid, u]) => u.id === userId);
+    if (socketItem) {
+      const userSocket = io.sockets.sockets.get(socketItem[0]);
+      if (userSocket) {
+        userSocket.emit('new_message', {
+          message: {
+            id: messageId,
+            chatId: botChatId,
+            senderId: botId,
+            senderName: 'Помощник',
+            senderAvatar: 'https://ui-avatars.com/api/?name=🤖+Бот&background=667eea&color=fff',
+            text: reminderText,
+            timestamp: new Date().toISOString(),
+            isBotMessage: true
+          },
+          chat: { id: botChatId }
+        });
+      }
+    }
+
+  } catch (err) {
+    console.error('Ошибка отправки напоминания о встрече:', err);
+  }
+}
+
+/**
  * Запланировать напоминание для задачи.
  * reminderTime — ISO timestamp, когда нужно отправить напоминание.
  */
@@ -7374,18 +7423,8 @@ try {
             notifyUserIds.add(p.user_id);
           }
 
-          const message = {
-            bookingId: reminder.id,
-            title: reminder.title,
-            organizerName: reminder.organizer_name,
-            meetingDate: reminder.meeting_date,
-            startTime: reminder.start_time,
-            endTime: reminder.end_time,
-            reminderMinutes: reminder.reminder_minutes
-          };
-
           for (const userId of notifyUserIds) {
-            emitToUser(userId, 'meeting_reminder', message);
+            sendMeetingReminder(userId, reminder);
           }
 
           // Помечаем напоминание как отправленное
