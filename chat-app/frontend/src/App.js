@@ -2053,6 +2053,39 @@ function App() {
     return () => { if (cleanup) cleanup(); };
   }, [chats, socket]);
 
+  // Генерация бейджа с количеством непрочитанных сообщений для панели задач
+  function generateBadgeDataUrl(count) {
+    if (!count || count <= 0) return null;
+
+    const text = count > 99 ? '99+' : String(count);
+    const size = 16;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+
+    // Красный круг
+    ctx.beginPath();
+    ctx.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
+    ctx.fillStyle = '#ff3333';
+    ctx.fill();
+
+    // Белая цифра
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    if (text.length <= 1) {
+      ctx.font = 'bold 10px Arial';
+    } else if (text.length === 2) {
+      ctx.font = 'bold 8px Arial';
+    } else {
+      ctx.font = 'bold 7px Arial';
+    }
+    ctx.fillText(text, size / 2, size / 2 + 0.5);
+
+    return canvas.toDataURL();
+  }
+
   // Отправляем общее количество непрочитанных сообщений в Electron для отображения бейджа
   useEffect(() => {
     // Суммируем все непрочитанные сообщения из всех чатов
@@ -2062,12 +2095,10 @@ function App() {
 
     console.log('[Badge] Общее количество непрочитанных:', totalUnread);
     console.log('[Badge] electronAPI существует:', !!window.electronAPI);
-    
-    if (window.electronAPI && window.electronAPI.setUnreadCount) {
-      console.log('[Badge] Отправляем setUnreadCount:', totalUnread);
+
+    if (window.electronAPI) {
       window.electronAPI.setUnreadCount(totalUnread);
-    } else {
-      console.log('[Badge] electronAPI.setUnreadCount недоступен');
+      window.electronAPI.setBadgeIcon(generateBadgeDataUrl(totalUnread));
     }
   }, [chats]);
 

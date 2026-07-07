@@ -70,6 +70,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Обновление индикатора непрочитанных сообщений
   setUnreadCount: (count) => ipcRenderer.send('set-unread-count', count),
+  setBadgeIcon: (dataUrl) => ipcRenderer.send('set-badge-icon', dataUrl),
 
   // Статус видимости приложения (для корректного подсчёта непрочитанных)
   onAppVisibility: (callback) => {

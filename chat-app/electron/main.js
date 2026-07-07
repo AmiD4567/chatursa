@@ -441,11 +441,13 @@ ipcMain.on('set-unread-count', (event, count) => {
       tray.setImage(path.join(__dirname, 'icon.ico'));
     }
   }
-  // Обновление badge на панели задач
+});
+
+ipcMain.on('set-badge-icon', (event, dataUrl) => {
   if (mainWindow) {
     mainWindow.setOverlayIcon(
-      count > 0 ? nativeImage.createFromPath(path.join(__dirname, 'icon.ico')).resize({ width: 16, height: 16 }) : null,
-      count > 0 ? `Новых сообщений: ${count}` : ''
+      dataUrl ? nativeImage.createFromDataURL(dataUrl) : null,
+      dataUrl ? 'Новые сообщения' : ''
     );
   }
 });
