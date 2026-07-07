@@ -5432,7 +5432,14 @@ function checkWsRateLimit(socketId) {
 
 // Создаёт чат с ботом-помощником для пользователя, если ещё не существует
 function ensureBotChat(userId) {
-  const botRow = db.prepare("SELECT id FROM users WHERE username = 'Помощник'").get();
+  let botRow = db.prepare("SELECT id FROM users WHERE username = 'Помощник'").get();
+  if (!botRow) {
+    // Создаём бота если его нет
+    const newBotId = 'helper-bot-' + uuidv4().substring(0, 8);
+    db.prepare("INSERT INTO users (id, username, avatar, status, is_admin) VALUES (?, 'Помощник', ?, 'online', 0)").run(newBotId, `${SERVER_URL}/uploads/ursa.jpg`);
+    botRow = db.prepare("SELECT id FROM users WHERE username = 'Помощник'").get();
+    console.log('Создан бот Помощник:', botRow?.id);
+  }
   const botId = botRow ? botRow.id : null;
   const botChatId = `bot-chat-${userId}`;
   const botChatCheck = db.prepare('SELECT * FROM chats WHERE id = ?').get(botChatId);
@@ -7105,8 +7112,21 @@ function sendMeetingReminder(userId, reminder) {
     const botChatId = `bot-chat-${userId}`;
     const reminderText = `🔔 *Напоминание о встрече*\n\n📌 **${reminder.title}**\n📅 ${reminder.meeting_date} ${reminder.start_time}–${reminder.end_time}\n👤 Организатор: ${reminder.organizer_name}`;
 
-    const botResult = db.prepare("SELECT id FROM users WHERE username = 'Помощник'").get();
-    if (!botResult) return;
+    console.log(`[Reminder] Отправка напоминания пользователю ${userId} о брони #${reminder.id}: ${reminder.title}`);
+
+    // Получаем или создаём бота Помощник
+    let botResult = db.prepare("SELECT id FROM users WHERE username = 'Помощник'").get();
+    if (!botResult) {
+      console.log('[Reminder] Бот Помощник не найден, создаём...');
+      const botId = 'helper-bot-' + uuidv4().substring(0, 8);
+      db.prepare("INSERT INTO users (id, username, avatar, status, is_admin) VALUES (?, 'Помощник', ?, 'online', 0)").run(botId, `${SERVER_URL}/uploads/ursa.jpg`);
+      botResult = db.prepare("SELECT id FROM users WHERE username = 'Помощник'").get();
+      console.log('[Reminder] Бот Помощник создан:', botResult);
+    }
+    if (!botResult) {
+      console.error('[Reminder] Не удалось создать или найти бота Помощник!');
+      return;
+    }
 
     const botId = botResult.id;
     const messageId = uuidv4();
@@ -7119,6 +7139,8 @@ function sendMeetingReminder(userId, reminder) {
       INSERT INTO messages (id, chat_id, sender_id, text, timestamp)
       VALUES (?, ?, ?, ?, ?)
     `, [messageId, botChatId, botId, encryptedText, new Date().toISOString()]);
+
+    console.log(`[Reminder] Сообщение сохранено в БД: ${messageId}`);
 
     // Находим сокет пользователя и отправляем через WebSocket
     const socketItem = Array.from(onlineUsers.entries()).find(([sid, u]) => u.id === userId);
@@ -7138,11 +7160,17 @@ function sendMeetingReminder(userId, reminder) {
           },
           chat: { id: botChatId }
         });
+        console.log(`[Reminder] Сообщение отправлено через сокет пользователю ${userId}`);
+      } else {
+        console.log(`[Reminder] Пользователь ${userId} офлайн (сокет не найден в io.sockets)`);
       }
+    } else {
+      console.log(`[Reminder] Пользователь ${userId} офлайн (нет в onlineUsers)`);
     }
 
   } catch (err) {
     console.error('Ошибка отправки напоминания о встрече:', err);
+    console.error('Stack:', err.stack);
   }
 }
 
@@ -7410,7 +7438,13 @@ try {
             AND (reminder_sent IS NULL OR reminder_sent = 0)
         `).all(now);
 
+        if (dueReminders.length > 0) {
+          console.log(`[Reminder] Найдено ${dueReminders.length} просроченных напоминаний`);
+        }
+
         for (const reminder of dueReminders) {
+          console.log(`[Reminder] Обработка напоминания #${reminder.id}: ${reminder.title}, встреча ${reminder.meeting_date} ${reminder.start_time}`);
+          
           // Получаем участников встречи
           const participants = db.prepare(`
             SELECT user_id, username FROM meeting_room_booking_participants WHERE booking_id = ?
@@ -7423,13 +7457,15 @@ try {
             notifyUserIds.add(p.user_id);
           }
 
+          console.log(`[Reminder] Получатели:`, Array.from(notifyUserIds));
+
           for (const userId of notifyUserIds) {
             sendMeetingReminder(userId, reminder);
           }
 
           // Помечаем напоминание как отправленное
           db.run('UPDATE meeting_room_bookings SET reminder_sent = 1 WHERE id = ?', [reminder.id]);
-          
+          console.log(`[Reminder] Напоминание #${reminder.id} помечено как отправленное`);
         }
       } catch (e) {
         console.error('Ошибка проверки напоминаний о встречах:', e.message);

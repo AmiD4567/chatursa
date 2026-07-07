@@ -187,12 +187,17 @@ const DIALOG_DEFINITIONS = {
           try {
             const userId = chatId.replace('bot-chat-', '');
             const user = db.prepare('SELECT username FROM users WHERE id = ?').get(userId);
+            
+            // Рассчитываем напоминание за 15 минут до встречи
+            const baseDate = new Date(`${state.context.date}T${state.context.timeStart}`);
+            const reminderTime = new Date(baseDate.getTime() - 15 * 60 * 1000).toISOString().slice(0, 19);
+
             db.run(`
-              INSERT INTO meeting_room_bookings (title, meeting_date, start_time, end_time, organizer_id, organizer_name, created_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?)
-            `, [state.context.title, state.context.date, state.context.timeStart, state.context.timeEnd, userId, user?.username || 'Пользователь', new Date().toISOString()]);
+              INSERT INTO meeting_room_bookings (title, meeting_date, start_time, end_time, organizer_id, organizer_name, reminder_minutes, reminder_time, created_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `, [state.context.title, state.context.date, state.context.timeStart, state.context.timeEnd, userId, user?.username || 'Пользователь', 15, reminderTime, new Date().toISOString()]);
             sendBotMessage(socket, chatId,
-              `✅ *Бронирование создано!*\n\n🏢 ${state.context.title}\n📅 ${state.context.date}\n⏰ ${state.context.timeStart} — ${state.context.timeEnd}\n\nОткройте Календарь → Переговорка, чтобы увидеть бронь.`,
+              `✅ *Бронирование создано!*\n\n🏢 ${state.context.title}\n📅 ${state.context.date}\n⏰ ${state.context.timeStart} — ${state.context.timeEnd}\n🔔 Напоминание: за 15 минут до начала\n\nОткройте Календарь → Переговорка, чтобы увидеть бронь.`,
               [{ label: '📅 Календарь', action: '/календарь' }]
             );
           } catch (err) {
