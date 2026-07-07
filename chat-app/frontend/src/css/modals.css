@@ -2619,6 +2619,15 @@
   margin: 0 0 12px 0;
 }
 
+.update-error-detail {
+  font-size: 12px;
+  opacity: 0.7;
+  word-break: break-word;
+  margin-top: -4px;
+  margin-bottom: 12px;
+  line-height: 1.4;
+}
+
 /* Кнопка включения уведомлений в настройках */
 .enable-notification-btn {
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);

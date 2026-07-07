@@ -218,6 +218,7 @@ function App() {
   const [appVersion, setAppVersion] = useState('1.0.8');
   const [updateStatus, setUpdateStatus] = useState(null); // null | 'checking' | 'idle' | 'downloading' | 'ready' | 'installing' | 'no-update' | 'error'
   const [updateProgress, setUpdateProgress] = useState(0);
+  const [updateErrorMessage, setUpdateErrorMessage] = useState('');
   const [showUpdateBanner, setShowUpdateBanner] = useState(false);
   // Electron update info (версия + нуты)
   const [electronUpdateInfo, setElectronUpdateInfo] = useState(null); // { version, releaseNotes }
@@ -1045,6 +1046,7 @@ function App() {
 
     const cleanupError = window.electronAPI.onUpdateError((err) => {
       console.error('Ошибка автообновления:', err);
+      setUpdateErrorMessage(typeof err === 'string' ? err : err?.message || JSON.stringify(err));
       setUpdateStatus('error');
     });
 
@@ -1072,6 +1074,7 @@ function App() {
   // Проверка обновлений (единая функция для Electron и браузера)
   const checkForUpdates = useCallback(async () => {
     setUpdateStatus('checking');
+    setUpdateErrorMessage('');
     setShowUpdateBanner(false);
     setUpdateProgress(0);
 
@@ -10345,6 +10348,9 @@ function App() {
                       {updateStatus === 'error' && (
                         <div className="update-error">
                           <p>❌ Ошибка проверки обновлений</p>
+                          {updateErrorMessage && (
+                            <p className="update-error-detail">{updateErrorMessage}</p>
+                          )}
                           <button
                             className="btn-check-update-secondary"
                             onClick={checkForUpdates}
