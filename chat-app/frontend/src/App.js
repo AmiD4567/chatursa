@@ -21,14 +21,16 @@ let csrfToken = '';
 
 async function fetchCsrfToken() {
   try {
-    const res = await fetch(`${SOCKET_URL}/api/csrf-token`, { credentials: 'include' });
+    const res = await fetch(`${SOCKET_URL}/api/csrf-token`);
     if (res.ok) {
       const data = await res.json();
       csrfToken = data.csrfToken;
+      return csrfToken;
     }
   } catch (e) {
     console.warn('Не удалось получить CSRF-токен:', e.message);
   }
+  return null;
 }
 fetchCsrfToken();
 
@@ -56,10 +58,12 @@ window.fetch = function(input, init = {}) {
   }
 
   return originalFetch.call(window, input, init).then(async (res) => {
-    if (res.status === 403 && isMutating && csrfToken) {
-      await fetchCsrfToken();
-      const retryInit = addCsrfHeader({ ...init });
-      return originalFetch.call(window, input, retryInit);
+    if (res.status === 403 && isMutating) {
+      const newToken = await fetchCsrfToken();
+      if (newToken) {
+        const retryInit = addCsrfHeader({ ...init });
+        return originalFetch.call(window, input, retryInit);
+      }
     }
     return res;
   });
@@ -354,6 +358,7 @@ function App() {
   const [meetingRoomBookings, setMeetingRoomBookings] = useState([]);
   const [showMeetingModal, setShowMeetingModal] = useState(false);
   const [showEditMeetingModal, setShowEditMeetingModal] = useState(false);
+  const [modalKey, setModalKey] = useState(0);
   const [editingBooking, setEditingBooking] = useState(null);
   const [meetingForm, setMeetingForm] = useState({
     title: '',
@@ -362,7 +367,7 @@ function App() {
     startTime: '',
     endTime: '',
     organizer: '',
-    reminderMinutes: ''
+    reminderMinutes: '15'
   });
   const [canBookMeetingRoom, setCanBookMeetingRoom] = useState(false); // Право на бронирование
   const [canEditWiki, setCanEditWiki] = useState(false); // Право на редактирование wiki
@@ -3588,6 +3593,8 @@ function App() {
 
   // E2EE: зашифровать текст для чата
   const prepareE2EEMessage = async (chatId, text) => {
+    // E2EE не применяется к чатам с ботом (команды бота передаются в открытом виде)
+    if (chatId.startsWith('bot-chat-')) return { text, e2ee: false };
     if (!e2eeEnabled[chatId] || !text) return { text, e2ee: false };
     const sharedKey = await ensureE2EEForChat(chatId);
     if (!sharedKey) {
@@ -5372,7 +5379,7 @@ function App() {
           startTime: '',
           endTime: '',
           organizer: '',
-          reminderMinutes: ''
+          reminderMinutes: '15'
         });
         setSelectedMeetingParticipants([]);
         setParticipantSearchText('');
@@ -9478,10 +9485,11 @@ function App() {
                       startTime: '',
                       endTime: '',
                       organizer: '',
-                      reminderMinutes: ''
+                      reminderMinutes: '15'
                     });
                     setSelectedMeetingParticipants([]);
                     setParticipantSearchText('');
+                    setModalKey(k => k + 1);
                     setShowMeetingModal(true); 
                   }}>
                     + Забронировать
@@ -10903,11 +10911,11 @@ function App() {
 
       {/* Модальное окно бронирования переговорной */}
       {showMeetingModal && (
-        <div className="modal-overlay" onClick={() => { setShowMeetingModal(false); setMeetingForm({ title: '', description: '', meetingDate: '', startTime: '', endTime: '', organizer: '', reminderMinutes: '' }); setSelectedMeetingParticipants([]); setParticipantSearchText(''); }}>
+        <div key={modalKey} className="modal-overlay" onClick={() => { setShowMeetingModal(false); setMeetingForm({ title: '', description: '', meetingDate: '', startTime: '', endTime: '', organizer: '', reminderMinutes: '15' }); setSelectedMeetingParticipants([]); setParticipantSearchText(''); }}>
           <div className="modal-content task-modal" onClick={e => e.stopPropagation()} style={{ maxHeight: '85vh', height: '85vh' }}>
             <div className="modal-header">
               <h3>🏢 Забронировать переговорную</h3>
-              <button onClick={() => { setShowMeetingModal(false); setMeetingForm({ title: '', description: '', meetingDate: '', startTime: '', endTime: '', organizer: '', reminderMinutes: '' }); setSelectedMeetingParticipants([]); setParticipantSearchText(''); }}>✕</button>
+              <button onClick={() => { setShowMeetingModal(false); setMeetingForm({ title: '', description: '', meetingDate: '', startTime: '', endTime: '', organizer: '', reminderMinutes: '15' }); setSelectedMeetingParticipants([]); setParticipantSearchText(''); }}>✕</button>
             </div>
 
             <form style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }} onSubmit={async (e) => {
@@ -10947,13 +10955,12 @@ function App() {
                     startTime: '',
                     endTime: '',
                     organizer: '',
-                    reminderMinutes: ''
+                    reminderMinutes: '15'
                   });
                   setSelectedMeetingParticipants([]);
                   setParticipantSearchText('');
                   
                   setShowMeetingModal(false);
-                  alert('Переговорная успешно забронирована!');
                 } else {
                   alert(data.error || 'Ошибка при бронировании');
                 }
@@ -11082,7 +11089,7 @@ function App() {
                 <button
                   type="button"
                   className="cancel-btn"
-                  onClick={() => { setShowMeetingModal(false); setMeetingForm({ title: '', description: '', meetingDate: '', startTime: '', endTime: '', organizer: '', reminderMinutes: '' }); setSelectedMeetingParticipants([]); setParticipantSearchText(''); }}
+                  onClick={() => { setShowMeetingModal(false); setMeetingForm({ title: '', description: '', meetingDate: '', startTime: '', endTime: '', organizer: '', reminderMinutes: '15' }); setSelectedMeetingParticipants([]); setParticipantSearchText(''); }}
                 >
                   Отмена
                 </button>
@@ -11265,11 +11272,11 @@ function App() {
 
       {/* Модальное окно редактирования бронирования */}
       {showEditMeetingModal && (
-        <div className="modal-overlay" onClick={() => { setShowEditMeetingModal(false); setEditingBooking(null); setMeetingForm({ title: '', description: '', meetingDate: '', startTime: '', endTime: '', organizer: '', reminderMinutes: '' }); setSelectedMeetingParticipants([]); setParticipantSearchText(''); }}>
+        <div className="modal-overlay" onClick={() => { setShowEditMeetingModal(false); setEditingBooking(null); setMeetingForm({ title: '', description: '', meetingDate: '', startTime: '', endTime: '', organizer: '', reminderMinutes: '15' }); setSelectedMeetingParticipants([]); setParticipantSearchText(''); }}>
           <div className="modal-content task-modal" onClick={e => e.stopPropagation()} style={{ maxHeight: '85vh', height: '85vh' }}>
             <div className="modal-header">
               <h3>✏️ Редактировать бронирование</h3>
-              <button onClick={() => { setShowEditMeetingModal(false); setEditingBooking(null); setMeetingForm({ title: '', description: '', meetingDate: '', startTime: '', endTime: '', organizer: '', reminderMinutes: '' }); setSelectedMeetingParticipants([]); setParticipantSearchText(''); }}>✕</button>
+              <button onClick={() => { setShowEditMeetingModal(false); setEditingBooking(null); setMeetingForm({ title: '', description: '', meetingDate: '', startTime: '', endTime: '', organizer: '', reminderMinutes: '15' }); setSelectedMeetingParticipants([]); setParticipantSearchText(''); }}>✕</button>
             </div>
 
             <form style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }} onSubmit={handleUpdateBooking}>
@@ -11392,7 +11399,7 @@ function App() {
                 <button
                   type="button"
                   className="cancel-btn"
-                  onClick={() => { setShowEditMeetingModal(false); setEditingBooking(null); setMeetingForm({ title: '', description: '', meetingDate: '', startTime: '', endTime: '', organizer: '', reminderMinutes: '' }); setSelectedMeetingParticipants([]); setParticipantSearchText(''); }}
+                  onClick={() => { setShowEditMeetingModal(false); setEditingBooking(null); setMeetingForm({ title: '', description: '', meetingDate: '', startTime: '', endTime: '', organizer: '', reminderMinutes: '15' }); setSelectedMeetingParticipants([]); setParticipantSearchText(''); }}
                 >
                   Отмена
                 </button>

@@ -1170,15 +1170,15 @@ app.use(cors({
   credentials: true
 }));
 
-// Cookie parser для CSRF
+// Cookie parser (используется в др.местах, не для CSRF)
 app.use(cookieParser());
 
-// CSRF защита: двойная отправка cookie (double-submit cookie pattern)
-// Сервер устанавливает httpOnly cookie, фронтенд читает токен из JSON-ответа
-// и отправляет его в заголовке X-CSRF-Token; сервер сверяет cookie и заголовок.
+// CSRF защита: Single-header pattern (Same Origin Policy не даёт атакующему
+// установить кастомный заголовок X-CSRF-Token на跨доменный запрос).
+// Фронтенд читает токен из JSON-ответа и добавляет его в заголовок всех мутирующих запросов.
+// Не используем cookie из-за sameSite-ограничений в Electron (file:// origin).
 app.get('/api/csrf-token', (req, res) => {
   const token = uuidv4();
-  res.cookie('X-CSRF-Token', token, { httpOnly: true, sameSite: 'strict', maxAge: 86400000, secure: useHttps });
   res.json({ csrfToken: token });
 });
 
@@ -1186,8 +1186,8 @@ app.get('/api/csrf-token', (req, res) => {
 function csrfMiddleware(req, res, next) {
   if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
     const headerToken = req.headers['x-csrf-token'];
-    const cookieToken = req.cookies?.['X-CSRF-Token'];
-    if (!headerToken || !cookieToken || headerToken !== cookieToken) {
+    if (!headerToken || headerToken === '') {
+      console.warn(`[CSRF] Отсутствует или пустой X-CSRF-Token: ${req.method} ${req.path}, IP: ${req.ip}`);
       return res.status(403).json({ error: 'Недействительный CSRF-токен' });
     }
   }
@@ -5451,6 +5451,12 @@ function ensureBotChat(userId) {
     }
     return true;
   }
+  // Гарантируем, что пользователь есть в участниках (даже если чат уже существовал)
+  const memberCheck = db.prepare('SELECT 1 FROM chat_participants WHERE chat_id = ? AND user_id = ?').get(botChatId, userId);
+  if (!memberCheck) {
+    db.run(`INSERT OR IGNORE INTO chat_participants (chat_id, user_id) VALUES (?, ?)`, [botChatId, userId]);
+    console.log(`ensureBotChat: участник ${userId} добавлен в существующий чат ${botChatId}`);
+  }
   return false;
 }
 
@@ -5475,6 +5481,7 @@ io.on('connection', (socket) => {
         const isParticipant = db.prepare('SELECT 1 FROM chat_participants WHERE chat_id = ? AND user_id = ?').get(data.chatId, onlineUser.id);
         if (!isParticipant) {
           console.warn(`WS middleware: socket ${socket.id} пытается отправить сообщение в чат ${data.chatId} без членства`);
+          socket.emit('error', { message: 'Вы не являетесь участником этого чата. Попробуйте переподключиться.' });
           return;
         }
       }
@@ -7110,7 +7117,7 @@ function sendTaskReminder(userId, username, taskTitle, taskDate, taskTime) {
 function sendMeetingReminder(userId, reminder) {
   try {
     const botChatId = `bot-chat-${userId}`;
-    const reminderText = `🔔 *Напоминание о встрече*\n\n📌 **${reminder.title}**\n📅 ${reminder.meeting_date} ${reminder.start_time}–${reminder.end_time}\n👤 Организатор: ${reminder.organizer_name}`;
+    const reminderText = `🔔 *Напоминание о встрече*\n\n📌 *${reminder.title}*\n📅 *Дата:* ${reminder.meeting_date}\n⏰ *Время:* ${reminder.start_time} – ${reminder.end_time}\n👤 *Организатор:* ${reminder.organizer_name}`;
 
     console.log(`[Reminder] Отправка напоминания пользователю ${userId} о брони #${reminder.id}: ${reminder.title}`);
 
@@ -7142,31 +7149,21 @@ function sendMeetingReminder(userId, reminder) {
 
     console.log(`[Reminder] Сообщение сохранено в БД: ${messageId}`);
 
-    // Находим сокет пользователя и отправляем через WebSocket
-    const socketItem = Array.from(onlineUsers.entries()).find(([sid, u]) => u.id === userId);
-    if (socketItem) {
-      const userSocket = io.sockets.sockets.get(socketItem[0]);
-      if (userSocket) {
-        userSocket.emit('new_message', {
-          message: {
-            id: messageId,
-            chatId: botChatId,
-            senderId: botId,
-            senderName: 'Помощник',
-            senderAvatar: 'https://ui-avatars.com/api/?name=🤖+Бот&background=667eea&color=fff',
-            text: reminderText,
-            timestamp: new Date().toISOString(),
-            isBotMessage: true
-          },
-          chat: { id: botChatId }
-        });
-        console.log(`[Reminder] Сообщение отправлено через сокет пользователю ${userId}`);
-      } else {
-        console.log(`[Reminder] Пользователь ${userId} офлайн (сокет не найден в io.sockets)`);
-      }
-    } else {
-      console.log(`[Reminder] Пользователь ${userId} офлайн (нет в onlineUsers)`);
-    }
+    // Отправляем через WebSocket всем сессиям пользователя
+    emitToUser(userId, 'new_message', {
+      message: {
+        id: messageId,
+        chatId: botChatId,
+        senderId: botId,
+        senderName: 'Помощник',
+        senderAvatar: 'https://ui-avatars.com/api/?name=🤖+Бот&background=667eea&color=fff',
+        text: reminderText,
+        timestamp: new Date().toISOString(),
+        isBotMessage: true
+      },
+      chat: { id: botChatId, name: 'Помощник', type: 'direct' }
+    });
+    console.log(`[Reminder] Сообщение отправлено пользователю ${userId}`);
 
   } catch (err) {
     console.error('Ошибка отправки напоминания о встрече:', err);
@@ -7277,21 +7274,15 @@ function scheduleBirthdayChecker() {
         const encryptedText = encryptText(text);
         db.run(`INSERT INTO messages (id, chat_id, sender_id, text, timestamp) VALUES (?, ?, ?, ?, ?)`,
           [messageId, botChatId, botUser.id, encryptedText, new Date().toISOString()]);
-        const socketItem = Array.from(onlineUsers.entries()).find(([sid, u]) => u.id === user.id);
-        if (socketItem) {
-          const userSocket = io.sockets.sockets.get(socketItem[0]);
-          if (userSocket) {
-            userSocket.emit('new_message', {
-              message: {
-                id: messageId, chatId: botChatId, senderId: botUser.id,
-                senderName: 'Помощник',
-                senderAvatar: 'https://ui-avatars.com/api/?name=🤖&background=667eea&color=fff',
-                text, timestamp: new Date().toISOString()
-              },
-              chat: { id: botChatId }
-            });
-          }
-        }
+        emitToUser(user.id, 'new_message', {
+          message: {
+            id: messageId, chatId: botChatId, senderId: botUser.id,
+            senderName: 'Помощник',
+            senderAvatar: 'https://ui-avatars.com/api/?name=🤖&background=667eea&color=fff',
+            text, timestamp: new Date().toISOString()
+          },
+          chat: { id: botChatId, name: 'Помощник', type: 'direct' }
+        });
       });
     } catch (err) {
       console.error('Ошибка проверки дней рождений:', err);

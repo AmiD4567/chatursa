@@ -134,6 +134,19 @@ function initBotEngine({ db, io, uuidv4, encryptText }) {
       const botResult = db.prepare("SELECT id, username, avatar FROM users WHERE username = ?").get('Помощник');
       if (!botResult) {
         console.error('Помощник не найден в базе');
+        if (socket && chatId) {
+          io.to(chatId).emit('new_message', {
+            message: {
+              id: uuidv4(),
+              chatId: chatId,
+              senderId: 'bot-system',
+              senderName: 'Система',
+              text: '🤖 *Помощник временно недоступен.* Обратитесь к администратору.',
+              timestamp: new Date().toISOString()
+            },
+            chat: { id: chatId }
+          });
+        }
         return;
       }
 

@@ -1502,8 +1502,8 @@ body,
   overflow: hidden;
 }
 .wiki-sidebar {
-  width: 200px;
-  min-width: 200px;
+  width: 280px;
+  min-width: 280px;
   background: var(--sidebar-bg, rgba(255,255,255,0.03));
   border-right: 1px solid var(--border-color, rgba(255,255,255,0.1));
   display: flex;
@@ -1555,9 +1555,8 @@ body,
 .wiki-cat-item span {
   flex: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  word-break: break-word;
+  line-height: 1.3;
 }
 .wiki-cat-actions {
   display: flex;
