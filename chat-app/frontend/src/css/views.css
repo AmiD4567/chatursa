@@ -1561,7 +1561,7 @@ body,
 .wiki-cat-actions {
   display: flex;
   gap: 2px;
-  flex-shrink: 0;
+  flex: none;
   opacity: 0;
   transition: opacity 0.15s;
 }
@@ -1595,6 +1595,20 @@ body,
   background: rgba(102,126,234,0.15);
   color: var(--primary-color, #667eea);
   font-weight: 600;
+}
+.wiki-cat-item .wiki-expand-btn {
+  cursor: pointer;
+  font-size: 10px;
+  margin-right: 4px;
+  flex: none;
+  width: 16px;
+  text-align: center;
+  user-select: none;
+  color: var(--text-secondary, #999);
+  transition: color 0.15s;
+}
+.wiki-cat-item .wiki-expand-btn:hover {
+  color: var(--text-primary, #fff);
 }
 .wiki-main {
   flex: 1;

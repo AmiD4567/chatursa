@@ -480,6 +480,8 @@ function App() {
   const [wikiAccessLevel, setWikiAccessLevel] = useState('public');
   const [wikiAllowedUsers, setWikiAllowedUsers] = useState([]);
   const [wikiAccessSearch, setWikiAccessSearch] = useState('');
+  const [wikiExpandedCategories, setWikiExpandedCategories] = useState(new Set());
+  const [wikiCategoryParent, setWikiCategoryParent] = useState('');
   const [showHR, setShowHR] = useState(false);
   const [hrRequests, setHrRequests] = useState([]);
   const [showHRCreate, setShowHRCreate] = useState(false);
@@ -4061,6 +4063,38 @@ function App() {
     }
   };
 
+  const getCategoryIds = (categoryId) => {
+    const ids = [categoryId];
+    const findChildren = (parentId) => {
+      wikiCategories.filter(c => c.parent_id === parentId).forEach(child => {
+        ids.push(child.id);
+        findChildren(child.id);
+      });
+    };
+    findChildren(categoryId);
+    return ids;
+  };
+
+  const wikiDeleteCategoryRecursive = async (categoryId) => {
+    const children = wikiCategories.filter(c => c.parent_id === categoryId);
+    for (const child of children) {
+      await wikiDeleteCategoryRecursive(child.id);
+    }
+    try {
+      const res = await fetch(`${SOCKET_URL}/api/wiki/categories/${categoryId}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: currentUser.id })
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        alert('Ошибка: ' + (err.error || 'Доступ запрещён'));
+      }
+    } catch (err) {
+      console.error('Ошибка удаления категории:', err);
+    }
+  };
+
   const wikiCreateCategory = async () => {
     if (!wikiCategoryName.trim()) return;
     try {
@@ -4070,6 +4104,7 @@ function App() {
         body: JSON.stringify({
           name: wikiCategoryName.trim(),
           description: wikiCategoryDesc.trim(),
+          parentId: wikiCategoryParent || null,
           userId: currentUser.id
         })
       });
@@ -4081,6 +4116,7 @@ function App() {
       setShowWikiCategoryModal(false);
       setWikiCategoryName('');
       setWikiCategoryDesc('');
+      setWikiCategoryParent('');
       setWikiEditingCategory(null);
       loadWikiData();
     } catch (err) {
@@ -4097,6 +4133,7 @@ function App() {
         body: JSON.stringify({
           name: wikiCategoryName.trim(),
           description: wikiCategoryDesc.trim(),
+          parentId: wikiCategoryParent || null,
           userId: currentUser.id
         })
       });
@@ -4108,6 +4145,7 @@ function App() {
       setShowWikiCategoryModal(false);
       setWikiCategoryName('');
       setWikiCategoryDesc('');
+      setWikiCategoryParent('');
       setWikiEditingCategory(null);
       loadWikiData();
     } catch (err) {
@@ -4116,26 +4154,14 @@ function App() {
   };
 
   const wikiDeleteCategory = async (categoryId) => {
-    if (!confirm('Удалить категорию и все статьи в ней?')) return;
-    try {
-      const res = await fetch(`${SOCKET_URL}/api/wiki/categories/${categoryId}`, {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: currentUser.id })
-      });
-      if (!res.ok) {
-        const err = await res.json();
-        alert('Ошибка: ' + (err.error || 'Доступ запрещён'));
-        return;
-      }
-      if (wikiActiveCategory === categoryId) {
-        setWikiActiveCategory(null);
-        setWikiActiveArticle(null);
-      }
-      loadWikiData();
-    } catch (err) {
-      console.error('Ошибка удаления категории:', err);
+    if (!confirm('Удалить категорию, все подкатегории и все статьи в них?')) return;
+    await wikiDeleteCategoryRecursive(categoryId);
+    const childIds = getCategoryIds(categoryId);
+    if (wikiActiveCategory && childIds.includes(wikiActiveCategory)) {
+      setWikiActiveCategory(null);
+      setWikiActiveArticle(null);
     }
+    loadWikiData();
   };
 
   // HR / Заявления
@@ -9602,17 +9628,36 @@ function App() {
             <div className="wiki-sidebar-header">
               <h3>📚 База знаний</h3>
               {(isAdmin || canEditWiki) && (
-                <button className="wiki-new-article-btn" onClick={() => {
-                  setWikiActiveArticle(null);
-                  setWikiEditMode(true);
-                  setWikiEditTitle('');
-                  setWikiEditContent('');
-                  setWikiEditCategory(wikiActiveCategory || '');
-                  setWikiFiles([]);
+                <button className="wiki-new-article-btn" onClick={async () => {
+                  try {
+                    const res = await fetch(`${SOCKET_URL}/api/wiki/articles`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        title: 'Новая статья',
+                        content: '',
+                        categoryId: wikiActiveCategory || null,
+                        userId: currentUser.id
+                      })
+                    });
+                    const data = await res.json();
+                    if (data.success) {
+                      setWikiActiveArticle(data.article);
+                      setWikiEditMode(true);
+                      setWikiEditTitle('');
+                      setWikiEditContent('');
+                      setWikiEditCategory(wikiActiveCategory || '');
+                      setWikiFiles([]);
+                      setWikiAccessLevel('public');
+                      setWikiAllowedUsers([]);
+                    }
+                  } catch (err) {
+                    console.error('Ошибка создания статьи:', err);
+                  }
                 }}>+ Статья</button>
               )}
               {isAdmin && (
-                <button className="wiki-new-cat-btn" onClick={() => { setWikiEditingCategory(null); setWikiCategoryName(''); setWikiCategoryDesc(''); setShowWikiCategoryModal(true); }}>+ Категория</button>
+                <button className="wiki-new-cat-btn" onClick={() => { setWikiEditingCategory(null); setWikiCategoryName(''); setWikiCategoryDesc(''); setWikiCategoryParent(wikiActiveCategory || ''); setShowWikiCategoryModal(true); }}>+ Категория</button>
               )}
             </div>
             <div className="wiki-category-list">
@@ -9620,18 +9665,43 @@ function App() {
                 onClick={() => { setWikiActiveCategory(null); setWikiActiveArticle(null); setWikiEditMode(false); setWikiFiles([]); }}>
                 📋 Все статьи
               </div>
-              {wikiCategories.map(cat => (
-                <div key={cat.id} className={`wiki-cat-item ${wikiActiveCategory === cat.id ? 'active' : ''}`}
-                  onClick={() => { setWikiActiveCategory(cat.id); setWikiActiveArticle(null); setWikiEditMode(false); setWikiFiles([]); }}>
-                  <span>📂 {cat.name}</span>
-                  {isAdmin && (
-                    <span className="wiki-cat-actions">
-                      <button className="wiki-cat-edit-btn" title="Редактировать" onClick={e => { e.stopPropagation(); setWikiEditingCategory(cat); setWikiCategoryName(cat.name); setWikiCategoryDesc(cat.description || ''); setShowWikiCategoryModal(true); }}>✏️</button>
-                      <button className="wiki-cat-del-btn" title="Удалить" onClick={e => { e.stopPropagation(); wikiDeleteCategory(cat.id); }}>🗑️</button>
-                    </span>
-                  )}
-                </div>
-              ))}
+              {(() => {
+                const renderTree = (parentId, depth) => {
+                  return wikiCategories
+                    .filter(c => parentId === null ? !c.parent_id : c.parent_id === parentId)
+                    .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || a.name.localeCompare(b.name))
+                    .map(cat => {
+                      const hasChildren = wikiCategories.some(c => c.parent_id === cat.id);
+                      const isExpanded = wikiExpandedCategories.has(cat.id);
+                      return (
+                        <React.Fragment key={cat.id}>
+                          <div className={`wiki-cat-item ${wikiActiveCategory === cat.id ? 'active' : ''}`}
+                            style={{ paddingLeft: 16 + depth * 20 }}
+                            onClick={() => { setWikiActiveCategory(cat.id); setWikiActiveArticle(null); setWikiEditMode(false); setWikiFiles([]); }}>
+                            <span className="wiki-expand-btn"
+                              style={{ visibility: hasChildren ? 'visible' : 'hidden' }}
+                              onClick={hasChildren ? e => {
+                                e.stopPropagation();
+                                const newSet = new Set(wikiExpandedCategories);
+                                if (isExpanded) newSet.delete(cat.id);
+                                else newSet.add(cat.id);
+                                setWikiExpandedCategories(newSet);
+                              } : undefined}>{isExpanded ? '▼' : '▶'}</span>
+                            <span>📂 {cat.name}</span>
+                            {isAdmin && (
+                              <span className="wiki-cat-actions">
+                                <button className="wiki-cat-edit-btn" title="Редактировать" onClick={e => { e.stopPropagation(); setWikiEditingCategory(cat); setWikiCategoryName(cat.name); setWikiCategoryDesc(cat.description || ''); setWikiCategoryParent(cat.parent_id || ''); setShowWikiCategoryModal(true); }}>✏️</button>
+                                <button className="wiki-cat-del-btn" title="Удалить" onClick={e => { e.stopPropagation(); wikiDeleteCategory(cat.id); }}>🗑️</button>
+                              </span>
+                            )}
+                          </div>
+                          {hasChildren && isExpanded && renderTree(cat.id, depth + 1)}
+                        </React.Fragment>
+                      );
+                    });
+                };
+                return renderTree(null, 0);
+              })()}
             </div>
           </aside>
           <main className="wiki-main">
@@ -9814,13 +9884,13 @@ function App() {
                           wikiUploadFile(wikiActiveArticle.id, file);
                         }
                         e.target.value = '';
-                      }} disabled={wikiFileUploading || !wikiActiveArticle} />
+                      }} disabled={wikiFileUploading} />
                     </label>
                     {wikiFiles.length > 0 && (
                       <div className="wiki-file-list">
                         {wikiFiles.map(f => (
                           <div key={f.id} className="wiki-file-item">
-                            <a href={`${SOCKET_URL}/uploads/${f.file_path}`} target="_blank" rel="noopener noreferrer" className="wiki-file-link">{f.file_name}</a>
+                            <a href={`${SOCKET_URL}/api/download/${f.file_path}`} target="_blank" rel="noopener noreferrer" className="wiki-file-link">{f.file_name}</a>
                             <span className="wiki-file-size">({(f.file_size / 1024).toFixed(1)} KB)</span>
                             {isAdmin && (
                               <button className="wiki-file-remove" onClick={() => wikiDeleteFile(wikiActiveArticle.id, f.id)} title="Удалить">✕</button>
@@ -9882,7 +9952,7 @@ function App() {
                     <h4>📎 Прикреплённые файлы</h4>
                     {wikiFiles.map(f => (
                       <div key={f.id} className="wiki-file-item">
-                        <a href={`${SOCKET_URL}/uploads/${f.file_path}`} target="_blank" rel="noopener noreferrer" className="wiki-file-link">{f.file_name}</a>
+                        <a href={`${SOCKET_URL}/api/download/${f.file_path}`} target="_blank" rel="noopener noreferrer" className="wiki-file-link">{f.file_name}</a>
                         <span className="wiki-file-size">({(f.file_size / 1024).toFixed(1)} KB)</span>
                       </div>
                     ))}
@@ -9896,8 +9966,9 @@ function App() {
                   value={wikiSearch} onChange={e => setWikiSearch(e.target.value)} />
                 {(() => {
                   const q = wikiSearch.toLowerCase().trim();
+                  const categoryIds = wikiActiveCategory ? getCategoryIds(wikiActiveCategory) : null;
                   const filtered = wikiArticles.filter(a =>
-                    (!wikiActiveCategory || a.category_id === wikiActiveCategory) &&
+                    (!categoryIds || categoryIds.includes(a.category_id)) &&
                     (!q || a.title.toLowerCase().includes(q) || a.content.toLowerCase().includes(q))
                   );
                   return filtered.length === 0 ? (
@@ -9928,11 +9999,11 @@ function App() {
 
       {/* Modal for creating/editing wiki category */}
       {showWikiCategoryModal && (
-        <div className="modal-overlay" onClick={() => { setShowWikiCategoryModal(false); setWikiEditingCategory(null); setWikiCategoryName(''); setWikiCategoryDesc(''); }}>
+        <div className="modal-overlay" onClick={() => { setShowWikiCategoryModal(false); setWikiEditingCategory(null); setWikiCategoryName(''); setWikiCategoryDesc(''); setWikiCategoryParent(''); }}>
           <div className="modal-content" style={{ maxWidth: 400 }} onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <h3>{wikiEditingCategory ? '✏️ Редактировать категорию' : '📂 Новая категория'}</h3>
-              <button onClick={() => { setShowWikiCategoryModal(false); setWikiEditingCategory(null); setWikiCategoryName(''); setWikiCategoryDesc(''); }}>✕</button>
+              <button onClick={() => { setShowWikiCategoryModal(false); setWikiEditingCategory(null); setWikiCategoryName(''); setWikiCategoryDesc(''); setWikiCategoryParent(''); }}>✕</button>
             </div>
             <div className="modal-body">
               <div className="ann-form-group">
@@ -9945,9 +10016,21 @@ function App() {
                 <input type="text" className="ann-input" placeholder="Описание (необязательно)..."
                   value={wikiCategoryDesc} onChange={e => setWikiCategoryDesc(e.target.value)} />
               </div>
+              <div className="ann-form-group">
+                <label>Родительский раздел</label>
+                <select className="ann-input" value={wikiCategoryParent} onChange={e => setWikiCategoryParent(e.target.value)}>
+                  <option value="">Нет (корневой раздел)</option>
+                  {wikiCategories
+                    .filter(c => !wikiEditingCategory || c.id !== wikiEditingCategory.id)
+                    .map(cat => (
+                      <option key={cat.id} value={cat.id}>{cat.name}</option>
+                    ))
+                  }
+                </select>
+              </div>
             </div>
             <div className="modal-footer">
-              <button className="cancel-btn" onClick={() => { setShowWikiCategoryModal(false); setWikiEditingCategory(null); setWikiCategoryName(''); setWikiCategoryDesc(''); }}>Отмена</button>
+              <button className="cancel-btn" onClick={() => { setShowWikiCategoryModal(false); setWikiEditingCategory(null); setWikiCategoryName(''); setWikiCategoryDesc(''); setWikiCategoryParent(''); }}>Отмена</button>
               <button className="save-btn" onClick={wikiEditingCategory ? wikiUpdateCategory : wikiCreateCategory} disabled={!wikiCategoryName.trim()}>{wikiEditingCategory ? 'Сохранить' : 'Создать'}</button>
             </div>
           </div>

@@ -4462,8 +4462,22 @@ app.delete('/api/wiki/categories/:id', (req, res) => {
   const { userId } = req.body;
   if (!userId || !checkAdmin(userId)) return res.status(403).json({ error: 'Только для администраторов' });
   try {
-    db.prepare('DELETE FROM wiki_articles WHERE category_id = ?').run(req.params.id);
-    db.prepare('DELETE FROM wiki_categories WHERE id = ?').run(req.params.id);
+    const deleteRecursive = (catId) => {
+      const children = db.prepare('SELECT id FROM wiki_categories WHERE parent_id = ?').all(catId);
+      for (const child of children) {
+        deleteRecursive(child.id);
+      }
+      const files = db.prepare('SELECT f.file_path FROM wiki_article_files f JOIN wiki_articles a ON f.article_id = a.id WHERE a.category_id = ?').all(catId);
+      for (const f of files) {
+        const fullPath = path.join(UPLOADS_PATH, f.file_path);
+        if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
+      }
+      db.prepare('DELETE FROM wiki_article_files WHERE article_id IN (SELECT id FROM wiki_articles WHERE category_id = ?)').run(catId);
+      db.prepare('DELETE FROM wiki_article_allowed_users WHERE article_id IN (SELECT id FROM wiki_articles WHERE category_id = ?)').run(catId);
+      db.prepare('DELETE FROM wiki_articles WHERE category_id = ?').run(catId);
+      db.prepare('DELETE FROM wiki_categories WHERE id = ?').run(catId);
+    };
+    deleteRecursive(req.params.id);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
