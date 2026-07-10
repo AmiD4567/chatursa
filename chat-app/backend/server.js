@@ -417,6 +417,24 @@ function checkArticleAccess(userId, article) {
   return false;
 }
 
+function checkCategoryEditor(userId, categoryId) {
+  if (!userId) return false;
+  if (checkAdmin(userId)) return true;
+  try {
+    let currentId = categoryId;
+    while (currentId) {
+      const row = db.prepare('SELECT 1 FROM wiki_category_editors WHERE category_id = ? AND user_id = ?').get(currentId, userId);
+      if (row) return true;
+      const parent = db.prepare('SELECT parent_id FROM wiki_categories WHERE id = ?').get(currentId);
+      currentId = parent ? parent.parent_id : null;
+    }
+    return false;
+  } catch (e) {
+    console.error('Ошибка проверки прав редактора категории:', e.message);
+    return false;
+  }
+}
+
 // Инициализация базы данных
 function initDatabase() {
   db = new Database(DB_PATH);
@@ -780,6 +798,12 @@ function initDatabase() {
       article_id TEXT NOT NULL,
       user_id TEXT NOT NULL,
       PRIMARY KEY (article_id, user_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS wiki_category_editors (
+      category_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      PRIMARY KEY (category_id, user_id)
     );
 
     CREATE TABLE IF NOT EXISTS announcements (
@@ -2679,9 +2703,15 @@ app.post('/upload', upload.single('file'), (req, res) => {
     return res.status(507).json({ error: 'Недостаточно места на диске' });
   }
 
+  // multer может испортить UTF-8 имена — пробуем восстановить
+  let fileName = req.file.originalname;
+  try {
+    fileName = decodeURIComponent(escape(fileName));
+  } catch (_) {}
+
   const fileUrl = `${SERVER_URL}/uploads/${req.file.filename}`;
   res.json({
-    filename: req.file.originalname,
+    filename: fileName,
     url: fileUrl,
     size: req.file.size,
     mimetype: req.file.mimetype
@@ -4425,6 +4455,15 @@ app.get('/api/wiki/article/:id', (req, res) => {
 app.get('/api/wiki/categories', (req, res) => {
   try {
     const rows = db.prepare('SELECT * FROM wiki_categories ORDER BY sort_order ASC, name ASC').all();
+    const allEditors = db.prepare('SELECT * FROM wiki_category_editors').all();
+    const editorsByCat = {};
+    for (const e of allEditors) {
+      if (!editorsByCat[e.category_id]) editorsByCat[e.category_id] = [];
+      editorsByCat[e.category_id].push(e.user_id);
+    }
+    for (const cat of rows) {
+      cat.editors = editorsByCat[cat.id] || [];
+    }
     res.json({ success: true, categories: rows });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -4433,13 +4472,18 @@ app.get('/api/wiki/categories', (req, res) => {
 
 app.post('/api/wiki/categories', (req, res) => {
   const { name, description, parentId, userId } = req.body;
-  if (!userId || !checkAdmin(userId)) return res.status(403).json({ error: 'Только для администраторов' });
+  if (!userId) return res.status(403).json({ error: 'Требуется авторизация' });
+  if (!checkAdmin(userId) && (!parentId || !checkCategoryEditor(userId, parentId))) {
+    return res.status(403).json({ error: 'Недостаточно прав для создания раздела' });
+  }
   if (!name) return res.status(400).json({ error: 'name обязателен' });
   try {
     const id = uuidv4();
     db.prepare('INSERT INTO wiki_categories (id, name, description, parent_id) VALUES (?, ?, ?, ?)')
       .run(id, name, description || '', parentId || null);
-    res.json({ success: true, category: db.prepare('SELECT * FROM wiki_categories WHERE id = ?').get(id) });
+    const cat = db.prepare('SELECT * FROM wiki_categories WHERE id = ?').get(id);
+    cat.editors = [];
+    res.json({ success: true, category: cat });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -4447,20 +4491,35 @@ app.post('/api/wiki/categories', (req, res) => {
 
 app.put('/api/wiki/categories/:id', (req, res) => {
   const { name, description, parentId, sortOrder, userId } = req.body;
-  if (!userId || !checkAdmin(userId)) return res.status(403).json({ error: 'Только для администраторов' });
+  if (!userId) return res.status(403).json({ error: 'Требуется авторизация' });
+  if (!checkAdmin(userId) && !checkCategoryEditor(userId, req.params.id)) {
+    return res.status(403).json({ error: 'Недостаточно прав для редактирования раздела' });
+  }
   if (!name) return res.status(400).json({ error: 'name обязателен' });
   try {
     db.prepare('UPDATE wiki_categories SET name = ?, description = ?, parent_id = ?, sort_order = ? WHERE id = ?')
       .run(name, description || '', parentId || null, sortOrder || 0, req.params.id);
+    if (checkAdmin(userId) && req.body.editorIds) {
+      const { editorIds } = req.body;
+      db.prepare('DELETE FROM wiki_category_editors WHERE category_id = ?').run(req.params.id);
+      const insert = db.prepare('INSERT OR IGNORE INTO wiki_category_editors (category_id, user_id) VALUES (?, ?)');
+      for (const editorId of (editorIds || [])) {
+        insert.run(req.params.id, String(editorId));
+      }
+    }
     res.json({ success: true });
   } catch (err) {
+    console.error('Ошибка PUT категории:', err.message, err.stack);
     res.status(500).json({ error: err.message });
   }
 });
 
 app.delete('/api/wiki/categories/:id', (req, res) => {
   const { userId } = req.body;
-  if (!userId || !checkAdmin(userId)) return res.status(403).json({ error: 'Только для администраторов' });
+  if (!userId) return res.status(403).json({ error: 'Требуется авторизация' });
+  if (!checkAdmin(userId) && !checkCategoryEditor(userId, req.params.id)) {
+    return res.status(403).json({ error: 'Недостаточно прав для удаления раздела' });
+  }
   try {
     const deleteRecursive = (catId) => {
       const children = db.prepare('SELECT id FROM wiki_categories WHERE parent_id = ?').all(catId);
@@ -4475,9 +4534,34 @@ app.delete('/api/wiki/categories/:id', (req, res) => {
       db.prepare('DELETE FROM wiki_article_files WHERE article_id IN (SELECT id FROM wiki_articles WHERE category_id = ?)').run(catId);
       db.prepare('DELETE FROM wiki_article_allowed_users WHERE article_id IN (SELECT id FROM wiki_articles WHERE category_id = ?)').run(catId);
       db.prepare('DELETE FROM wiki_articles WHERE category_id = ?').run(catId);
+      db.prepare('DELETE FROM wiki_category_editors WHERE category_id = ?').run(catId);
       db.prepare('DELETE FROM wiki_categories WHERE id = ?').run(catId);
     };
     deleteRecursive(req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/wiki/categories/:id/editors', (req, res) => {
+  try {
+    const editors = db.prepare('SELECT user_id FROM wiki_category_editors WHERE category_id = ?').all(String(req.params.id));
+    res.json({ success: true, editorIds: editors.map(e => e.user_id) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/wiki/categories/:id/editors', (req, res) => {
+  const { userId, editorIds } = req.body;
+  if (!userId || !checkAdmin(userId)) return res.status(403).json({ error: 'Только для администраторов' });
+  try {
+    db.prepare('DELETE FROM wiki_category_editors WHERE category_id = ?').run(req.params.id);
+    const insert = db.prepare('INSERT OR IGNORE INTO wiki_category_editors (category_id, user_id) VALUES (?, ?)');
+    for (const editorId of (editorIds || [])) {
+      insert.run(req.params.id, editorId);
+    }
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
