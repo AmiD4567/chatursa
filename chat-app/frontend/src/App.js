@@ -4089,6 +4089,8 @@ function App() {
     return false;
   };
 
+  const isAnyCategoryEditor = !isAdmin && currentUser && wikiCategories.some(c => isCategoryEditable(c.id));
+
   const wikiDeleteCategoryRecursive = async (categoryId) => {
     const children = wikiCategories.filter(c => c.parent_id === categoryId);
     for (const child of children) {
@@ -9644,7 +9646,7 @@ function App() {
           <aside className="wiki-sidebar">
             <div className="wiki-sidebar-header">
               <h3>📚 База знаний</h3>
-              {(isAdmin || canEditWiki) && (
+              {(isAdmin || canEditWiki || isAnyCategoryEditor) && (
                 <button className="wiki-new-article-btn" onClick={async () => {
                   try {
                     const res = await fetch(`${SOCKET_URL}/api/wiki/articles`, {
@@ -9673,7 +9675,7 @@ function App() {
                   }
                 }}>+ Статья</button>
               )}
-              {isAdmin && (
+              {(isAdmin || isAnyCategoryEditor) && (
                 <button className="wiki-new-cat-btn" onClick={() => { setWikiEditingCategory(null); setWikiCategoryName(''); setWikiCategoryDesc(''); setWikiCategoryParent(wikiActiveCategory || ''); setWikiCategoryEditorIds([]); setWikiCategoryEditorSearch(''); setShowWikiCategoryModal(true); }}>+ Категория</button>
               )}
             </div>
@@ -9729,7 +9731,7 @@ function App() {
                 <select className="wiki-edit-category" value={wikiEditCategory}
                   onChange={e => setWikiEditCategory(e.target.value)}>
                   <option value="">Без категории</option>
-                  {wikiCategories.map(cat => (
+                  {wikiCategories.filter(c => isAdmin || canEditWiki || isCategoryEditable(c.id)).map(cat => (
                     <option key={cat.id} value={cat.id}>{cat.name}</option>
                   ))}
                 </select>
@@ -9891,7 +9893,7 @@ function App() {
                 </div>
                 <textarea className="wiki-edit-content" placeholder="Текст статьи (поддерживает Markdown)..."
                   value={wikiEditContent} onChange={e => setWikiEditContent(e.target.value)} rows={20} />
-                {(isAdmin || canEditWiki) && (
+                {(isAdmin || canEditWiki || isAnyCategoryEditor) && (
                   <div className="wiki-edit-files">
                     <label className="wiki-file-upload-btn">
                       {wikiFileUploading ? '⏳ Загрузка...' : '📎 Прикрепить файл'}
@@ -9945,7 +9947,7 @@ function App() {
                       setSelectedWikiShareUser(null);
                       setShowWikiShareModal(true);
                     }}>📤 Поделиться</button>
-                    {(isAdmin || (canEditWiki && wikiActiveArticle.created_by === currentUser?.id)) && (
+                    {(isAdmin || (canEditWiki && wikiActiveArticle.created_by === currentUser?.id) || isCategoryEditable(wikiActiveArticle.category_id)) && (
                       <button onClick={() => {
                         setWikiEditTitle(wikiActiveArticle.title);
                         setWikiEditContent(wikiActiveArticle.content);
@@ -10036,9 +10038,10 @@ function App() {
               <div className="ann-form-group">
                 <label>Родительский раздел</label>
                 <select className="ann-input" value={wikiCategoryParent} onChange={e => setWikiCategoryParent(e.target.value)}>
-                  <option value="">Нет (корневой раздел)</option>
+                  {isAdmin && <option value="">Нет (корневой раздел)</option>}
                   {wikiCategories
                     .filter(c => !wikiEditingCategory || c.id !== wikiEditingCategory.id)
+                    .filter(c => isAdmin || isCategoryEditable(c.id))
                     .map(cat => (
                       <option key={cat.id} value={cat.id}>{cat.name}</option>
                     ))

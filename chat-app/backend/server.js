@@ -4652,7 +4652,8 @@ app.get('/api/wiki/articles/:id', (req, res) => {
 app.post('/api/wiki/articles', (req, res) => {
   const { categoryId, title, content, userId, accessLevel, allowedUsers } = req.body;
   if (!title || !userId) return res.status(400).json({ error: 'title и userId обязательны' });
-  if (!checkWikiEditAccess(userId)) return res.status(403).json({ error: 'Доступ запрещён' });
+  if (!checkWikiEditAccess(userId) && !(categoryId && checkCategoryEditor(userId, categoryId)))
+    return res.status(403).json({ error: 'Доступ запрещён' });
   try {
     const id = uuidv4();
     const now = new Date().toISOString();
@@ -4682,12 +4683,14 @@ app.post('/api/wiki/articles', (req, res) => {
 app.put('/api/wiki/articles/:id', (req, res) => {
   const { title, content, categoryId, userId, accessLevel, allowedUsers } = req.body;
   if (!title || !userId) return res.status(400).json({ error: 'title и userId обязательны' });
-  if (!checkWikiEditAccess(userId)) return res.status(403).json({ error: 'Доступ запрещён' });
   try {
-    const article = db.prepare('SELECT created_by FROM wiki_articles WHERE id = ?').get(req.params.id);
+    const article = db.prepare('SELECT created_by, category_id FROM wiki_articles WHERE id = ?').get(req.params.id);
     if (!article) return res.status(404).json({ error: 'Статья не найдена' });
+    if (!checkWikiEditAccess(userId) && !checkCategoryEditor(userId, categoryId || article.category_id))
+      return res.status(403).json({ error: 'Доступ запрещён' });
     const isAdmin = checkAdmin(userId);
-    if (!isAdmin && article.created_by !== userId) return res.status(403).json({ error: 'Нельзя редактировать чужие статьи' });
+    const isEditor = checkCategoryEditor(userId, categoryId || article.category_id);
+    if (!isAdmin && !isEditor && article.created_by !== userId) return res.status(403).json({ error: 'Нельзя редактировать чужие статьи' });
     const now = new Date().toISOString();
 
     let finalAccessLevel = undefined;
@@ -4752,13 +4755,15 @@ app.post('/api/wiki/articles/:id/files', upload.single('file'), (req, res) => {
   const articleId = req.params.id;
   const userId = req.body.userId;
   if (!req.file) return res.status(400).json({ error: 'Файл не загружен' });
-  if (!userId || !checkWikiEditAccess(userId)) return res.status(403).json({ error: 'Доступ запрещён' });
+  if (!userId) return res.status(403).json({ error: 'Требуется авторизация' });
   try {
-    const article = db.prepare('SELECT id FROM wiki_articles WHERE id = ?').get(articleId);
+    const article = db.prepare('SELECT id, category_id FROM wiki_articles WHERE id = ?').get(articleId);
     if (!article) {
       fs.unlink(req.file.path, () => {});
       return res.status(404).json({ error: 'Статья не найдена' });
     }
+    if (!checkWikiEditAccess(userId) && !checkCategoryEditor(userId, article.category_id))
+      return res.status(403).json({ error: 'Доступ запрещён' });
     // multer может испорпить UTF-8 имена — пробуем восстановить
     let fileName = req.file.originalname;
     try {
