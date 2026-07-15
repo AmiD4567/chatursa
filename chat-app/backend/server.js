@@ -2553,6 +2553,26 @@ app.post('/api/upload-avatar', upload.single('avatar'), (req, res) => {
   }
 });
 
+app.post('/api/remove-avatar', (req, res) => {
+  const { userId } = req.body;
+  if (!userId) return res.status(400).json({ error: 'userId обязателен' });
+  try {
+    const user = db.prepare('SELECT avatar FROM users WHERE id = ?').get(userId);
+    if (user?.avatar) {
+      try {
+        const filePath = path.join(UPLOADS_PATH, path.basename(new URL(user.avatar).pathname));
+        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      } catch (_) {}
+    }
+    db.run('UPDATE users SET avatar = NULL WHERE id = ?', [userId]);
+    io.emit('user_avatar_updated', { userId, avatar: '' });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Ошибка удаления аватара:', err);
+    res.status(500).json({ error: 'Ошибка при удалении аватара' });
+  }
+});
+
 // API для загрузки аватара помощника (только для админов)
 app.post('/api/upload-helper-avatar', upload.single('avatar'), (req, res) => {
   const { userId } = req.body;
@@ -7479,6 +7499,12 @@ try {
   } catch (e) {
     console.error('Ошибка восстановления сессий:', e.message);
   }
+
+  const { registerPbiRoutes } = require('./pbi-proxy.js');
+  registerPbiRoutes(app, db);
+
+  const { registerKpiRoutes } = require('./kpi.js');
+  registerKpiRoutes(app, db);
 
   // Global error handler — returns JSON instead of HTML
   app.use((err, req, res, next) => {

@@ -2904,6 +2904,134 @@ function App() {
     fetchMeetingRoomBookings(startOfMonth, endOfMonth);
   };
 
+  const [pbiReports, setPbiReports] = useState([]);
+  const [selectedReport, setSelectedReport] = useState(null);
+  const [reportPermissions, setReportPermissions] = useState([]);
+  const [showReportPermEditor, setShowReportPermEditor] = useState(false);
+
+  const loadReportPermissions = async (reportId) => {
+    try {
+      const res = await fetch(`${SOCKET_URL}/api/pbi-reports/${reportId}/permissions`, {
+        headers: { 'X-User-Id': currentUser?.id || '' }
+      });
+      if (res.ok) setReportPermissions(await res.json());
+    } catch (e) {
+      console.error('Ошибка загрузки разрешений:', e);
+    }
+  };
+
+  const handleOpenReports = async () => {
+    setActiveView('reports');
+    try {
+      const res = await fetch(`${SOCKET_URL}/api/pbi-reports`, {
+        headers: { 'X-User-Id': currentUser?.id || '' }
+      });
+      if (res.ok) setPbiReports(await res.json());
+    } catch (e) {
+      console.error('Ошибка загрузки отчётов:', e);
+    }
+  };
+
+  const [kpiData, setKpiData] = useState(null);
+  const [kpiEditMode, setKpiEditMode] = useState(false);
+  const [kpiDraft, setKpiDraft] = useState({});
+  const [kpiRefreshing, setKpiRefreshing] = useState(false);
+  const [kpiPeriod, setKpiPeriod] = useState('all');
+
+  const KPI_PERIODS = {
+    sales_today: 'today',
+    sales_yesterday: 'yesterday',
+    sales_month: 'month',
+    frs_cash: 'yesterday',
+    frs_transfer: 'yesterday',
+    frs_other: 'yesterday'
+  };
+
+  const PERIOD_TABS = [
+    { key: 'all', label: 'Все' },
+    { key: 'today', label: 'Сегодня' },
+    { key: 'yesterday', label: 'Вчера' },
+    { key: 'month', label: 'Месяц' },
+    { key: 'manual', label: 'Вручную' }
+  ];
+
+  function kpiPeriodFilter(kpi) {
+    if (kpiPeriod === 'all') return true;
+    const p = KPI_PERIODS[kpi.id] || 'manual';
+    return p === kpiPeriod || (kpiPeriod !== 'manual' && p === 'manual');
+  }
+
+  const handleOpenKpi = async () => {
+    setActiveView('kpi');
+    setKpiEditMode(false);
+    try {
+      const res = await fetch(`${SOCKET_URL}/api/kpi`, {
+        headers: { 'X-User-Id': currentUser?.id || '' }
+      });
+      if (res.ok) setKpiData(await res.json());
+    } catch (e) {
+      console.error('Ошибка загрузки KPI:', e);
+    }
+  };
+
+  const handleKpiSave = async () => {
+    const entries = [];
+    for (const [kpiId, val] of Object.entries(kpiDraft)) {
+      if (val.value !== undefined && val.value !== '') {
+        entries.push({ kpi_id: kpiId, value: Number(val.value), plan_value: val.plan_value !== undefined ? Number(val.plan_value) : null });
+      }
+    }
+    try {
+      const res = await fetch(`${SOCKET_URL}/api/kpi`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': currentUser?.id || '' },
+        body: JSON.stringify({ entries })
+      });
+      if (res.ok) {
+        setKpiEditMode(false);
+        handleOpenKpi();
+      } else {
+        alert('Ошибка сохранения');
+      }
+    } catch (e) {
+      console.error('Ошибка сохранения KPI:', e);
+    }
+  };
+
+  const handleKpiEdit = () => {
+    const draft = {};
+    if (kpiData) {
+      for (const group of Object.values(kpiData.groups)) {
+        for (const item of group) {
+          draft[item.id] = { value: item.value ?? '', plan_value: item.plan_value ?? '' };
+        }
+      }
+    }
+    setKpiDraft(draft);
+    setKpiEditMode(true);
+  };
+
+  const handleKpiRefresh = async () => {
+    setKpiRefreshing(true);
+    try {
+      const res = await fetch(`${SOCKET_URL}/api/kpi/refresh`, {
+        method: 'POST',
+        headers: { 'X-User-Id': currentUser?.id || '' }
+      });
+      if (res.ok) {
+        await handleOpenKpi();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        alert(err.error || 'Ошибка обновления');
+      }
+    } catch (e) {
+      console.error('Ошибка обновления KPI:', e);
+      alert('Ошибка обновления КПЭ');
+    } finally {
+      setKpiRefreshing(false);
+    }
+  };
+
   // Обновление задач текущего дня после загрузки календаря
   useEffect(() => {
     if (activeView === 'calendar' && selectedDate && calendarTasks.length > 0) {
@@ -3046,6 +3174,27 @@ function App() {
       }
     } catch (err) {
       console.error('Ошибка загрузки аватара:', err);
+      alert('Ошибка соединения с сервером');
+    }
+  };
+
+  const handleRemoveAvatar = async () => {
+    if (!currentUser || !confirm('Удалить аватар?')) return;
+    try {
+      const res = await fetch(`${SOCKET_URL}/api/remove-avatar`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: currentUser.id })
+      });
+      if (res.ok) {
+        setProfileData(prev => ({ ...prev, avatar: '' }));
+        setCurrentUser(prev => ({ ...prev, avatar: '' }));
+        setMessages(prev => prev.map(m => m.senderId === currentUser.id ? { ...m, senderAvatar: '' } : m));
+      } else {
+        alert('Ошибка удаления аватара');
+      }
+    } catch (err) {
+      console.error('Ошибка удаления аватара:', err);
       alert('Ошибка соединения с сервером');
     }
   };
@@ -7039,6 +7188,22 @@ function App() {
             <span className="nav-btn-label">Календарь</span>
           </button>
 
+          {/* Показатели */}
+          <button
+            className={`nav-sidebar-btn ${activeView === 'kpi' ? 'active' : ''}`}
+            onClick={handleOpenKpi}
+            title="Показатели"
+          >
+            <div className="nav-btn-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="18" y1="20" x2="18" y2="10"/>
+                <line x1="12" y1="20" x2="12" y2="4"/>
+                <line x1="6" y1="20" x2="6" y2="14"/>
+              </svg>
+            </div>
+            <span className="nav-btn-label">Показатели</span>
+          </button>
+
           {/* База знаний */}
           <button
             className={`nav-sidebar-btn ${activeView === 'wiki' ? 'active' : ''}`}
@@ -9640,7 +9805,284 @@ function App() {
         </main>
       )}
 
-      {/* Вкладка настроек */}
+      {activeView === 'kpi' && (
+        <div className="kpi-view">
+          <div className="kpi-topbar">
+            <div className="kpi-topbar-left">
+              <h2 className="kpi-title">Ключевые показатели</h2>
+              {kpiData?.date && <span className="kpi-date-badge">{kpiData.date.replace(/-/g, '.')}</span>}
+              {kpiData && Object.values(kpiData.groups).flat().some(i => i.updated_at) && (
+                <span className="kpi-updated-badge" title="Последнее обновление">
+                  обновлено {Object.values(kpiData.groups).flat().filter(i => i.updated_at).sort((a,b) => b.updated_at?.localeCompare(a.updated_at || ''))[0]?.updated_at?.slice(11,16) || ''}
+                </span>
+              )}
+            </div>
+            <div className="kpi-topbar-right">
+              {isAdmin && !kpiEditMode && (
+                <button className="kpi-btn kpi-btn-refresh" onClick={handleKpiRefresh} disabled={kpiRefreshing}>
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                  {kpiRefreshing ? 'Обновление...' : 'Обновить из БД'}
+                </button>
+              )}
+              {isAdmin && !kpiEditMode && (
+                <button className="kpi-btn kpi-btn-edit" onClick={handleKpiEdit}>
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                  Редактировать
+                </button>
+              )}
+              {isAdmin && kpiEditMode && (
+                <>
+                  <button className="kpi-btn kpi-btn-save" onClick={handleKpiSave}>
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                    Сохранить
+                  </button>
+                  <button className="kpi-btn kpi-btn-cancel" onClick={() => setKpiEditMode(false)}>Отмена</button>
+                </>
+              )}
+              <button className="kpi-btn kpi-btn-close" onClick={() => setActiveView('chats')}>
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+          </div>
+
+          {!kpiData ? (
+            <div className="kpi-loading-state">
+              <div className="kpi-loading-spinner" />
+              <span>Загрузка показателей...</span>
+            </div>
+          ) : (
+            <div className="kpi-dashboard">
+              {/* Period tabs */}
+              <div className="kpi-period-tabs">
+                {PERIOD_TABS.map(tab => (
+                  <button key={tab.key}
+                    className={`kpi-period-tab ${kpiPeriod === tab.key ? 'active' : ''}`}
+                    onClick={() => setKpiPeriod(tab.key)}>
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+              {/* Summary cards */}
+              <div className="kpi-summary">
+                <div className="kpi-summary-cards">
+                  {(() => {
+                    const topItems = [];
+                    const sales = kpiData.groups['Продажи'];
+                    if (sales) topItems.push((sales.filter(kpiPeriodFilter))[0]);
+                    const frs = kpiData.groups['ФРС Контур'];
+                    if (frs) topItems.push((frs.filter(kpiPeriodFilter))[0]);
+                    const opt = kpiData.groups['Опт (PBI)'];
+                    if (opt) topItems.push((opt.filter(kpiPeriodFilter))[0]);
+                    const retail = kpiData.groups['Розница (PBI)'];
+                    if (retail) topItems.push((retail.filter(kpiPeriodFilter))[0]);
+                    return topItems.filter(Boolean).map((item, idx) => {
+                      const colors = ['#4f8cff','#1abc9c','#f39c12','#e74c3c','#9b59b6'];
+                      const c = colors[idx % colors.length];
+                      const pct = item.value != null && item.plan_value > 0 ? (item.value / item.plan_value) * 100 : null;
+                      return (
+                        <div key={item.id} className="kpi-summary-card" style={{'--card-accent':c}}>
+                          <div className="kpi-summary-card-top">
+                            <span className="kpi-summary-card-label">{item.name}</span>
+                            {pct != null && (
+                              <span className={`kpi-summary-card-badge ${pct >= 100 ? 'badge-ok' : 'badge-warn'}`}>
+                                {pct >= 100 ? '✓' : '✗'} {Math.round(pct)}%
+                              </span>
+                            )}
+                          </div>
+                          <div className="kpi-summary-card-main">
+                            {kpiEditMode ? (
+                              <div className="kpi-summary-edit-row">
+                                <input type="number" className="kpi-input kpi-input-sm" value={kpiDraft[item.id]?.value ?? ''}
+                                  onChange={e => setKpiDraft(p => ({ ...p, [item.id]: { ...p[item.id], value: e.target.value } }))}
+                                  placeholder="Факт" />
+                                <input type="number" className="kpi-input kpi-input-sm" value={kpiDraft[item.id]?.plan_value ?? ''}
+                                  onChange={e => setKpiDraft(p => ({ ...p, [item.id]: { ...p[item.id], plan_value: e.target.value } }))}
+                                  placeholder="План" />
+                              </div>
+                            ) : (
+                              <span className="kpi-summary-card-val">
+                                {item.value != null ? Number(item.value).toLocaleString('ru-RU') : <span className="kpi-na">—</span>}
+                                <span className="kpi-summary-card-unit">{item.unit}</span>
+                              </span>
+                            )}
+                          </div>
+                          {pct != null && !kpiEditMode && (
+                            <div className="kpi-summary-card-bar">
+                              <div className="kpi-summary-card-bar-track">
+                                <div className="kpi-summary-card-bar-fill" style={{width: Math.min(pct, 100)+'%', background: pct >= 100 ? '#2ecc71' : pct >= 70 ? '#f39c12' : '#e74c3c'}} />
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
+              </div>
+
+              {/* Detailed groups */}
+              <div className="kpi-groups">
+                {Object.entries(kpiData.groups).map(([groupName, items]) => {
+                  const groupIcons = {
+                    'Продажи': <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>,
+                    'ФРС Контур': <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><path d="M12 18V6"/></svg>
+                  };
+                  const groupColors = {
+                    'Продажи': '#4f8cff',
+                    'ФРС Контур': '#1abc9c'
+                  };
+                  const gc = groupColors[groupName] || '#666';
+                  const factTotal = items.reduce((s, i) => s + (i.value || 0), 0);
+                  const planTotal = items.reduce((s, i) => s + (i.plan_value || 0), 0);
+                  const filteredItems = items.filter(kpiPeriodFilter);
+                  if (filteredItems.length === 0) return null;
+                  return (
+                    <div key={groupName} className="kpi-group-block">
+                      <div className="kpi-group-block-header" style={{borderLeftColor: gc}}>
+                        <div className="kpi-group-block-title">
+                          {groupIcons[groupName] || null}
+                          <h3>{groupName}</h3>
+                          {groupName === 'ФРС Контур' && kpiData?.date && (
+                            <span className="kpi-group-data-label">данные за {kpiData.date.replace(/-/g, '.')}</span>
+                          )}
+                        </div>
+                        {planTotal > 0 && (
+                          <span className={`kpi-group-block-total ${(factTotal/planTotal) >= 1 ? 'total-ok' : 'total-warn'}`}>
+                            {Math.round((factTotal/planTotal)*100)}%
+                          </span>
+                        )}
+                      </div>
+                      <div className="kpi-group-block-cards">
+                        {filteredItems.map(item => {
+                          const pct = item.value != null && item.plan_value > 0 ? (item.value / item.plan_value) * 100 : null;
+                          return (
+                            <div key={item.id} className="kpi-card" style={{'--card-accent': gc}}>
+                              <div className="kpi-card-header">
+                                <span className="kpi-card-name">{item.name}</span>
+                                {KPI_PERIODS[item.id] && (
+                                  <span className={`kpi-period-badge kpi-period-${KPI_PERIODS[item.id]}`}>
+                                    {PERIOD_TABS.find(t => t.key === KPI_PERIODS[item.id])?.label || ''}
+                                  </span>
+                                )}
+                                {pct != null && !kpiEditMode && (
+                                  <span className="kpi-card-badge" style={{
+                                    background: pct >= 100 ? 'rgba(46,204,113,0.12)' : 'rgba(231,76,60,0.12)',
+                                    color: pct >= 100 ? '#27ae60' : '#c0392b'
+                                  }}>
+                                    {pct >= 100 ? '↑' : '↓'} {Math.round(pct)}%
+                                  </span>
+                                )}
+                              </div>
+                              <div className="kpi-card-body">
+                                {kpiEditMode ? (
+                                  <div className="kpi-card-edit">
+                                    <div className="kpi-card-edit-field">
+                                      <span className="kpi-card-edit-label">Факт</span>
+                                      <input type="number" className="kpi-input" value={kpiDraft[item.id]?.value ?? ''}
+                                        onChange={e => setKpiDraft(p => ({ ...p, [item.id]: { ...p[item.id], value: e.target.value } }))} />
+                                    </div>
+                                    <div className="kpi-card-edit-field">
+                                      <span className="kpi-card-edit-label">План</span>
+                                      <input type="number" className="kpi-input" value={kpiDraft[item.id]?.plan_value ?? ''}
+                                        onChange={e => setKpiDraft(p => ({ ...p, [item.id]: { ...p[item.id], plan_value: e.target.value } }))} />
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div className="kpi-card-values">
+                                    <div className="kpi-card-value-row">
+                                      <span className="kpi-card-value-num">
+                                        {item.value != null ? Number(item.value).toLocaleString('ru-RU') : <span className="kpi-na">—</span>}
+                                      </span>
+                                      <span className="kpi-card-value-unit">{item.unit}</span>
+                                    </div>
+                                    {item.plan_value != null && (
+                                      <div className="kpi-card-plan-row">
+                                        <span className="kpi-card-plan-label">план</span>
+                                        <span className="kpi-card-plan-val">{Number(item.plan_value).toLocaleString('ru-RU')}</span>
+                                        <span className="kpi-card-value-unit">{item.unit}</span>
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                              {pct != null && !kpiEditMode && (
+                                <div className="kpi-card-bar">
+                                  <div className="kpi-card-bar-track">
+                                    <div className="kpi-card-bar-fill" style={{
+                                      width: Math.min(pct, 100) + '%',
+                                      background: pct >= 100 ? '#2ecc71' : pct >= 70 ? '#e67e22' : '#e74c3c'
+                                    }} />
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {selectedReport && (
+        <div className="report-viewer-overlay" onClick={() => setSelectedReport(null)}>
+          <div className="report-viewer-modal" onClick={e => e.stopPropagation()}>
+            <div className="report-viewer-header">
+              <h3>{selectedReport.name}</h3>
+              <div className="report-viewer-actions">
+                <a className="report-viewer-download" href={`${SOCKET_URL}/api/pbi-reports/${selectedReport.id}/pdf`} target="_blank" rel="noopener noreferrer" title="Скачать PDF">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                    <polyline points="7 10 12 15 17 10"/>
+                    <line x1="12" y1="15" x2="12" y2="3"/>
+                  </svg>
+                  PDF
+                </a>
+                {isAdmin && (
+                  <button className="report-viewer-perm-btn" onClick={() => setShowReportPermEditor(p => !p)} title="Настроить доступ">
+                    ⚙️ Доступ
+                  </button>
+                )}
+                <button className="close-btn" onClick={() => setSelectedReport(null)}>✕</button>
+              </div>
+            </div>
+            {showReportPermEditor && isAdmin && (
+              <div className="report-perm-editor">
+                <h4>Кому доступен отчёт</h4>
+                <div className="report-perm-list">
+                  {users.filter(u => u.id !== currentUser?.id).map(user => (
+                    <label key={user.id} className="report-perm-item">
+                      <input type="checkbox" checked={reportPermissions.includes(user.id)} onChange={async (e) => {
+                        const newPerms = e.target.checked
+                          ? [...reportPermissions, user.id]
+                          : reportPermissions.filter(id => id !== user.id);
+                        setReportPermissions(newPerms);
+                        await fetch(`${SOCKET_URL}/api/pbi-reports/${selectedReport.id}/permissions`, {
+                          method: 'PUT',
+                          headers: { 'Content-Type': 'application/json', 'X-User-Id': currentUser?.id || '' },
+                          body: JSON.stringify({ userIds: newPerms })
+                        });
+                      }} />
+                      <span>{user.username}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+            <iframe
+              className="report-viewer-iframe"
+              src={`${SOCKET_URL}/api/pbi-reports/${selectedReport.id}/view`}
+              title={selectedReport.name}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Вкладка wiki */}
       {activeView === 'wiki' && (
         <div className="wiki-view">
           <aside className="wiki-sidebar">
@@ -10731,6 +11173,11 @@ function App() {
                   onChange={handleUploadAvatar}
                   style={{ display: 'none' }}
                 />
+                {(profileData.avatar || currentUser?.avatar) && !(profileData.avatar || currentUser?.avatar).includes('ui-avatars.com') && (
+                  <button className="delete-btn" onClick={handleRemoveAvatar} style={{ marginTop: 8, fontSize: 13 }}>
+                    🗑️ Удалить аватар
+                  </button>
+                )}
               </div>
 
               <form onSubmit={handleSaveProfile} className="profile-form">

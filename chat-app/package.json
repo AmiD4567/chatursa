@@ -1,6 +1,6 @@
 {
     "name": "chat-app",
-    "version": "1.0.187",
+    "version": "1.0.188",
     "description": "РљРѕСЂРїРѕСЂР°С‚РёРІРЅС‹Р№ РјРµСЃСЃРµРЅРґР¶РµСЂ",
     "main": "electron/main.js",
     "scripts": {
@@ -96,7 +96,9 @@
     },
     "dependencies": {
         "auto-launch": "^5.0.6",
-        "electron-updater": "^6.8.3"
+        "electron-updater": "^6.8.3",
+        "mssql": "^12.7.0",
+        "pg": "^8.22.0"
     },
     "devDependencies": {
         "concurrently": "^8.2.2",
