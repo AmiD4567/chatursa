@@ -52,8 +52,10 @@ fun AppNavGraph(
     val rootNavController = rememberNavController()
     val authViewModel: AuthViewModel = viewModel()
     val chatListViewModel: ChatListViewModel = viewModel()
-    val chatViewModel: ChatViewModel = viewModel()
     val authState by authViewModel.uiState.collectAsState()
+
+    var pendingShareText by remember { mutableStateOf<String?>(null) }
+    var pendingShareImageUri by remember { mutableStateOf<String?>(null) }
 
     val startDest = if (authState.isLoggedIn) "main" else "auth"
     val context = LocalContext.current
@@ -77,11 +79,11 @@ fun AppNavGraph(
                                         .fillMaxWidth()
                                         .clickable {
                                             showShareDialog = false
-                                            chatViewModel.setPendingShare(sharedText, sharedImageUri?.toString())
+                                            pendingShareText = sharedText
+                                            pendingShareImageUri = sharedImageUri?.toString()
                                             val gson = Gson()
                                             val chatJson = gson.toJson(chat)
-                                            val userJson = gson.toJson(authState.user)
-                                            rootNavController.navigate("chat/$chatJson/$userJson")
+                                            rootNavController.navigate("chat/$chatJson")
                                         }
                                         .padding(12.dp),
                                     verticalAlignment = Alignment.CenterVertically
@@ -172,6 +174,7 @@ fun AppNavGraph(
             } catch (e: Exception) { null }
 
             val authState by authViewModel.uiState.collectAsState()
+            val chatViewModel: ChatViewModel = viewModel()
 
             LaunchedEffect(chat) {
                 chat?.let { c ->
@@ -181,13 +184,27 @@ fun AppNavGraph(
                 }
             }
 
+            DisposableEffect(Unit) {
+                onDispose {
+                    chatViewModel.disconnect()
+                }
+            }
+
             ChatScreen(
                 viewModel = chatViewModel,
                 onBack = {
-                    chatViewModel.disconnect()
                     rootNavController.popBackStack()
-                }
+                },
+                pendingShareText = pendingShareText,
+                pendingShareImageUri = pendingShareImageUri
             )
+
+            LaunchedEffect(Unit) {
+                if (pendingShareText != null || pendingShareImageUri != null) {
+                    pendingShareText = null
+                    pendingShareImageUri = null
+                }
+            }
         }
     }
 }

@@ -63,7 +63,10 @@ class SocketManager {
         try {
             val options = IO.Options.builder()
                 .setForceNew(true)
-                .setReconnection(false)
+                .setReconnection(true)
+                .setReconnectionAttempts(Int.MAX_VALUE)
+                .setReconnectionDelay(1000)
+                .setReconnectionDelayMax(5000)
                 .setTimeout(30000)
                 .setTransports(arrayOf(WebSocket.NAME))
                 .build()
@@ -85,6 +88,27 @@ class SocketManager {
             socket?.on(Socket.EVENT_DISCONNECT) {
                 Log.d(TAG, "EVENT_DISCONNECT fired")
                 _events.trySend(SocketEvent.Disconnected)
+            }
+
+            socket?.on("reconnect_attempt") { args ->
+                val attempt = if (args.isNotEmpty()) args[0].toString() else "?"
+                Log.d(TAG, "reconnect_attempt: $attempt")
+            }
+
+            socket?.on("reconnect") {
+                Log.d(TAG, "reconnect fired")
+                val u = activeUser ?: return@on
+                socket?.emit("user_joined", JSONObject().apply {
+                    put("userId", u.id)
+                    put("email", u.email)
+                    put("username", u.username)
+                    put("avatar", u.avatar ?: JSONObject.NULL)
+                })
+            }
+
+            socket?.on("reconnect_error") { args ->
+                val err = if (args.isNotEmpty()) args[0].toString() else "Unknown"
+                Log.e(TAG, "reconnect_error: $err")
             }
 
             socket?.on(Socket.EVENT_CONNECT_ERROR) { args ->

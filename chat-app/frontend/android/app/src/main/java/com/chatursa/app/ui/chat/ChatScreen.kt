@@ -22,7 +22,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.animation.core.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -47,6 +49,7 @@ import com.chatursa.app.data.sticker.StickerManager
 import com.chatursa.app.ui.ChatAvatar
 import com.chatursa.app.ui.theme.*
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 private val QUICK_REACTIONS = listOf("👍", "❤️", "😂", "😮", "😢", "🙏")
 
@@ -54,19 +57,17 @@ private val QUICK_REACTIONS = listOf("👍", "❤️", "😂", "😮", "😢", "
 @Composable
 fun ChatScreen(
     viewModel: ChatViewModel,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    pendingShareText: String? = null,
+    pendingShareImageUri: String? = null
 ) {
     val uiState by viewModel.uiState.collectAsState()
-    var messageText by remember { mutableStateOf("") }
-    var editText by remember { mutableStateOf("") }
+    var messageText by rememberSaveable { mutableStateOf("") }
+    var editText by rememberSaveable { mutableStateOf("") }
 
     LaunchedEffect(Unit) {
-        val pendingText = viewModel.pendingShareText
-        val pendingImage = viewModel.pendingShareImageUri
-        if (pendingText != null || pendingImage != null) {
-            messageText = pendingText ?: ""
-            viewModel.pendingShareText = null
-            viewModel.pendingShareImageUri = null
+        if (pendingShareText != null || pendingShareImageUri != null) {
+            messageText = pendingShareText ?: ""
         }
     }
 
@@ -108,7 +109,7 @@ fun ChatScreen(
         if (uiState.messages.isNotEmpty() && !uiState.isSearching) {
             if (firstMessageLoad.value) {
                 firstMessageLoad.value = false
-                listState.scrollToItem(uiState.messages.size - 1)
+                listState.animateScrollToItem(uiState.messages.size - 1)
             } else {
                 val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: return@LaunchedEffect
                 if (lastVisible >= listState.layoutInfo.totalItemsCount - 3) {
@@ -297,6 +298,7 @@ fun ChatScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .imePadding()
                 .then(
                     if (chatBgBrush != null) Modifier.background(chatBgBrush)
                     else Modifier.background(defaultChatBg)
@@ -587,23 +589,40 @@ fun ChatScreen(
                     }
                 }
 
-                LazyColumn(
+                val scope = rememberCoroutineScope()
+                val isRefreshing = remember { mutableStateOf(false) }
+
+                PullToRefreshBox(
+                    isRefreshing = isRefreshing.value,
+                    onRefresh = {
+                        scope.launch {
+                            isRefreshing.value = true
+                            viewModel.reloadMessages()
+                            isRefreshing.value = false
+                        }
+                    },
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth()
-                        .padding(horizontal = 8.dp),
-                    state = listState,
-                    contentPadding = PaddingValues(vertical = 8.dp)
                 ) {
-                    items(displayMessages, key = { it.id }) { message ->
-                        MessageBubble(
-                            message = message,
-                            isOwn = message.senderId == uiState.currentUser?.id,
-                            onLongClick = { viewModel.showContextMenu(message) },
-                            onImageClick = { url -> viewModel.showImageViewer(url) },
-                            linkPreviews = uiState.linkPreviews,
-                            onFetchLinkPreview = { url -> viewModel.fetchLinkPreview(url) }
-                        )
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 8.dp),
+                        state = listState,
+                        contentPadding = PaddingValues(vertical = 8.dp)
+                    ) {
+                        items(displayMessages, key = { it.id }) { message ->
+                            MessageBubble(
+                                message = message,
+                                isOwn = message.senderId == uiState.currentUser?.id,
+                                currentUserId = uiState.currentUser?.id,
+                                onLongClick = { viewModel.showContextMenu(message) },
+                                onImageClick = { url -> viewModel.showImageViewer(url) },
+                                linkPreviews = uiState.linkPreviews,
+                                onFetchLinkPreview = { url -> viewModel.fetchLinkPreview(url) }
+                            )
+                        }
                     }
                 }
             }
@@ -776,6 +795,7 @@ fun ChatScreen(
 fun MessageBubble(
     message: Message,
     isOwn: Boolean,
+    currentUserId: String? = null,
     onLongClick: () -> Unit,
     onImageClick: (String) -> Unit = {},
     linkPreviews: Map<String, LinkPreview> = emptyMap(),
@@ -933,7 +953,7 @@ fun MessageBubble(
                     ) {
                         val grouped: Map<String, List<Reaction>> = message.reactions.groupBy { it.emoji }
                         grouped.forEach { (emoji, reactions) ->
-                            val hasMine = reactions.any { it.userId == message.senderId }
+                            val hasMine = reactions.any { it.userId == currentUserId }
                             Text(
                                 text = "$emoji ${reactions.size}",
                                 style = MaterialTheme.typography.bodySmall,

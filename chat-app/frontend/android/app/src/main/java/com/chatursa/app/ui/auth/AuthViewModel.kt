@@ -107,7 +107,9 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                     com.chatursa.app.data.network.RetrofitClient.apiService
                         .registerFcmToken(mapOf("token" to fcmToken, "unregister" to "true"))
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                android.util.Log.e("AuthVM", "logout FCM unregister error", e)
+            }
         }
         getApplication<android.app.Application>()
             .getSharedPreferences("chat_prefs", 0)

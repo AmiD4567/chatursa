@@ -2,9 +2,11 @@ package com.chatursa.app.ui.chat
 
 import android.app.Application
 import android.content.Context
+import android.util.Log
 import android.content.SharedPreferences
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import com.chatursa.app.data.model.Chat
 import com.chatursa.app.data.model.LinkPreview
@@ -49,7 +51,10 @@ data class ChatUiState(
     val isSearching: Boolean = false
 )
 
-class ChatViewModel(application: Application) : AndroidViewModel(application) {
+class ChatViewModel(
+    application: Application,
+    private val savedStateHandle: SavedStateHandle
+) : AndroidViewModel(application) {
 
     private val socketManager = SocketManager()
     private val _uiState = MutableStateFlow(ChatUiState())
@@ -78,6 +83,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             collectJob?.cancel()
         }
 
+        savedStateHandle["chatId"] = chat.id
         pendingChatId = chat.id
         _uiState.value = ChatUiState(
             chat = chat,
@@ -226,14 +232,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.value = _uiState.value.copy(replyToMessage = null)
     }
 
-    fun setPendingShare(text: String?, imageUri: String?) {
-        pendingShareText = text
-        pendingShareImageUri = imageUri
-    }
-
-    var pendingShareText: String? = null
-    var pendingShareImageUri: String? = null
-
     fun startRecording(cacheDir: java.io.File) {
         try {
             audioRecorder.start(cacheDir)
@@ -369,7 +367,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         fileSize = result.size
                     )
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                Log.e("ChatVM", "uploadAndSendFile error", e)
+            }
         }
     }
 
@@ -408,7 +408,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         linkPreviews = previewCache.toMap()
                     )
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                Log.e("ChatVM", "fetchLinkPreview error for url=$url", e)
+            }
         }
     }
 
@@ -460,6 +462,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun saveDraft(chatId: String, text: String) {
         if (text.isBlank()) draftPrefs.edit().remove(chatId).apply()
         else draftPrefs.edit().putString(chatId, text).apply()
+    }
+
+    fun reloadMessages() {
+        _uiState.value.chat?.let { chat ->
+            socketManager.joinChat(chat.id)
+        }
     }
 
     fun disconnect() {

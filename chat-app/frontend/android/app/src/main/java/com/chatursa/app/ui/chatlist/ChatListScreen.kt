@@ -11,6 +11,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -27,6 +28,7 @@ import com.chatursa.app.data.model.Chat
 import com.chatursa.app.data.sticker.StickerManager
 import com.chatursa.app.ui.ChatAvatar
 import com.chatursa.app.ui.theme.*
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -145,75 +147,91 @@ fun ChatListScreen(
                 }
             } else {
                 val filteredChats = viewModel.getFilteredChats()
+                val scope = rememberCoroutineScope()
+                var isRefreshing by remember { mutableStateOf(false) }
 
-                if (filteredChats.isEmpty()) {
-                    Column(
-                        modifier = Modifier.align(Alignment.Center),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Icon(
-                            Icons.Default.Chat,
-                            contentDescription = null,
-                            modifier = Modifier.size(64.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text(
-                            if (searchText.isNotEmpty()) "Ничего не найдено"
-                            else "Нет чатов. Начните общение!",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                } else {
-                    LazyColumn(
-                        modifier = Modifier.fillMaxSize()
-                    ) {
-                        items(filteredChats, key = { it.id }) { chat ->
-                            val dismissState = rememberSwipeToDismissBoxState(
-                                confirmValueChange = { dismissValue ->
-                                    if (dismissValue == SwipeToDismissBoxValue.EndToStart) {
-                                        viewModel.pendingDeleteChat = chat
-                                        false
-                                    } else false
-                                }
+                PullToRefreshBox(
+                    isRefreshing = isRefreshing,
+                    onRefresh = {
+                        scope.launch {
+                            isRefreshing = true
+                            viewModel.refresh()
+                            isRefreshing = false
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    if (filteredChats.isEmpty()) {
+                        Column(
+                            modifier = Modifier.fillMaxSize(),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Icon(
+                                Icons.Default.Chat,
+                                contentDescription = null,
+                                modifier = Modifier.size(64.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            SwipeToDismissBox(
-                                state = dismissState,
-                                backgroundContent = {
-                                    val color by animateColorAsState(
-                                        targetValue = when (dismissState.currentValue) {
-                                            SwipeToDismissBoxValue.EndToStart -> ErrorRed
-                                            else -> Color.Transparent
-                                        },
-                                        label = "swipe_bg"
-                                    )
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .background(color)
-                                            .padding(horizontal = 24.dp),
-                                        contentAlignment = Alignment.CenterEnd
-                                    ) {
-                                        Icon(
-                                            Icons.Default.Delete,
-                                            contentDescription = "Удалить",
-                                            tint = Color.White,
-                                            modifier = Modifier.size(28.dp)
-                                        )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                if (searchText.isNotEmpty()) "Ничего не найдено"
+                                else "Нет чатов. Начните общение!",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            items(filteredChats, key = { it.id }) { chat ->
+                                val currentChat = rememberUpdatedState(chat)
+                                val dismissState = rememberSwipeToDismissBoxState(
+                                    confirmValueChange = { dismissValue ->
+                                        if (dismissValue == SwipeToDismissBoxValue.EndToStart) {
+                                            viewModel.pendingDeleteChat = currentChat.value
+                                            false
+                                        } else false
                                     }
-                                },
-                                enableDismissFromStartToEnd = false,
-                                enableDismissFromEndToStart = true
-                            ) {
-                                ChatListItem(
-                                    chat = chat,
-                                    isTyping = uiState.typingUsers[chat.id]?.isNotEmpty() == true,
-                                    typingText = uiState.typingUsers[chat.id]?.let {
-                                        "${it.joinToString(", ")} печатает..."
-                                    },
-                                    onClick = { onChatClick(chat) }
                                 )
+                                SwipeToDismissBox(
+                                    state = dismissState,
+                                    backgroundContent = {
+                                        val color by animateColorAsState(
+                                            targetValue = when (dismissState.currentValue) {
+                                                SwipeToDismissBoxValue.EndToStart -> ErrorRed
+                                                else -> Color.Transparent
+                                            },
+                                            label = "swipe_bg"
+                                        )
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .background(color)
+                                                .padding(horizontal = 24.dp),
+                                            contentAlignment = Alignment.CenterEnd
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Delete,
+                                                contentDescription = "Удалить",
+                                                tint = Color.White,
+                                                modifier = Modifier.size(28.dp)
+                                            )
+                                        }
+                                    },
+                                    enableDismissFromStartToEnd = false,
+                                    enableDismissFromEndToStart = true
+                                ) {
+                                    ChatListItem(
+                                        chat = chat,
+                                        isTyping = uiState.typingUsers[chat.id]?.isNotEmpty() == true,
+                                        typingText = uiState.typingUsers[chat.id]?.let {
+                                            "${it.joinToString(", ")} печатает..."
+                                        },
+                                        onClick = { onChatClick(chat) }
+                                    )
+                                }
                             }
                         }
                     }

@@ -258,6 +258,12 @@ class ChatListViewModel(application: Application) : AndroidViewModel(application
         _uiState.value = _uiState.value.copy(createdChatId = null)
     }
 
+    fun refresh() {
+        val user = _uiState.value.currentUser ?: return
+        disconnect()
+        connect(user)
+    }
+
     override fun onCleared() {
         super.onCleared()
         collectJob?.cancel()
