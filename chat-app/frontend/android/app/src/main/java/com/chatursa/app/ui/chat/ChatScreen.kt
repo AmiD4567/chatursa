@@ -39,15 +39,19 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.compose.AsyncImagePainter
+import androidx.core.content.FileProvider
 import com.chatursa.app.AppConfig
 import com.chatursa.app.avatarUrl
+import com.chatursa.app.data.model.Chat
 import com.chatursa.app.data.model.FileData
 import com.chatursa.app.data.model.LinkPreview
 import com.chatursa.app.data.model.Message
 import com.chatursa.app.data.model.Reaction
+import com.chatursa.app.data.model.User
 import com.chatursa.app.data.sticker.StickerManager
 import com.chatursa.app.ui.ChatAvatar
 import com.chatursa.app.ui.theme.*
+import java.io.File
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -99,6 +103,17 @@ fun ChatScreen(
         contract = ActivityResultContracts.GetContent()
     ) { uri ->
         if (uri != null) {
+            viewModel.uploadAndSendFile(context, uri)
+        }
+    }
+
+    var cameraUri by remember { mutableStateOf<Uri?>(null) }
+    val cameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicture()
+    ) { success ->
+        val uri = cameraUri
+        cameraUri = null
+        if (success && uri != null) {
             viewModel.uploadAndSendFile(context, uri)
         }
     }
@@ -214,7 +229,10 @@ fun ChatScreen(
                             ChatAvatar(
                                 avatarUrl = uiState.chat?.avatar,
                                 name = uiState.chat?.name,
-                                size = 40.dp
+                                size = 40.dp,
+                                modifier = Modifier.clickable {
+                                    uiState.chat?.avatar?.let { viewModel.showImageViewer(it) }
+                                }
                             )
                             Spacer(modifier = Modifier.width(12.dp))
                             Column {
@@ -222,7 +240,8 @@ fun ChatScreen(
                                     text = uiState.chat?.name ?: "Чат",
                                     fontWeight = FontWeight.SemiBold,
                                     maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.clickable { viewModel.showUserInfo() }
                                 )
                                 if (uiState.typingText.isNotEmpty()) {
                                     Text(
@@ -231,8 +250,8 @@ fun ChatScreen(
                                         color = Purple500
                                     )
                                 } else {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        if (uiState.chat?.isOnline == true) {
+                                    if (uiState.chat?.isOnline == true) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
                                             Box(
                                                 modifier = Modifier
                                                     .size(6.dp)
@@ -240,13 +259,30 @@ fun ChatScreen(
                                                     .background(Color(0xFF4CAF50))
                                             )
                                             Spacer(modifier = Modifier.width(4.dp))
+                                            Text(
+                                                text = "в сети",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = TextSecondary
+                                            )
                                         }
+                                    } else if (uiState.isConnected) {
+                                        val lastSeen = uiState.chat?.lastSeen
+                                        if (uiState.chat?.type == "direct" && lastSeen != null) {
+                                            Text(
+                                                text = "был(а) в сети ${formatLastSeen(lastSeen)}",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = TextSecondary
+                                            )
+                                        } else {
+                                            Text(
+                                                text = "не в сети",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = TextSecondary
+                                            )
+                                        }
+                                    } else {
                                         Text(
-                                            text = when {
-                                                uiState.chat?.isOnline == true -> "в сети"
-                                                uiState.isConnected -> "онлайн"
-                                                else -> "подключение..."
-                                            },
+                                            text = "подключение...",
                                             style = MaterialTheme.typography.bodySmall,
                                             color = TextSecondary
                                         )
@@ -555,6 +591,17 @@ fun ChatScreen(
                     )
                 }
 
+                // User info dialog
+                if (uiState.showUserInfo) {
+                    UserInfoDialog(
+                        chat = uiState.chat,
+                        users = uiState.users,
+                        currentUserId = uiState.currentUser?.id,
+                        onDismiss = { viewModel.hideUserInfo() },
+                        onAvatarClick = { url -> viewModel.showImageViewer(url); viewModel.hideUserInfo() }
+                    )
+                }
+
                 // Search results count
                 if (uiState.isSearching && uiState.searchQuery.isNotBlank()) {
                     val filteredCount = uiState.messages.count { msg ->
@@ -640,6 +687,19 @@ fun ChatScreen(
                         .padding(horizontal = 8.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    IconButton(onClick = {
+                        val file = File(context.cacheDir, "capture_${System.currentTimeMillis()}.jpg")
+                        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+                        cameraUri = uri
+                        cameraLauncher.launch(uri)
+                    }) {
+                        Icon(
+                            Icons.Default.PhotoCamera,
+                            "Сделать фото",
+                            tint = TextSecondary
+                        )
+                    }
+
                     IconButton(onClick = { fileUploadLauncher.launch("*/*") }) {
                         Icon(
                             Icons.Default.AttachFile,
@@ -1124,4 +1184,129 @@ private fun formatFileSize(bytes: Long): String {
         bytes >= 1024 -> String.format("%.1f KB", bytes / 1024.0)
         else -> "$bytes B"
     }
+}
+
+private fun formatLastSeen(timestamp: String): String {
+    if (timestamp.isBlank()) return "не в сети"
+    return try {
+        val cleanTs = timestamp.replace("T", " ").replace("Z", "").trim()
+        val dateFormat = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
+        val date = dateFormat.parse(cleanTs.take(19)) ?: return timestamp.take(16)
+        val now = System.currentTimeMillis()
+        val diff = now - date.time
+        val seconds = (diff / 1000).toInt()
+        val minutes = seconds / 60
+        val hours = minutes / 60
+        val days = hours / 24
+        when {
+            minutes < 1 -> "только что"
+            minutes < 2 -> "1 минуту назад"
+            minutes < 5 -> "$minutes минуты назад"
+            minutes < 21 -> "$minutes минут назад"
+            minutes % 10 == 1 -> "$minutes минуту назад"
+            minutes % 10 in 2..4 -> "$minutes минуты назад"
+            minutes < 60 -> "$minutes минут назад"
+            hours < 2 -> "1 час назад"
+            hours < 5 -> "$hours часа назад"
+            hours < 24 -> "$hours часов назад"
+            days < 2 -> "вчера"
+            days < 5 -> "$days дня назад"
+            days < 21 -> "$days дней назад"
+            days % 10 == 1 -> "$days день назад"
+            else -> "$days дней назад"
+        }
+    } catch (e: Exception) { timestamp.take(16) }
+}
+
+@Composable
+private fun UserInfoDialog(
+    chat: Chat?,
+    users: List<User>,
+    currentUserId: String?,
+    onDismiss: () -> Unit,
+    onAvatarClick: (String) -> Unit
+) {
+    val otherUserId = if (chat?.type == "direct" && currentUserId != null) {
+        chat.participants.find { it != currentUserId }
+    } else null
+    val otherUser = otherUserId?.let { id -> users.find { it.id == id } }
+    val name = otherUser?.username?.ifBlank { null } ?: otherUser?.fullName ?: chat?.name ?: "Пользователь"
+    val avatar = otherUser?.avatar ?: chat?.avatar
+    val statusText = otherUser?.statusText
+    val about = otherUser?.about
+    val phone = otherUser?.mobilePhone
+    val userStatus = otherUser?.status ?: "offline"
+    val userLastSeen = otherUser?.lastSeen
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                ChatAvatar(
+                    avatarUrl = avatar,
+                    name = name,
+                    size = 80.dp,
+                    modifier = Modifier.clickable { avatar?.let { onAvatarClick(it) } }
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = name,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = when {
+                        userStatus == "online" -> "в сети"
+                        userLastSeen != null -> "был(а) в сети ${formatLastSeen(userLastSeen)}"
+                        else -> "не в сети"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary
+                )
+            }
+        },
+        text = {
+            Column {
+                if (!statusText.isNullOrBlank()) {
+                    Text(
+                        text = statusText,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                }
+                if (!about.isNullOrBlank()) {
+                    Text(
+                        text = about,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                }
+                if (!phone.isNullOrBlank()) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.Phone,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                            tint = TextSecondary
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = phone,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Закрыть")
+            }
+        },
+        containerColor = MaterialTheme.colorScheme.surface,
+        tonalElevation = 8.dp
+    )
 }

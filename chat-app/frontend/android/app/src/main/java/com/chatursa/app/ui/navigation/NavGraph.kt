@@ -6,19 +6,14 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Chat
-import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -26,11 +21,9 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
-import coil.compose.AsyncImage
 import com.chatursa.app.avatarUrl
 import com.chatursa.app.data.model.Chat
 import com.chatursa.app.ui.ChatAvatar
-import com.chatursa.app.data.model.User
 import com.chatursa.app.ui.auth.AuthScreen
 import com.chatursa.app.ui.auth.AuthViewModel
 import com.chatursa.app.ui.chat.ChatScreen
@@ -39,7 +32,6 @@ import com.chatursa.app.ui.chatlist.ChatListScreen
 import com.chatursa.app.ui.chatlist.ChatListViewModel
 import com.chatursa.app.ui.profile.ProfileScreen
 import com.chatursa.app.ui.theme.Purple500
-import com.chatursa.app.ui.theme.TextSecondary
 import com.chatursa.app.ui.theme.ThemeViewModel
 import com.google.gson.Gson
 
@@ -226,7 +218,6 @@ fun MainScreen(
             ) {
                 val items = listOf(
                     BottomNavItem("Чаты", Icons.Default.Chat, "chats"),
-                    BottomNavItem("Контакты", Icons.Default.People, "contacts"),
                     BottomNavItem("Настройки", Icons.Default.Settings, "settings")
                 )
                 items.forEachIndexed { index, item ->
@@ -255,16 +246,6 @@ fun MainScreen(
                     )
                 }
                 1 -> {
-                    ContactsScreen(
-                        users = chatListViewModel.uiState.value.users.filter {
-                            it.id != authViewModel.uiState.value.user?.id
-                        },
-                        onUserClick = { user ->
-                            chatListViewModel.createChat(user.id)
-                        }
-                    )
-                }
-                2 -> {
                     ProfileScreen(
                         user = authViewModel.uiState.value.user,
                         themeViewModel = themeViewModel,
@@ -284,66 +265,3 @@ data class BottomNavItem(
     val icon: ImageVector,
     val route: String
 )
-
-@Composable
-fun ContactsScreen(
-    users: List<User>,
-    onUserClick: (User) -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(top = 48.dp)
-    ) {
-        Text(
-            text = "Контакты",
-            style = MaterialTheme.typography.headlineMedium,
-            modifier = Modifier.padding(16.dp)
-        )
-        if (users.isEmpty()) {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = "Нет контактов",
-                    color = TextSecondary
-                )
-            }
-        } else {
-            LazyColumn {
-                items(users, key = { it.id }) { user ->
-                    Surface(
-                        onClick = { onUserClick(user) },
-                        color = Color.Transparent
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            ChatAvatar(
-                                avatarUrl = user.avatar,
-                                name = user.username,
-                                size = 48.dp
-                            )
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Column {
-                                Text(
-                                    text = user.username,
-                                    style = MaterialTheme.typography.titleMedium
-                                )
-                                Text(
-                                    text = if (user.status == "online") "В сети" else "Не в сети",
-                                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-    }
-}
-            }
-        }
-    }
-}

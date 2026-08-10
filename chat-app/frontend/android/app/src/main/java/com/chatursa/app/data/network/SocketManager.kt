@@ -24,7 +24,7 @@ sealed class SocketEvent {
     data class NewMessage(val message: Message) : SocketEvent()
     data class ChatHistory(val chatId: String, val messages: List<Message>, val chat: Chat? = null) : SocketEvent()
     data class ChatCreated(val chat: Chat) : SocketEvent()
-    data class UserStatusChanged(val userId: String, val status: String) : SocketEvent()
+    data class UserStatusChanged(val userId: String, val status: String, val lastSeen: String? = null) : SocketEvent()
     data class UserTyping(val chatId: String, val userId: String, val userName: String) : SocketEvent()
     data class UsersList(val users: List<User>) : SocketEvent()
     data class MessageDeleted(val chatId: String, val messageId: String) : SocketEvent()
@@ -46,7 +46,7 @@ class SocketManager {
     }
 
     private var socket: Socket? = null
-    private val _events = Channel<SocketEvent>(Channel.CONFLATED)
+    private val _events = Channel<SocketEvent>(Channel.BUFFERED)
     val events: Flow<SocketEvent> = _events.receiveAsFlow()
 
     private var currentUserId: String? = null
@@ -179,7 +179,9 @@ class SocketManager {
                     if (args.isNotEmpty()) {
                         val data = args[0] as JSONObject
                         _events.trySend(SocketEvent.UserStatusChanged(
-                            data.getString("userId"), data.optString("status", "offline")
+                            data.getString("userId"),
+                            data.optString("status", "offline"),
+                            data.optString("last_seen", null)?.ifEmpty { null }
                         ))
                     }
                 } catch (e: Exception) { Log.e(TAG, "user_status_changed parse error", e) }
@@ -425,7 +427,14 @@ class SocketManager {
     private fun parseUserListUser(json: JSONObject) = User(
         id = json.getString("id"),
         username = json.getString("username"),
-        avatar = json.optString("avatar", null)?.ifEmpty { null }
+        avatar = json.optString("avatar", null)?.ifEmpty { null },
+        email = json.optString("email", ""),
+        fullName = json.optString("full_name", null)?.ifEmpty { null },
+        statusText = json.optString("status_text", null)?.ifEmpty { null },
+        status = json.optString("status", "offline"),
+        mobilePhone = json.optString("mobile_phone", null)?.ifEmpty { null },
+        about = json.optString("about", null)?.ifEmpty { null },
+        lastSeen = json.optString("last_seen", null)?.ifEmpty { null }
     )
 
     private fun parseChat(json: JSONObject, opUsername: String? = null): Chat {
@@ -446,7 +455,10 @@ class SocketManager {
         var name = json.optString("name", "")
         var avatar = json.optString("avatar", null)?.ifEmpty { null }
 
-        // For direct chats, find the other participant and use their avatar + name
+        var otherStatus: String? = null
+        var lastSeen: String? = null
+
+        // For direct chats, find the other participant and use their data
         if (type == "direct" && json.has("participantsDetails") && !json.isNull("participantsDetails")) {
             val arr = json.getJSONArray("participantsDetails")
             val uname = opUsername ?: currentUsername ?: ""
@@ -463,6 +475,8 @@ class SocketManager {
                 val otherAvatar = other.optString("avatar", null)?.ifEmpty { null }
                 if (name.isBlank()) name = otherName
                 if (avatar.isNullOrBlank()) avatar = otherAvatar
+                otherStatus = other.optString("status", null)?.ifEmpty { null }
+                lastSeen = other.optString("last_seen", null)?.ifEmpty { null }
             } else {
                 // Fallback: use first non-self participant name from participant list
                 val selfIdx = participants.indexOfFirst { it.equals(uname, ignoreCase = true) }
@@ -484,7 +498,8 @@ class SocketManager {
             participantNames = pNames,
             lastActivity = json.optString("lastActivity", null),
             createdBy = json.optString("createdBy", null),
-            isOnline = json.optBoolean("isOnline", false)
+            isOnline = otherStatus == "online",
+            lastSeen = lastSeen
         )
     }
 

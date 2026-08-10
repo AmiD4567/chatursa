@@ -116,7 +116,11 @@ class ChatListViewModel(application: Application) : AndroidViewModel(application
                     is SocketEvent.UserStatusChanged -> {
                         val updatedChats = _uiState.value.chats.map { chat ->
                             if (chat.participants.contains(event.userId) || chat.createdBy == event.userId) {
-                                chat.copy(isOnline = event.status == "online")
+                                chat.copy(
+                                    isOnline = event.status == "online",
+                                    lastSeen = if (event.status == "online") null
+                                        else (event.lastSeen ?: chat.lastSeen)
+                                )
                             } else chat
                         }
                         _uiState.value = _uiState.value.copy(chats = updatedChats)
@@ -242,16 +246,18 @@ class ChatListViewModel(application: Application) : AndroidViewModel(application
 
     fun createChat(userId: String, type: String = "direct") {
         val currentUser = _uiState.value.currentUser ?: return
+        val targetUser = _uiState.value.users.find { it.id == userId } ?: return
+        val targetUsername = targetUser.username
         val existing = _uiState.value.chats.find { chat ->
             chat.type == "direct" &&
-            chat.participants.contains(userId) &&
-            chat.participants.contains(currentUser.id)
+            chat.participants.contains(targetUsername) &&
+            chat.participants.contains(currentUser.username)
         }
         if (existing != null) {
             _uiState.value = _uiState.value.copy(createdChatId = existing.id)
             return
         }
-        socketManager.createChat(listOf(userId, currentUser.id), type)
+        socketManager.createChat(listOf(targetUsername), type)
     }
 
     fun resetCreatedChatId() {
