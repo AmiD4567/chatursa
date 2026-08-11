@@ -46,6 +46,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.compose.AsyncImagePainter
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import com.chatursa.app.AppConfig
 import com.chatursa.app.avatarUrl
@@ -136,6 +137,63 @@ fun ChatScreen(
             } catch (e: Exception) {
                 Log.e("ChatScreen", "Preview save error", e)
             }
+        }
+    }
+
+    fun launchCamera() {
+        val cameraIntent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+        val cameraAvailable = context.packageManager
+            .queryIntentActivities(cameraIntent, PackageManager.MATCH_DEFAULT_ONLY).isNotEmpty()
+        if (!cameraAvailable) {
+            Toast.makeText(context, "Камера недоступна", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val uri = try {
+            val file = File(context.cacheDir, "capture_${System.currentTimeMillis()}.jpg")
+            FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+        } catch (e: Exception) {
+            Log.e("ChatScreen", "Camera file prepare error", e)
+            val msg = "Не удалось подготовить файл: ${e.javaClass.simpleName}: ${e.message}"
+            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+            writeCameraErrorToLog(context, e)
+            return
+        }
+        cameraUri = uri
+        val captureIntent = Intent(MediaStore.ACTION_IMAGE_CAPTURE).apply {
+            putExtra(MediaStore.EXTRA_OUTPUT, uri)
+            addFlags(
+                Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+        }
+        try {
+            cameraChooserLauncher.launch(
+                Intent.createChooser(captureIntent, "Сделать фото")
+            )
+        } catch (e: Exception) {
+            Log.e("ChatScreen", "Camera launch error", e)
+            writeCameraErrorToLog(context, e)
+            try {
+                cameraPreviewLauncher.launch(null)
+            } catch (e2: Exception) {
+                Log.e("ChatScreen", "Camera preview launch error", e2)
+                writeCameraErrorToLog(context, e2)
+                Toast.makeText(
+                    context,
+                    "Не удалось открыть камеру: ${e.javaClass.simpleName}",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+    }
+
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            launchCamera()
+        } else {
+            Toast.makeText(context, "Нет доступа к камере", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -709,49 +767,14 @@ fun ChatScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     IconButton(onClick = {
-                        val cameraIntent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
-                        val cameraAvailable = context.packageManager
-                            .queryIntentActivities(cameraIntent, PackageManager.MATCH_DEFAULT_ONLY).isNotEmpty()
-                        if (!cameraAvailable) {
-                            Toast.makeText(context, "Камера недоступна", Toast.LENGTH_SHORT).show()
-                            return@IconButton
-                        }
-                        val uri = try {
-                            val file = File(context.cacheDir, "capture_${System.currentTimeMillis()}.jpg")
-                            FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
-                        } catch (e: Exception) {
-                            Log.e("ChatScreen", "Camera file prepare error", e)
-                            val msg = "Не удалось подготовить файл: ${e.javaClass.simpleName}: ${e.message}"
-                            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
-                            writeCameraErrorToLog(context, e)
-                            return@IconButton
-                        }
-                        cameraUri = uri
-                        val captureIntent = Intent(MediaStore.ACTION_IMAGE_CAPTURE).apply {
-                            putExtra(MediaStore.EXTRA_OUTPUT, uri)
-                            addFlags(
-                                Intent.FLAG_GRANT_READ_URI_PERMISSION
-                                    or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                            )
-                        }
-                        try {
-                            cameraChooserLauncher.launch(
-                                Intent.createChooser(captureIntent, "Сделать фото")
-                            )
-                        } catch (e: Exception) {
-                            Log.e("ChatScreen", "Camera launch error", e)
-                            writeCameraErrorToLog(context, e)
-                            try {
-                                cameraPreviewLauncher.launch(null)
-                            } catch (e2: Exception) {
-                                Log.e("ChatScreen", "Camera preview launch error", e2)
-                                writeCameraErrorToLog(context, e2)
-                                Toast.makeText(
-                                    context,
-                                    "Не удалось открыть камеру: ${e.javaClass.simpleName}",
-                                    Toast.LENGTH_LONG
-                                ).show()
-                            }
+                        val hasCameraPermission = ContextCompat.checkSelfPermission(
+                            context,
+                            Manifest.permission.CAMERA
+                        ) == PackageManager.PERMISSION_GRANTED
+                        if (hasCameraPermission) {
+                            launchCamera()
+                        } else {
+                            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
                         }
                     }) {
                         Icon(
