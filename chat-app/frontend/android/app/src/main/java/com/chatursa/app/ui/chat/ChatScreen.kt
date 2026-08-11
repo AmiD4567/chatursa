@@ -2,7 +2,11 @@ package com.chatursa.app.ui.chat
 
 import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.provider.MediaStore
+import android.util.Log
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -688,10 +692,22 @@ fun ChatScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     IconButton(onClick = {
-                        val file = File(context.cacheDir, "capture_${System.currentTimeMillis()}.jpg")
-                        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
-                        cameraUri = uri
-                        cameraLauncher.launch(uri)
+                        val cameraIntent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+                        val cameraAvailable = context.packageManager
+                            .resolveActivity(cameraIntent, PackageManager.MATCH_DEFAULT_ONLY) != null
+                        if (!cameraAvailable) {
+                            Toast.makeText(context, "Камера недоступна", Toast.LENGTH_SHORT).show()
+                            return@IconButton
+                        }
+                        try {
+                            val file = File(context.cacheDir, "capture_${System.currentTimeMillis()}.jpg")
+                            val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+                            cameraUri = uri
+                            cameraLauncher.launch(uri)
+                        } catch (e: Exception) {
+                            Log.e("ChatScreen", "Camera launch error", e)
+                            Toast.makeText(context, "Не удалось открыть камеру", Toast.LENGTH_SHORT).show()
+                        }
                     }) {
                         Icon(
                             Icons.Default.PhotoCamera,
