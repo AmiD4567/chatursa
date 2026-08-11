@@ -1,6 +1,7 @@
 package com.chatursa.app.ui.chat
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -699,14 +700,24 @@ fun ChatScreen(
                             Toast.makeText(context, "Камера недоступна", Toast.LENGTH_SHORT).show()
                             return@IconButton
                         }
-                        try {
+                        val uri = try {
                             val file = File(context.cacheDir, "capture_${System.currentTimeMillis()}.jpg")
-                            val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
-                            cameraUri = uri
+                            FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+                        } catch (e: Exception) {
+                            Log.e("ChatScreen", "Camera file prepare error", e)
+                            val msg = "Не удалось подготовить файл: ${e.javaClass.simpleName}: ${e.message}"
+                            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                            writeCameraErrorToLog(context, e)
+                            return@IconButton
+                        }
+                        cameraUri = uri
+                        try {
                             cameraLauncher.launch(uri)
                         } catch (e: Exception) {
                             Log.e("ChatScreen", "Camera launch error", e)
-                            Toast.makeText(context, "Не удалось открыть камеру", Toast.LENGTH_SHORT).show()
+                            val msg = "Не удалось открыть камеру: ${e.javaClass.simpleName}: ${e.message}"
+                            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                            writeCameraErrorToLog(context, e)
                         }
                     }) {
                         Icon(
@@ -1325,4 +1336,21 @@ private fun UserInfoDialog(
         containerColor = MaterialTheme.colorScheme.surface,
         tonalElevation = 8.dp
     )
+}
+
+private fun writeCameraErrorToLog(context: Context, e: Exception) {
+    try {
+        val text = buildString {
+            appendLine("Time: ${System.currentTimeMillis()}")
+            appendLine("Thread: ${Thread.currentThread().name}")
+            appendLine("Camera error: ${e.javaClass.name}: ${e.message}")
+            appendLine(e.stackTrace.joinToString("\n"))
+        }
+        val externalDir = context.getExternalFilesDir(null)
+        if (externalDir != null) {
+            File(externalDir, "crash_log.txt").writeText(text)
+        }
+        File(context.cacheDir, "crash_log.txt").writeText(text)
+    } catch (_: Exception) {
+    }
 }
