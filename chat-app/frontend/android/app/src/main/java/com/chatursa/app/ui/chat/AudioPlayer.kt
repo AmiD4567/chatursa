@@ -1,6 +1,8 @@
 package com.chatursa.app.ui.chat
 
+import android.content.Context
 import android.media.MediaPlayer
+import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -18,8 +20,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.chatursa.app.ServerTls
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 @Composable
@@ -33,19 +38,23 @@ fun AudioPlayer(
     var progress by remember { mutableFloatStateOf(0f) }
     var duration by remember { mutableIntStateOf(0) }
     var currentPosition by remember { mutableIntStateOf(0) }
+    var localFile by remember(url) { mutableStateOf<File?>(null) }
 
     val bgColor = if (isOwn) Color.White.copy(alpha = 0.15f) else Color.Black.copy(alpha = 0.1f)
     val accentColor = if (isOwn) Color.White else Color(0xFF6C5CE7)
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(url) {
-        try {
-            val mp = MediaPlayer()
-            mp.setDataSource(url)
-            mp.prepare()
-            duration = mp.duration
-            mp.release()
-        } catch (e: Exception) {
+        localFile = downloadToCache(context, url)
+        localFile?.let { file ->
+            try {
+                val mp = MediaPlayer()
+                mp.setDataSource(file.absolutePath)
+                mp.prepare()
+                duration = mp.duration
+                mp.release()
+            } catch (e: Exception) {
+            }
         }
     }
 
@@ -73,8 +82,9 @@ fun AudioPlayer(
                         }
                         scope.launch {
                             try {
+                                val file = localFile ?: downloadToCache(context, url) ?: return@launch
                                 val mp = MediaPlayer()
-                                mp.setDataSource(url)
+                                mp.setDataSource(file.absolutePath)
                                 mp.prepare()
                                 duration = mp.duration
                                 mp.start()
@@ -125,6 +135,24 @@ fun AudioPlayer(
         }
     }
 }
+
+private suspend fun downloadToCache(context: Context, url: String): File? =
+    withContext(Dispatchers.IO) {
+        try {
+            val client = ServerTls.okHttpClient(context)
+            val request = okhttp3.Request.Builder().url(url).build()
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@withContext null
+                val body = response.body ?: return@withContext null
+                val file = File(context.cacheDir, "audio_${url.hashCode()}.m4a")
+                file.outputStream().use { body.byteStream().copyTo(it) }
+                file
+            }
+        } catch (e: Exception) {
+            Log.e("AudioPlayer", "Download failed: $url", e)
+            null
+        }
+    }
 
 private fun formatDuration(ms: Int): String {
     if (ms <= 0) return "0:00"

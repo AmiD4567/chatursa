@@ -72,6 +72,7 @@ class ChatUrsaApp : Application() {
                     .build()
             }
             .crossfade(true)
+            .okHttpClient(ServerTls.okHttpClient(this))
             .build()
         Coil.setImageLoader(imageLoader)
     }
