@@ -275,11 +275,19 @@ fun ChatScreen(
 
     // Media gallery
     var showMediaGallery by remember { mutableStateOf(false) }
+    val allImageUrls = remember(uiState.messages) {
+        uiState.messages.mapNotNull { it.fileData }
+            .filter { it.mimetype.startsWith("image/") }
+            .map { it.url }
+    }
     if (showMediaGallery) {
         MediaGallery(
             messages = uiState.messages,
             onDismiss = { showMediaGallery = false },
-            onImageClick = { url -> viewModel.showImageViewer(url); showMediaGallery = false }
+            onImageClick = { url ->
+                viewModel.showImageViewer(allImageUrls, allImageUrls.indexOf(url))
+                showMediaGallery = false
+            }
         )
     }
 
@@ -663,9 +671,10 @@ fun ChatScreen(
                 }
 
                 // Image overlay dialog
-                if (uiState.imageViewerUrl != null) {
+                if (uiState.imageViewerUrls.isNotEmpty()) {
                     ImageViewerDialog(
-                        imageUrl = uiState.imageViewerUrl!!,
+                        imageUrls = uiState.imageViewerUrls,
+                        initialIndex = uiState.imageViewerIndex,
                         onDismiss = { viewModel.hideImageViewer() }
                     )
                 }
@@ -744,7 +753,7 @@ fun ChatScreen(
                                 isOwn = message.senderId == uiState.currentUser?.id,
                                 currentUserId = uiState.currentUser?.id,
                                 onLongClick = { viewModel.showContextMenu(message) },
-                                onImageClick = { url -> viewModel.showImageViewer(url) },
+                                onImageClick = { url -> viewModel.showImageViewer(allImageUrls, allImageUrls.indexOf(url)) },
                                 linkPreviews = uiState.linkPreviews,
                                 onFetchLinkPreview = { url -> viewModel.fetchLinkPreview(url) }
                             )

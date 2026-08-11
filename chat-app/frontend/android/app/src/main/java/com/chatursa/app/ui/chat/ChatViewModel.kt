@@ -45,7 +45,8 @@ data class ChatUiState(
     val isRecording: Boolean = false,
     val recordingDurationMs: Long = 0L,
     val pinnedMessage: Message? = null,
-    val imageViewerUrl: String? = null,
+    val imageViewerUrls: List<String> = emptyList(),
+    val imageViewerIndex: Int = 0,
     val linkPreviews: Map<String, LinkPreview> = emptyMap(),
     val searchQuery: String = "",
     val isSearching: Boolean = false,
@@ -360,11 +361,25 @@ class ChatViewModel(
     }
 
     fun showImageViewer(url: String) {
-        _uiState.value = _uiState.value.copy(imageViewerUrl = url)
+        _uiState.value = _uiState.value.copy(
+            imageViewerUrls = listOf(url),
+            imageViewerIndex = 0
+        )
+    }
+
+    fun showImageViewer(urls: List<String>, startIndex: Int) {
+        if (urls.isEmpty()) return
+        _uiState.value = _uiState.value.copy(
+            imageViewerUrls = urls,
+            imageViewerIndex = startIndex.coerceIn(0, urls.size - 1)
+        )
     }
 
     fun hideImageViewer() {
-        _uiState.value = _uiState.value.copy(imageViewerUrl = null)
+        _uiState.value = _uiState.value.copy(
+            imageViewerUrls = emptyList(),
+            imageViewerIndex = 0
+        )
     }
 
     fun showUserInfo() {
