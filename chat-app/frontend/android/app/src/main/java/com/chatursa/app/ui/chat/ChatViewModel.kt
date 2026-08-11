@@ -48,7 +48,8 @@ data class ChatUiState(
     val imageViewerUrl: String? = null,
     val linkPreviews: Map<String, LinkPreview> = emptyMap(),
     val searchQuery: String = "",
-    val isSearching: Boolean = false
+    val isSearching: Boolean = false,
+    val showUserInfo: Boolean = false
 )
 
 class ChatViewModel(
@@ -92,6 +93,7 @@ class ChatViewModel(
         )
 
         socketManager.connect(user)
+        socketManager.getUsers()
         startCollecting()
     }
 
@@ -194,6 +196,18 @@ class ChatViewModel(
                                 messages = _uiState.value.messages.map {
                                     if (it.id == event.messageId) it.copy(isPinned = false) else it
                                 }
+                            )
+                        }
+                    }
+                    is SocketEvent.UserStatusChanged -> {
+                        val chat = _uiState.value.chat
+                        if (chat != null && (chat.participants.contains(event.userId) || chat.createdBy == event.userId)) {
+                            _uiState.value = _uiState.value.copy(
+                                chat = chat.copy(
+                                    isOnline = event.status == "online",
+                                    lastSeen = if (event.status == "online") null
+                                        else (event.lastSeen ?: chat.lastSeen)
+                                )
                             )
                         }
                     }
@@ -353,11 +367,19 @@ class ChatViewModel(
         _uiState.value = _uiState.value.copy(imageViewerUrl = null)
     }
 
-    fun uploadAndSendFile(context: android.content.Context, uri: android.net.Uri) {
+    fun showUserInfo() {
+        _uiState.value = _uiState.value.copy(showUserInfo = true)
+    }
+
+    fun hideUserInfo() {
+        _uiState.value = _uiState.value.copy(showUserInfo = false)
+    }
+
+    fun uploadAndSendFile(context: android.content.Context, uri: android.net.Uri, mimeType: String? = null) {
         viewModelScope.launch {
             try {
-                val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
-                val result = fileUploader.upload(context, uri, mimeType)
+                val mt = mimeType ?: context.contentResolver.getType(uri) ?: "application/octet-stream"
+                val result = fileUploader.upload(context, uri, mt)
                 if (result != null) {
                     sendMessage(
                         text = "",

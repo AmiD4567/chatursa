@@ -1,9 +1,11 @@
 package com.chatursa.app.ui.chat
 
 import android.Manifest
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.net.Uri
 import android.provider.MediaStore
 import android.util.Log
@@ -113,13 +115,27 @@ fun ChatScreen(
     }
 
     var cameraUri by remember { mutableStateOf<Uri?>(null) }
-    val cameraLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.TakePicture()
-    ) { success ->
+    val cameraChooserLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
         val uri = cameraUri
         cameraUri = null
-        if (success && uri != null) {
+        if (result.resultCode == Activity.RESULT_OK && uri != null) {
             viewModel.uploadAndSendFile(context, uri)
+        }
+    }
+
+    val cameraPreviewLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicturePreview()
+    ) { bitmap ->
+        if (bitmap != null) {
+            val file = File(context.cacheDir, "capture_${System.currentTimeMillis()}.jpg")
+            try {
+                file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.JPEG, 90, it) }
+                viewModel.uploadAndSendFile(context, Uri.fromFile(file), "image/jpeg")
+            } catch (e: Exception) {
+                Log.e("ChatScreen", "Preview save error", e)
+            }
         }
     }
 
@@ -695,7 +711,7 @@ fun ChatScreen(
                     IconButton(onClick = {
                         val cameraIntent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
                         val cameraAvailable = context.packageManager
-                            .resolveActivity(cameraIntent, PackageManager.MATCH_DEFAULT_ONLY) != null
+                            .queryIntentActivities(cameraIntent, PackageManager.MATCH_DEFAULT_ONLY).isNotEmpty()
                         if (!cameraAvailable) {
                             Toast.makeText(context, "Камера недоступна", Toast.LENGTH_SHORT).show()
                             return@IconButton
@@ -711,13 +727,31 @@ fun ChatScreen(
                             return@IconButton
                         }
                         cameraUri = uri
+                        val captureIntent = Intent(MediaStore.ACTION_IMAGE_CAPTURE).apply {
+                            putExtra(MediaStore.EXTRA_OUTPUT, uri)
+                            addFlags(
+                                Intent.FLAG_GRANT_READ_URI_PERMISSION
+                                    or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                            )
+                        }
                         try {
-                            cameraLauncher.launch(uri)
+                            cameraChooserLauncher.launch(
+                                Intent.createChooser(captureIntent, "Сделать фото")
+                            )
                         } catch (e: Exception) {
                             Log.e("ChatScreen", "Camera launch error", e)
-                            val msg = "Не удалось открыть камеру: ${e.javaClass.simpleName}: ${e.message}"
-                            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
                             writeCameraErrorToLog(context, e)
+                            try {
+                                cameraPreviewLauncher.launch(null)
+                            } catch (e2: Exception) {
+                                Log.e("ChatScreen", "Camera preview launch error", e2)
+                                writeCameraErrorToLog(context, e2)
+                                Toast.makeText(
+                                    context,
+                                    "Не удалось открыть камеру: ${e.javaClass.simpleName}",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
                         }
                     }) {
                         Icon(
