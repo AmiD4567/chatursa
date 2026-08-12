@@ -169,6 +169,10 @@ class ChatListViewModel(application: Application) : AndroidViewModel(application
         socketManager.joinChat(chatId)
     }
 
+    fun refreshUsers() {
+        socketManager.getUsers()
+    }
+
     fun searchChats(query: String) {
         _uiState.value = _uiState.value.copy(searchQuery = query)
     }

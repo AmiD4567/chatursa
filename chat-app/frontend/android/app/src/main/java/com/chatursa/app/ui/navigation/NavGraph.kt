@@ -8,6 +8,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -30,6 +31,7 @@ import com.chatursa.app.ui.chat.ChatScreen
 import com.chatursa.app.ui.chat.ChatViewModel
 import com.chatursa.app.ui.chatlist.ChatListScreen
 import com.chatursa.app.ui.chatlist.ChatListViewModel
+import com.chatursa.app.ui.contacts.ContactsScreen
 import com.chatursa.app.ui.profile.ProfileScreen
 import com.chatursa.app.ui.theme.Purple500
 import com.chatursa.app.ui.theme.ThemeViewModel
@@ -218,6 +220,7 @@ fun MainScreen(
             ) {
                 val items = listOf(
                     BottomNavItem("Чаты", Icons.Default.Chat, "chats"),
+                    BottomNavItem("Контакты", Icons.Default.Person, "contacts"),
                     BottomNavItem("Настройки", Icons.Default.Settings, "settings")
                 )
                 items.forEachIndexed { index, item ->
@@ -246,6 +249,12 @@ fun MainScreen(
                     )
                 }
                 1 -> {
+                    ContactsScreen(
+                        viewModel = chatListViewModel,
+                        onUserClick = { user -> chatListViewModel.createChat(user.id) }
+                    )
+                }
+                2 -> {
                     ProfileScreen(
                         user = authViewModel.uiState.value.user,
                         themeViewModel = themeViewModel,
