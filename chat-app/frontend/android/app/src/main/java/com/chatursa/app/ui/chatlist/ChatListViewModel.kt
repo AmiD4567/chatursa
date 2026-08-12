@@ -88,7 +88,7 @@ class ChatListViewModel(application: Application) : AndroidViewModel(application
                         isConnecting = false
                         _uiState.value = _uiState.value.copy(
                             currentUser = event.user,
-                            chats = event.chats,
+                            chats = event.chats.distinctBy { it.id },
                             isConnected = true,
                             isConnecting = false
                         )
@@ -110,7 +110,7 @@ class ChatListViewModel(application: Application) : AndroidViewModel(application
                         updateChatWithNewMessage(event.message)
                     }
                     is SocketEvent.ChatCreated -> {
-                        val chats = listOf(event.chat) + _uiState.value.chats
+                        val chats = (listOf(event.chat) + _uiState.value.chats).distinctBy { it.id }
                         _uiState.value = _uiState.value.copy(chats = chats, createdChatId = event.chat.id)
                     }
                     is SocketEvent.UserStatusChanged -> {
@@ -129,7 +129,7 @@ class ChatListViewModel(application: Application) : AndroidViewModel(application
                         updateTypingUser(event.chatId, event.userName)
                     }
                     is SocketEvent.UsersList -> {
-                        _uiState.value = _uiState.value.copy(users = event.users)
+                        _uiState.value = _uiState.value.copy(users = event.users.distinctBy { it.id })
                     }
                     is SocketEvent.MessageDeleted -> {
                         val updatedChats = _uiState.value.chats.map { chat ->

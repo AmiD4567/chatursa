@@ -6006,9 +6006,6 @@ io.on('connection', (socket) => {
         emitToUser(participant.id, 'chat_created', { chat: chatWithParticipants });
       });
     }
-
-    // Также отправляем создателю через его текущий сокет (чтобы сразу присоединиться к комнате)
-    socket.emit('chat_created', { chat: chatWithParticipants });
   });
 
   // Присоединение к чату

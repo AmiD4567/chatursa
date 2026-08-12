@@ -115,7 +115,7 @@ class ChatViewModel(
                     is SocketEvent.ChatHistory -> {
                         if (event.chatId == chatId) {
                             _uiState.value = _uiState.value.copy(
-                                messages = event.messages,
+                                messages = event.messages.distinctBy { it.id },
                                 chat = event.chat ?: _uiState.value.chat,
                                 isLoading = false
                             )
@@ -124,7 +124,11 @@ class ChatViewModel(
                     }
                     is SocketEvent.NewMessage -> {
                         if (event.message.chatId == chatId) {
-                            val msgs = _uiState.value.messages + event.message
+                            val msgs = if (_uiState.value.messages.any { it.id == event.message.id }) {
+                                _uiState.value.messages
+                            } else {
+                                _uiState.value.messages + event.message
+                            }
                             _uiState.value = _uiState.value.copy(messages = msgs)
                             markMessagesAsRead(listOf(event.message))
                         }

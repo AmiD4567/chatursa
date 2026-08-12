@@ -185,7 +185,7 @@ fun ChatListScreen(
                         LazyColumn(
                             modifier = Modifier.fillMaxSize()
                         ) {
-                            items(filteredChats, key = { it.id }) { chat ->
+                            items(filteredChats.distinctBy { it.id }, key = { it.id }) { chat ->
                                 val currentChat = rememberUpdatedState(chat)
                                 val dismissState = rememberSwipeToDismissBoxState(
                                     confirmValueChange = { dismissValue ->

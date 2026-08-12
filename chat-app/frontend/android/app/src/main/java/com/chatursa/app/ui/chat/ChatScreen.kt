@@ -747,7 +747,7 @@ fun ChatScreen(
                         state = listState,
                         contentPadding = PaddingValues(vertical = 8.dp)
                     ) {
-                        items(displayMessages, key = { it.id }) { message ->
+                        items(displayMessages.distinctBy { it.id }, key = { it.id }) { message ->
                             MessageBubble(
                                 message = message,
                                 isOwn = message.senderId == uiState.currentUser?.id,
