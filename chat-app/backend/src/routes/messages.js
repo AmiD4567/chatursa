@@ -5,6 +5,9 @@
 
 module.exports = function register(app, deps) {
   const { db, emitToUser, encryptText, decryptText, uuidv4, checkAdmin, getChatById, getChatMessages, distributeChatMessage } = deps;
+  // Сборка истории: сообщения с опросами требуют getPollWithVotes (общая фабрика из src/utils.js)
+  const { createGetPollWithVotes } = require('../utils');
+  const getPollWithVotes = createGetPollWithVotes(db);
 
 app.get('/api/messages/:chatId', (req, res) => {
   const { chatId } = req.params;

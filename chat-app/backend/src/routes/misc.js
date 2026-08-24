@@ -4,6 +4,7 @@
  */
 const path = require('path');
 const fs = require('fs');
+const { compareVersions } = require('../utils');
 
 module.exports = function register(app, deps) {
   const { db, onlineUsers } = deps;
@@ -55,18 +56,7 @@ app.get('/api/check-update', async (req, res) => {
   }
 });
 
-// Простое сравнение семантических версий
-function compareVersions(v1, v2) {
-  const p1 = v1.split('.').map(Number);
-  const p2 = v2.split('.').map(Number);
-  for (let i = 0; i < Math.max(p1.length, p2.length); i++) {
-    const n1 = p1[i] || 0;
-    const n2 = p2[i] || 0;
-    if (n1 > n2) return 1;
-    if (n1 < n2) return -1;
-  }
-  return 0;
-}
+
 
 // ============================================
 // API для администраторов

@@ -583,9 +583,16 @@ function getAllUsers() {
 const { initBotEngine } = require('./bot/engine');
 const { handleTodayCommand, handleContactsCommand } = require('./bot/commands');
 const { processConversationState, isDialogStartCommand, startConversation, clearConversation } = require('./bot/state');
+const { compareVersions, createGetPollWithVotes } = require('./src/utils');
 
 // Инициализация движка бота (после определения db, uuidv4, encryptText)
 let bot; // будет инициализирован ниже после определения send_message handler
+
+// Привязывается к db после initDatabase(); используется в getChatMessages
+let getPollWithVotes = null;
+
+// Функция напоминаний о встречах из jobs.js (заполняется после setupJobs)
+let sendMeetingReminder = null;
 
 // ============================================
 // Функция для получения ответа бота (ПОЛНОСТЬЮ КНОПОЧНАЯ)
@@ -843,6 +850,7 @@ console.log('Начало инициализации БД...');
 try {
   initDatabase();
   db = getDb();
+  getPollWithVotes = createGetPollWithVotes(db);
 
   // Сохранение БД при фатальной ошибке (см. src/logger.js → uncaughtException)
   registerFatalSaveHook(() => {
@@ -888,6 +896,17 @@ try {
   const jobsApi = require('./src/jobs');
   jobsApi.setupJobs(sharedDeps);
   sharedDeps.scheduleTaskReminder = jobsApi.scheduleTaskReminder;
+
+  // Функции из jobs.js, нужные остальным частям server.js
+  sendMeetingReminder = jobsApi.sendMeetingReminder;
+  // Восстановить незавершённые напоминания задач после рестарта
+  if (typeof jobsApi.restorePendingReminders === 'function') {
+    try { jobsApi.restorePendingReminders(); } catch (e) { console.error('restorePendingReminders:', e.message); }
+  }
+  // Ежедневная проверка дней рождения (уважает настройку бота birthday_notifications_enabled)
+  if (typeof jobsApi.scheduleBirthdayChecker === 'function') {
+    try { jobsApi.scheduleBirthdayChecker(); } catch (e) { console.error('scheduleBirthdayChecker:', e.message); }
+  }
 
   require('./src/routes/admin')(app, sharedDeps);
   require('./src/routes/auth')(app, sharedDeps);
@@ -1153,7 +1172,9 @@ try {
           console.log(`[Reminder] Получатели:`, Array.from(notifyUserIds));
 
           for (const userId of notifyUserIds) {
-            sendMeetingReminder(userId, reminder);
+            if (typeof sendMeetingReminder === 'function') {
+              sendMeetingReminder(userId, reminder);
+            }
           }
 
           // Помечаем напоминание как отправленное

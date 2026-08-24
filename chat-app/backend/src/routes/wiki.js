@@ -47,39 +47,8 @@ app.get('/api/wiki/search', (req, res) => {
   }
 });
 
-// Поиск файлов
-app.get('/api/search/files', (req, res) => {
-  const { q, limit = 20 } = req.query;
-  if (!q || q.trim().length < 2) {
-    return res.json({ success: true, results: [] });
-  }
-  try {
-    const results = db.prepare(`
-      SELECT m.id, m.chat_id, m.file_data, m.timestamp, m.sender_id, u.username as sender_name,
-             c.name as chat_name, c.type as chat_type
-      FROM messages m
-      JOIN users u ON m.sender_id = u.id
-      LEFT JOIN chats c ON m.chat_id = c.id
-      WHERE m.file_data IS NOT NULL AND (m.file_data LIKE ? OR m.text LIKE ?)
-      ORDER BY m.timestamp DESC
-      LIMIT ?
-    `).all(`%${q}%`, `%${q}%`, parseInt(limit) || 20);
-
-    const files = results.map(row => {
-      try {
-        const parsed = JSON.parse(row.file_data);
-        return { ...row, file_info: parsed, file_data: undefined };
-      } catch {
-        return { ...row, file_info: null, file_data: undefined };
-      }
-    });
-
-    res.json({ success: true, results: files });
-  } catch (err) {
-    console.error('Ошибка поиска файлов:', err);
-    res.status(500).json({ error: 'Ошибка поиска файлов' });
-  }
-});
+// Поиск файлов: единый эндпоинт живёт в routes/messages.js
+// (дубль отсюда был недостижим — регистрировался позже).
 
 // Получение wiki-статьи (для бота)
 app.get('/api/wiki/article/:id', (req, res) => {

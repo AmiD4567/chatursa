@@ -5,37 +5,9 @@
 
 module.exports = function register(app, deps) {
   const { db, io, uuidv4, getChatById, distributeChatMessage } = deps;
+  const { createGetPollWithVotes } = require('../utils');
+  const getPollWithVotes = createGetPollWithVotes(db);
 
-function getPollWithVotes(pollId, userId) {
-  const poll = db.prepare('SELECT * FROM polls WHERE id = ?').get(pollId);
-  if (!poll) return null;
-  const votes = db.prepare('SELECT * FROM poll_votes WHERE poll_id = ?').all(pollId);
-  const options = JSON.parse(poll.options);
-  const totalVotes = votes.length;
-  const optionVotes = options.map((_, idx) => votes.filter(v => v.option_index === idx).length);
-  const userVotes = db.prepare('SELECT option_index FROM poll_votes WHERE poll_id = ? AND user_id = ?').all(pollId, userId);
-
-  const isClosed = poll.closes_at && new Date(poll.closes_at) < new Date();
-  const hideResults = poll.hide_results_until_close && !isClosed;
-
-  return {
-    id: poll.id,
-    chatId: poll.chat_id,
-    creatorId: poll.creator_id,
-    question: poll.question,
-    options,
-    isAnonymous: !!poll.is_anonymous,
-    allowsMultiple: !!poll.allows_multiple,
-    totalVotes: isClosed || !hideResults ? totalVotes : 0,
-    optionVotes: isClosed || !hideResults ? optionVotes : options.map(() => 0),
-    votedIndices: userVotes.map(v => v.option_index),
-    createdAt: poll.created_at,
-    closesAt: poll.closes_at || null,
-    isClosed,
-    hideResultsUntilClose: !!poll.hide_results_until_close,
-    votesHidden: hideResults
-  };
-}
 
 // Создать опрос
 app.post('/api/polls', (req, res) => {
