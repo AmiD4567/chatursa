@@ -1,8 +1,10 @@
-﻿<#
+﻿#Requires -RunAsAdministrator
+<#
 .SYNOPSIS
   Отчёт «Кто входил на сервер и что делал в папке проекта» за период.
   HTML + CSV. Парсинг событий строго по XML-полям (EventData) —
   работает независимо от языка Windows.
+  Запускать ОТ АДМИНИСТРАТОРА: чтение журнала Security требует прав.
 
 .USAGE
   powershell -ExecutionPolicy Bypass -File ops\access-report.ps1 [-Days 7] [-Open]
@@ -50,9 +52,9 @@ if (-not $events) { $events = @() }
 Write-Host ("Найдено событий: {0}" -f $events.Count)
 
 # ── Разбор ──
-$logons   = New-Object System.Collections.Generic.List[object]
-failLogons= New-Object System.Collections.Generic.List[object]
-fileOps   = New-Object System.Collections.Generic.List[object]
+$logons      = New-Object System.Collections.Generic.List[object]
+$failLogons  = New-Object System.Collections.Generic.List[object]
+$fileOps     = New-Object System.Collections.Generic.List[object]
 
 foreach ($e in $events) {
   $f = Get-EvtFields $e

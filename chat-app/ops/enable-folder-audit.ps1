@@ -32,11 +32,21 @@ auditpol /set /subcategory:"{0CCE9217-69AE-11D9-BED3-505054503030}" /success:ena
 Write-Host '[1/3] Политика "Audit File System" включена (success + failure)'
 
 # ── 2. SACL на папку: наследуется на всё дерево ──
-# *S-1-1-0 = Everyone по SID (не зависит от локализации)
-# DE=удаление, DC=удаление внутри, WD=запись данных, AD=создание файлов/папок,
-# WEA/WA=атрибуты, WDAC=смена прав, WO=смена владельца.
+# Через icacls SACL выставить нельзя — используем .NET FileSystemAuditRule.
+# Everyone берём по SID S-1-1-0 с переводом в локализованное имя.
+# Права: удаление файла и содержимого, запись/создание, атрибуты, смена прав и владельца.
 # Чтение сознательно НЕ аудируем — иначе журнал утонет в событиях самого чат-сервера.
-icacls $TargetPath /audit "*S-1-1-0:(OI)(CI)DE,DC,WD,AD,WEA,WA,WDAC,WO" | Out-Null
+$everyone = (New-Object System.Security.Principal.SecurityIdentifier('S-1-1-0')).Translate([System.Security.Principal.NTAccount])
+$rights = 'Delete, DeleteSubdirectoriesAndFiles, WriteData, AppendData, WriteAttributes, WriteExtendedAttributes, ChangePermissions, TakeOwnership'
+$auditRule = New-Object System.Security.AccessControl.FileSystemAuditRule(
+  $everyone, $rights, 'ContainerInherit', 'None', 'Success'
+)
+$acl = Get-Acl -LiteralPath $TargetPath
+
+# убираем старые audit-правила для Everyone (идемпотентность при повторном запуске)
+$acl.Audit | Where-Object { $_.IdentityReference -eq $everyone } | ForEach-Object { $acl.RemoveAuditRuleSpecific($_) } | Out-Null
+$acl.SetAuditRule($auditRule)
+Set-Acl -LiteralPath $TargetPath -AclObject $acl
 Write-Host "[2/3] SACL выставлен на '$TargetPath' (наследуется рекурсивно)"
 
 # ── 3. Размер журнала Security ──
