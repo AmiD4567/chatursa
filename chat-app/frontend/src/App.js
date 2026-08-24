@@ -367,6 +367,8 @@ function App() {
     visible: false,
     x: 0,
     y: 0,
+    rawX: 0,
+    rawY: 0,
     messageId: null,
     messageText: '',
     messageChatId: null,
@@ -379,6 +381,8 @@ function App() {
     visible: false,
     x: 0,
     y: 0,
+    rawX: 0,
+    rawY: 0,
     chat: null,
   });
 
@@ -387,6 +391,8 @@ function App() {
     visible: false,
     x: 0,
     y: 0,
+    rawX: 0,
+    rawY: 0,
     word: null,        // слово под курсором ПКМ
     suggestions: null, // варианты исправления (null = ещё не проверялось)
     checking: false
@@ -395,6 +401,48 @@ function App() {
   const spellCacheRef = useRef(new Map());
   const spellTargetRef = useRef(null);
   const spellDebounceRef = useRef(null);
+
+  // Refs на корни контекстных меню для точного позиционирования по реальным размерам
+  const messageMenuRef = useRef(null);
+  const chatMenuRef = useRef(null);
+  const inputMenuRef = useRef(null);
+
+  // Точный «доводчик» позиции меню: измеряем реальный размер и не даём выйти за окно.
+  // offsetWidth/offsetHeight вместо getBoundingClientRect — не искажаются CSS-анимацией (scale)
+  const clampMenuToViewport = (menuEl, rawX, rawY) => {
+    const margin = 8;
+    return {
+      x: Math.max(margin, Math.min(rawX, window.innerWidth - menuEl.offsetWidth - margin)),
+      y: Math.max(margin, Math.min(rawY, window.innerHeight - menuEl.offsetHeight - margin))
+    };
+  };
+
+  // Меню сообщения: пересчёт после монтирования и при раскрытии реакций
+  useLayoutEffect(() => {
+    if (!contextMenu.visible || !messageMenuRef.current) return;
+    const { x, y } = clampMenuToViewport(messageMenuRef.current, contextMenu.rawX, contextMenu.rawY);
+    if (x !== contextMenu.x || y !== contextMenu.y) {
+      setContextMenu(prev => ({ ...prev, x, y }));
+    }
+  }, [contextMenu.visible, contextMenu.rawX, contextMenu.rawY, contextMenu.reactionsExpanded]);
+
+  // Меню чата в списке
+  useLayoutEffect(() => {
+    if (!chatContextMenu.visible || !chatMenuRef.current) return;
+    const { x, y } = clampMenuToViewport(chatMenuRef.current, chatContextMenu.rawX, chatContextMenu.rawY);
+    if (x !== chatContextMenu.x || y !== chatContextMenu.y) {
+      setChatContextMenu(prev => ({ ...prev, x, y }));
+    }
+  }, [chatContextMenu.visible, chatContextMenu.rawX, chatContextMenu.rawY]);
+
+  // Меню поля ввода: пересчёт при появлении подсказок орфографии/индикатора проверки
+  useLayoutEffect(() => {
+    if (!inputContextMenu.visible || !inputMenuRef.current) return;
+    const { x, y } = clampMenuToViewport(inputMenuRef.current, inputContextMenu.rawX, inputContextMenu.rawY);
+    if (x !== inputContextMenu.x || y !== inputContextMenu.y) {
+      setInputContextMenu(prev => ({ ...prev, x, y }));
+    }
+  }, [inputContextMenu.visible, inputContextMenu.rawX, inputContextMenu.rawY, inputContextMenu.suggestions, inputContextMenu.checking]);
 
   // Реакции на сообщения
   const [messageReactions, setMessageReactions] = useState({});
@@ -5570,6 +5618,8 @@ function App() {
       visible: true,
       x,
       y,
+      rawX: e.clientX,
+      rawY: e.clientY,
       messageId,
       messageText,
       messageChatId: chatId,
@@ -5581,7 +5631,7 @@ function App() {
 
   // Закрытие контекстного меню
   const closeContextMenu = () => {
-    setContextMenu({ visible: false, x: 0, y: 0, messageId: null, messageText: '', messageChatId: null, messageSenderId: null, reactionsExpanded: false });
+    setContextMenu({ visible: false, x: 0, y: 0, rawX: 0, rawY: 0, messageId: null, messageText: '', messageChatId: null, messageSenderId: null, reactionsExpanded: false });
   };
 
   // --- Контекстное меню чата (правый клик по строке в списке чатов) ---
@@ -5604,11 +5654,11 @@ function App() {
     if (y + menuHeight > window.innerHeight - margin) y = window.innerHeight - menuHeight - margin;
     if (y < margin) y = margin;
 
-    setChatContextMenu({ visible: true, x, y, chat });
+    setChatContextMenu({ visible: true, x, y, rawX: e.clientX, rawY: e.clientY, chat });
   };
 
   const closeChatContextMenu = () => {
-    setChatContextMenu({ visible: false, x: 0, y: 0, chat: null });
+    setChatContextMenu({ visible: false, x: 0, y: 0, rawX: 0, rawY: 0, chat: null });
   };
 
   // Закрепить / открепить чат
@@ -5812,6 +5862,8 @@ function App() {
       visible: true,
       x,
       y,
+      rawX: e.clientX,
+      rawY: e.clientY,
       word: wordInfo ? wordInfo.word : null,
       suggestions,
       checking
@@ -5820,7 +5872,7 @@ function App() {
 
   // Закрытие контекстного меню поля ввода
   const closeInputContextMenu = () => {
-    setInputContextMenu({ visible: false, x: 0, y: 0, word: null, suggestions: null, checking: false });
+    setInputContextMenu({ visible: false, x: 0, y: 0, rawX: 0, rawY: 0, word: null, suggestions: null, checking: false });
   };
 
   // Заменить слово с ошибкой на выбранный вариант (точно на месте ПКМ)
@@ -13949,6 +14001,7 @@ function App() {
             : null;
           return (
         <div
+          ref={chatMenuRef}
           className="chat-context-menu"
           style={{ top: chatContextMenu.y, left: chatContextMenu.x }}
           onClick={closeChatContextMenu}
@@ -14029,6 +14082,7 @@ function App() {
       {/* Контекстное меню сообщений */}
       {contextMenu.visible && (
         <div
+          ref={messageMenuRef}
           className="message-context-menu"
           style={{ top: contextMenu.y, left: contextMenu.x }}
           onClick={closeContextMenu}
@@ -14158,6 +14212,7 @@ function App() {
       {/* Контекстное меню поля ввода */}
       {inputContextMenu.visible && (
         <div
+          ref={inputMenuRef}
           className="message-context-menu input-context-menu"
           style={{ top: inputContextMenu.y, left: inputContextMenu.x }}
           onClick={closeInputContextMenu}
