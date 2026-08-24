@@ -51,67 +51,7 @@ function initDatabase() {
   `);
 
   // Миграции для добавления колонок
-  const migrations = [
-    { table: 'users', column: 'mobile_phone', type: 'TEXT' },
-    { table: 'users', column: 'work_phone', type: 'TEXT' },
-    { table: 'users', column: 'status_text', type: 'TEXT' },
-    { table: 'users', column: 'is_admin', type: 'INTEGER DEFAULT 0' },
-    { table: 'users', column: 'has_seen_welcome', type: 'INTEGER DEFAULT 0' },
-    { table: 'users', column: 'can_book_meeting_room', type: 'INTEGER DEFAULT 0' },
-    { table: 'users', column: 'can_edit_wiki', type: 'INTEGER DEFAULT 0' },
-    { table: 'users', column: 'upload_quota', type: 'INTEGER DEFAULT 524288000' },
-    { table: 'users', column: 'totp_secret', type: 'TEXT' },
-    { table: 'users', column: 'totp_enabled', type: 'INTEGER DEFAULT 0' },
-    { table: 'messages', column: 'read_at', type: 'TEXT' },
-    { table: 'messages', column: 'forwarded_from', type: 'TEXT' },
-    { table: 'messages', column: 'reply_to', type: 'TEXT' },
-    { table: 'messages', column: 'is_pinned', type: 'INTEGER DEFAULT 0' },
-    { table: 'messages', column: 'pinned_by', type: 'TEXT' },
-    { table: 'messages', column: 'pinned_at', type: 'TEXT' },
-    { table: 'messages', column: 'edited', type: 'INTEGER DEFAULT 0' },
-    { table: 'messages', column: 'edited_at', type: 'TEXT' },
-    { table: 'users', column: 'e2ee_public_key', type: 'TEXT' },
-    { table: 'messages', column: 'e2ee', type: 'INTEGER DEFAULT 0' },
-    { table: 'messages', column: 'e2ee_nonce', type: 'TEXT' },
-    { table: 'messages', column: 'e2ee_ephemeral', type: 'TEXT' },
-    { table: 'messages', column: 'expires_at', type: 'TEXT' },
-    { table: 'chats', column: 'e2ee', type: 'INTEGER DEFAULT 0' },
-    { table: 'calendar_tasks', column: 'task_time', type: 'TEXT' },
-    { table: 'calendar_tasks', column: 'task_end_time', type: 'TEXT' },
-    { table: 'calendar_tasks', column: 'reminder_time', type: 'TEXT' },
-    { table: 'chats', column: 'avatar', type: 'TEXT' },
-    { table: 'user_sessions', column: 'last_seen', type: 'TEXT DEFAULT CURRENT_TIMESTAMP' },
-    { table: 'messages', column: 'poll_id', type: 'TEXT' },
-    { table: 'polls', column: 'is_anonymous', type: 'INTEGER DEFAULT 0' },
-    { table: 'polls', column: 'allows_multiple', type: 'INTEGER DEFAULT 0' },
-    { table: 'polls', column: 'closes_at', type: 'TEXT' },
-    { table: 'polls', column: 'hide_results_until_close', type: 'INTEGER DEFAULT 0' },
-    { table: 'announcements', column: 'priority', type: 'TEXT DEFAULT \'normal\'' },
-    { table: 'user_device_sessions', column: 'device_id', type: 'TEXT' },
-    { table: 'user_device_sessions', column: 'device_name', type: 'TEXT DEFAULT \'\'' },
-    { table: 'user_device_sessions', column: 'ip_address', type: 'TEXT DEFAULT \'\'' },
-    { table: 'user_device_sessions', column: 'socket_ids', type: 'TEXT NOT NULL DEFAULT \'[]\'' },
-    { table: 'user_device_sessions', column: 'login_time', type: 'TEXT DEFAULT CURRENT_TIMESTAMP' },
-    { table: 'user_device_sessions', column: 'last_seen', type: 'TEXT DEFAULT CURRENT_TIMESTAMP' },
-    { table: 'user_device_sessions', column: 'is_current', type: 'INTEGER DEFAULT 0' },
-    { table: 'messages', column: 'button_data', type: 'TEXT' },
-    { table: 'users', column: 'onboarding_completed', type: 'INTEGER DEFAULT 0' },
-    { table: 'wiki_articles', column: 'views', type: 'INTEGER DEFAULT 0' },
-    { table: 'wiki_articles', column: 'access_level', type: 'TEXT DEFAULT \'public\'' },
-    { table: 'users', column: 'can_view_kpi', type: 'INTEGER DEFAULT 0' },
-    { table: 'users', column: 'app_version', type: 'TEXT DEFAULT \'\'' },
-    { table: 'chat_user_settings', column: 'deleted_at', type: 'TEXT' },
-    { table: 'calendar_tasks', column: 'source_chat_id', type: 'TEXT' },
-    { table: 'calendar_tasks', column: 'source_message_id', type: 'TEXT' }
-  ];
 
-  migrations.forEach(({ table, column, type }) => {
-    try {
-      db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
-    } catch (e) {
-      // Колонка уже существует
-    }
-  });
 
   // Таблица сессий для восстановления после рестарта (legacy, per-user)
   db.exec(`
@@ -489,6 +429,69 @@ function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_message_reads_message ON message_reads(message_id);
     CREATE INDEX IF NOT EXISTS idx_message_reads_user ON message_reads(user_id);
   `);
+
+  // Миграции колонок — ПОСЛЕ создания всех таблиц
+  const migrations = [
+    { table: 'users', column: 'mobile_phone', type: 'TEXT' },
+    { table: 'users', column: 'work_phone', type: 'TEXT' },
+    { table: 'users', column: 'status_text', type: 'TEXT' },
+    { table: 'users', column: 'is_admin', type: 'INTEGER DEFAULT 0' },
+    { table: 'users', column: 'has_seen_welcome', type: 'INTEGER DEFAULT 0' },
+    { table: 'users', column: 'can_book_meeting_room', type: 'INTEGER DEFAULT 0' },
+    { table: 'users', column: 'can_edit_wiki', type: 'INTEGER DEFAULT 0' },
+    { table: 'users', column: 'upload_quota', type: 'INTEGER DEFAULT 524288000' },
+    { table: 'users', column: 'totp_secret', type: 'TEXT' },
+    { table: 'users', column: 'totp_enabled', type: 'INTEGER DEFAULT 0' },
+    { table: 'messages', column: 'read_at', type: 'TEXT' },
+    { table: 'messages', column: 'forwarded_from', type: 'TEXT' },
+    { table: 'messages', column: 'reply_to', type: 'TEXT' },
+    { table: 'messages', column: 'is_pinned', type: 'INTEGER DEFAULT 0' },
+    { table: 'messages', column: 'pinned_by', type: 'TEXT' },
+    { table: 'messages', column: 'pinned_at', type: 'TEXT' },
+    { table: 'messages', column: 'edited', type: 'INTEGER DEFAULT 0' },
+    { table: 'messages', column: 'edited_at', type: 'TEXT' },
+    { table: 'users', column: 'e2ee_public_key', type: 'TEXT' },
+    { table: 'messages', column: 'e2ee', type: 'INTEGER DEFAULT 0' },
+    { table: 'messages', column: 'e2ee_nonce', type: 'TEXT' },
+    { table: 'messages', column: 'e2ee_ephemeral', type: 'TEXT' },
+    { table: 'messages', column: 'expires_at', type: 'TEXT' },
+    { table: 'chats', column: 'e2ee', type: 'INTEGER DEFAULT 0' },
+    { table: 'calendar_tasks', column: 'task_time', type: 'TEXT' },
+    { table: 'calendar_tasks', column: 'task_end_time', type: 'TEXT' },
+    { table: 'calendar_tasks', column: 'reminder_time', type: 'TEXT' },
+    { table: 'chats', column: 'avatar', type: 'TEXT' },
+    { table: 'user_sessions', column: 'last_seen', type: 'TEXT DEFAULT CURRENT_TIMESTAMP' },
+    { table: 'messages', column: 'poll_id', type: 'TEXT' },
+    { table: 'polls', column: 'is_anonymous', type: 'INTEGER DEFAULT 0' },
+    { table: 'polls', column: 'allows_multiple', type: 'INTEGER DEFAULT 0' },
+    { table: 'polls', column: 'closes_at', type: 'TEXT' },
+    { table: 'polls', column: 'hide_results_until_close', type: 'INTEGER DEFAULT 0' },
+    { table: 'announcements', column: 'priority', type: 'TEXT DEFAULT \'normal\'' },
+    { table: 'user_device_sessions', column: 'device_id', type: 'TEXT' },
+    { table: 'user_device_sessions', column: 'device_name', type: 'TEXT DEFAULT \'\'' },
+    { table: 'user_device_sessions', column: 'ip_address', type: 'TEXT DEFAULT \'\'' },
+    { table: 'user_device_sessions', column: 'socket_ids', type: 'TEXT NOT NULL DEFAULT \'[]\'' },
+    { table: 'user_device_sessions', column: 'login_time', type: 'TEXT DEFAULT CURRENT_TIMESTAMP' },
+    { table: 'user_device_sessions', column: 'last_seen', type: 'TEXT DEFAULT CURRENT_TIMESTAMP' },
+    { table: 'user_device_sessions', column: 'is_current', type: 'INTEGER DEFAULT 0' },
+    { table: 'messages', column: 'button_data', type: 'TEXT' },
+    { table: 'users', column: 'onboarding_completed', type: 'INTEGER DEFAULT 0' },
+    { table: 'wiki_articles', column: 'views', type: 'INTEGER DEFAULT 0' },
+    { table: 'wiki_articles', column: 'access_level', type: 'TEXT DEFAULT \'public\'' },
+    { table: 'users', column: 'can_view_kpi', type: 'INTEGER DEFAULT 0' },
+    { table: 'users', column: 'app_version', type: 'TEXT DEFAULT \'\'' },
+    { table: 'chat_user_settings', column: 'deleted_at', type: 'TEXT' },
+    { table: 'calendar_tasks', column: 'source_chat_id', type: 'TEXT' },
+    { table: 'calendar_tasks', column: 'source_message_id', type: 'TEXT' }
+  ];
+
+  migrations.forEach(({ table, column, type }) => {
+    try {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+    } catch (e) {
+      // Колонка уже существует
+    }
+  });
 
   // Проверка и создание общего чата
   const generalChat = db.prepare("SELECT id FROM chats WHERE id = ?").get('general');
