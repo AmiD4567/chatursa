@@ -494,6 +494,24 @@ io.on('connection', (socket) => {
     callback({ messages: batch, hasMore });
   });
 
+  // Свежий список чатов (используется при открытии чата из системного уведомления)
+  socket.on('get_chats', () => {
+    const onlineUser = onlineUsers.get(socket.id);
+    if (!onlineUser) return;
+    socket.emit('chats_list', { chats: getUserChats(onlineUser.id) });
+  });
+
+  // Возврат скрытого чата в список (клик по уведомлению скрытого чата)
+  socket.on('unhide_chat', ({ chatId } = {}) => {
+    const onlineUser = onlineUsers.get(socket.id);
+    if (!onlineUser || !chatId) return;
+    try {
+      db.run('UPDATE chat_user_settings SET deleted_at = NULL WHERE user_id = ? AND chat_id = ?', [onlineUser.id, chatId]);
+    } catch (err) {
+      console.error('unhide_chat:', err.message);
+    }
+  });
+
   // Возвращает отображаемое имя чата (для direct — имя собеседника)
   // (определение вынесено на модульный уровень: getChatDisplayName)
 

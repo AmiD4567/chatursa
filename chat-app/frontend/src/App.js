@@ -349,6 +349,9 @@ function App() {
   const [isDragOver, setIsDragOver] = useState(false);
   // Файл тащат над областью переписки (а не над полем ввода)
   const [isDragOverMessages, setIsDragOverMessages] = useState(false);
+  // Открытие чата из системного уведомления: отложенная цель и таймер повторов
+  const pendingNotificationChatIdRef = useRef(null);
+  const notificationRetryTimerRef = useRef(null);
   const [isTyping, setIsTyping] = useState(false);
   const [typingUsers, setTypingUsers] = useState({}); // { userId: { username, timeout } }
   const [showNewChatModal, setShowNewChatModal] = useState(false);
@@ -2395,37 +2398,76 @@ function App() {
     currentUserRef.current = currentUser;
   }, [currentUser]);
 
-  // Обработчик открытия чата из уведомления (для Electron)
+  // Обработчик открытия чата из уведомления (для Electron).
+  // Подписка однократная: свежие данные берём из рефов — иначе колбэк
+  // ловит протухший снапшот chats и «через раз» не находит чат.
   useEffect(() => {
-    let cleanup;
-    if (window.electronAPI && window.electronAPI.onOpenChatFromNotification) {
-      cleanup = window.electronAPI.onOpenChatFromNotification((chatId) => {
-        console.log('Открываем чат из уведомления:', chatId);
-        
-        // Находим чат в списке
-        const chatToOpen = chats.find(c => c.id === chatId);
-        
-        if (chatToOpen) {
-          // Открываем чат
-          handleSelectChat(chatToOpen);
-        } else {
-          // Если чат не найден, пробуем загрузить список чатов заново
-          console.log('Чат не найден в списке, загружаем чаты...');
-          if (socket) {
-            socket.emit('get_chats');
-          }
-          // Пробуем открыть чат через небольшую задержку
-          setTimeout(() => {
-            const chat = chats.find(c => c.id === chatId);
-            if (chat) {
-              handleSelectChat(chat);
-            }
-          }, 500);
+    if (!window.electronAPI?.onOpenChatFromNotification) return;
+
+    const clearRetry = () => {
+      if (notificationRetryTimerRef.current) {
+        clearTimeout(notificationRetryTimerRef.current);
+        notificationRetryTimerRef.current = null;
+      }
+    };
+
+    const cleanupOpen = window.electronAPI.onOpenChatFromNotification((chatId) => {
+      console.log('Открываем чат из уведомления:', chatId);
+      // Клик по старому тосту до завершения логина — игнорируем
+      if (!currentUserRef.current || !socketRef.current) return;
+
+      // Быстрый путь: чат уже в списке
+      const chatToOpen = chatsRef.current.find(c => c.id === chatId);
+      if (chatToOpen) {
+        handleSelectChatRef.current(chatToOpen);
+        return;
+      }
+
+      // Чата нет в списке (скрыт/создан офлайн): снимаем hidden, запрашиваем
+      // свежий список и несколько раз пробуем открыть по новым данным
+      console.log('Чат из уведомления не найден в списке, запрашиваем актуальный:', chatId);
+      pendingNotificationChatIdRef.current = chatId;
+      socketRef.current.emit('unhide_chat', { chatId });
+      socketRef.current.emit('get_chats');
+
+      let retriesLeft = 5;
+      clearRetry();
+      const retry = () => {
+        if (pendingNotificationChatIdRef.current !== chatId) return;
+        const fresh = chatsRef.current.find(c => c.id === chatId);
+        if (fresh) {
+          pendingNotificationChatIdRef.current = null;
+          handleSelectChatRef.current(fresh);
+          return;
         }
-      });
-    }
-    return () => { if (cleanup) cleanup(); };
-  }, [chats, socket]);
+        if (retriesLeft-- <= 0) {
+          pendingNotificationChatIdRef.current = null;
+          console.warn('Чат из уведомления так и не найден:', chatId);
+          return;
+        }
+        notificationRetryTimerRef.current = setTimeout(retry, 300);
+      };
+      retry();
+    });
+
+    return () => {
+      clearRetry();
+      cleanupOpen();
+    };
+  }, []);
+
+  // Свежий список чатов с сервера — обновляем стейт; отложенное открытие
+  // подхватит его через chatsRef на следующем рендере или таймером retry
+  useEffect(() => {
+    if (!socket) return;
+    const onChatsList = (data) => {
+      if (Array.isArray(data?.chats)) {
+        setChats(data.chats);
+      }
+    };
+    socket.on('chats_list', onChatsList);
+    return () => socket.off('chats_list', onChatsList);
+  }, [socket]);
 
   // Генерация бейджа с количеством непрочитанных сообщений для панели задач
   function generateBadgeDataUrl(count) {
@@ -2460,9 +2502,16 @@ function App() {
     return canvas.toDataURL();
   }
 
+  // Стабильный доступ к актуальному handleSelectChat из однократных подписок (уведомления)
+  const handleSelectChatRef = useRef(null);
+  useEffect(() => {
+    handleSelectChatRef.current = handleSelectChat;
+  });
+
   // Отправляем общее количество непрочитанных сообщений в Electron для отображения бейджа
   useEffect(() => {
     chatsRef.current = chats;
+
     // Суммируем все непрочитанные сообщения из всех чатов
     const totalUnread = chats.reduce((sum, chat) => {
       return sum + (chat.unreadCount || 0);
