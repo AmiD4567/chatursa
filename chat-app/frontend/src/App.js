@@ -278,14 +278,20 @@ const BUBBLE_PRESETS = [
   { id: 'mono', name: 'Монохром', own: ['#2b2b2b', '#4a4a4a'], ownText: '#EEEEEE', other: '#E8E8E8', otherText: '#222222' }
 ];
 
-// Слова и эмодзи, запускающие конфетти (проверка без учёта регистра, как подстрока)
-const CONFETTI_KEYWORDS = ['поздравляю', 'с днём рождения', 'день рождения', 'happy birthday', 'congratulations', 'ура'];
+// Слова и эмодзи, запускающие конфетти.
+// Фразы ищем подстрокой, одиночные слова — точным совпадением слова
+// (иначе «Журавлев» ловит короткое «ура», как и «Урал», «культура»…)
+const CONFETTI_PHRASES = ['с днём рождения', 'день рождения', 'happy birthday'];
+const CONFETTI_WORDS = ['поздравляю', 'congratulations', 'ура'];
 const CONFETTI_EMOJIS = ['🎉', '🥳', '🎊'];
 
 function shouldTriggerConfetti(text) {
   if (!text || typeof text !== 'string') return false;
   const lower = text.toLowerCase();
-  return CONFETTI_KEYWORDS.some(k => lower.includes(k)) || CONFETTI_EMOJIS.some(e => text.includes(e));
+  if (CONFETTI_PHRASES.some(p => lower.includes(p))) return true;
+  // Токенизация с учётом кириллицы: знаки препинания не мешают («Ура!» → «ура»)
+  const words = lower.match(/[\p{L}\p{N}]+/gu) || [];
+  return CONFETTI_WORDS.some(w => words.includes(w)) || CONFETTI_EMOJIS.some(e => text.includes(e));
 }
 
 function App() {
