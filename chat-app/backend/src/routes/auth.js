@@ -6,7 +6,7 @@
 module.exports = function register(app, deps) {
   const { db, io, uuidv4, bcrypt, speakeasy, checkRateLimit, registerAttempts, loginAttempts } = deps;
 
-app.post('/api/register', (req, res) => {
+app.post('/api/register', async (req, res) => {
   const { username, email, password, confirmPassword, birthDate } = req.body;
 
   if (!username || !email || !password || !birthDate) {
@@ -40,7 +40,7 @@ app.post('/api/register', (req, res) => {
   }
 
   // Хеширование пароля
-  const passwordHash = bcrypt.hashSync(password, 10);
+  const passwordHash = await bcrypt.hash(password, 10);
   const userId = uuidv4();
   const avatar = `https://ui-avatars.com/api/?name=${encodeURIComponent(username)}&background=random`;
 
@@ -66,7 +66,7 @@ app.post('/api/register', (req, res) => {
 });
 
 // API для входа
-app.post('/api/login', (req, res) => {
+app.post('/api/login', async (req, res) => {
   const { email, password } = req.body;
 
   if (!email || !password) {
@@ -87,7 +87,7 @@ app.post('/api/login', (req, res) => {
     return res.status(401).json({ error: 'Неверный email или пароль' });
   }
   
-  const isValid = bcrypt.compareSync(password, user.password_hash);
+  const isValid = await bcrypt.compare(password, user.password_hash);
   if (!isValid) {
     return res.status(401).json({ error: 'Неверный email или пароль' });
   }

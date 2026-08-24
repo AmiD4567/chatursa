@@ -133,7 +133,7 @@ app.delete('/api/admin/users/:userId', (req, res) => {
 });
 
 // API для создания пользователя администратором
-app.post('/api/admin/users', (req, res) => {
+app.post('/api/admin/users', async (req, res) => {
   const { username, email, password, is_admin, adminId } = req.body;
 
   // Проверяем админа
@@ -159,7 +159,7 @@ app.post('/api/admin/users', (req, res) => {
   }
 
   // Хеширование пароля
-  const passwordHash = bcrypt.hashSync(password, 10);
+  const passwordHash = await bcrypt.hash(password, 10);
   const userId = uuidv4();
   const avatar = `https://ui-avatars.com/api/?name=${encodeURIComponent(username)}&background=random`;
 
@@ -280,7 +280,7 @@ app.put('/api/admin/users/:userId/kpi-rights', (req, res) => {
 });
 
 // API для сброса пароля пользователя
-app.put('/api/admin/users/:userId/reset-password', (req, res) => {
+app.put('/api/admin/users/:userId/reset-password', async (req, res) => {
   const { userId } = req.params;
   const { newPassword, adminId } = req.body;
 
@@ -294,7 +294,7 @@ app.put('/api/admin/users/:userId/reset-password', (req, res) => {
   }
 
   try {
-    const passwordHash = bcrypt.hashSync(newPassword, 10);
+    const passwordHash = await bcrypt.hash(newPassword, 10);
     db.run('UPDATE users SET password_hash = ? WHERE id = ?', [passwordHash, userId]);
 
 
