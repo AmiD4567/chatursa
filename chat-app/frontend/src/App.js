@@ -10085,6 +10085,25 @@ function App() {
                           />
                         ) : message.file.mimetype?.startsWith('audio/') ? (
                           <VoiceMessagePlayer src={normalizeFileUrl(message.file.url)} />
+                        ) : message.file.mimetype?.startsWith('video/') ? (
+                          <div className="message-video-wrapper">
+                            <video
+                              src={normalizeFileUrl(message.file.url)}
+                              className="message-video"
+                              controls
+                              preload="metadata"
+                              playsInline
+                            />
+                            <a
+                              href={`${SOCKET_URL}/api/download/${extractFileUuidFromUrl(message.file.url)}`}
+                              className="message-video-download"
+                              title={`Скачать ${message.file.filename}`}
+                              download
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              ⬇
+                            </a>
+                          </div>
                         ) : (
                           <a href={`${SOCKET_URL}/api/download/${extractFileUuidFromUrl(message.file.url)}`} className="file-link-main" title={message.file.filename} download>
                             <span className="file-icon-main">{getFileIcon(message.file.mimetype)}</span>
