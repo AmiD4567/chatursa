@@ -60,6 +60,28 @@
 - Правило на будущее: новые общие функции бэкенда — в `src/utils.js` или через deps
   (урок истории: compareVersions / getPollWithVotes / sendMeetingReminder).
 
+## Аудит доступа к папке проекта (реализовано 2026-08-25)
+
+Скрипты в `ops/`:
+
+| Скрипт | Назначение |
+|--------|-----------|
+| `ops/enable-folder-audit.ps1` | Однократная настройка (запуск от администратора): включает политику `Audit File System`, вешает SACL на `C:\ChatServer` (удаление/запись/создание/смена прав — чтение сознательно НЕ аудируется), увеличивает журнал Security до 256 МБ |
+| `ops/access-report.ps1` | Отчёт «кто входил и что делал» за период: HTML + CSV в `ops/reports/`. Секции: файловые операции по пользователям, входы (локально/RDP/сеть), неудачные попытки. Парсинг по XML-полям событий — не зависит от языка Windows. Служебные учётки исключаются параметром `-ExcludeAccounts` |
+
+**Применение** (требуется подтверждение UAC):
+
+```powershell
+# 1. Включить аудит (один раз):
+Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','C:\ChatServer\chat-app\ops\enable-folder-audit.ps1'
+
+# 2. Отчёт за последние 7 дней:
+powershell -ExecutionPolicy Bypass -File C:\ChatServer\chat-app\ops\access-report.ps1 -Days 7 -Open
+```
+
+Статус: скрипты написаны, синтаксис проверен; применение к системе — вручную
+(из фоновой сессии UAC-запрос подтвердить нельзя).
+
 ## Прогресс
 
 | Дата | Что сделано |
