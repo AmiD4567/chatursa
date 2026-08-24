@@ -428,6 +428,19 @@ function initDatabase() {
     );
     CREATE INDEX IF NOT EXISTS idx_message_reads_message ON message_reads(message_id);
     CREATE INDEX IF NOT EXISTS idx_message_reads_user ON message_reads(user_id);
+
+    CREATE TABLE IF NOT EXISTS calls (
+      id TEXT PRIMARY KEY,
+      type TEXT NOT NULL CHECK(type IN ('audio', 'video')),
+      initiator_id TEXT NOT NULL,
+      peer_id TEXT NOT NULL,
+      status TEXT DEFAULT 'ringing',
+      created_at TEXT,
+      answered_at TEXT,
+      ended_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_calls_initiator ON calls(initiator_id);
+    CREATE INDEX IF NOT EXISTS idx_calls_peer ON calls(peer_id);
   `);
 
   // Миграции колонок — ПОСЛЕ создания всех таблиц

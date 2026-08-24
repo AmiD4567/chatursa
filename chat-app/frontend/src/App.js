@@ -12,6 +12,8 @@ import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import DisconnectedOverlay from './DisconnectedOverlay';
 import InAppNotification from './InAppNotification';
+import useCall from './hooks/useCall';
+import CallOverlay from './CallOverlay';
 import ConfettiOverlay from './ConfettiOverlay';
 
 // Автоопределение адреса сервера.
@@ -25,7 +27,9 @@ const isDevServer = window.location.port === '3000';
 // iOS в браузере/PWA — используем нативные эмодзи, свою панель не показываем
 const isIOSWeb = /iPhone|iPad|iPod/i.test(navigator.userAgent) && !isElectron && !isCapacitor;
 if (isElectron || isCapacitor || isDevServer) {
-  SOCKET_URL = 'http://192.168.210.48:3001';
+  // HTTPS-эндпоинт сервера (dual-mode: :3001 остаётся для старых клиентов).
+  // getUserMedia (звонки) требует безопасного контекста.
+  SOCKET_URL = 'https://192.168.210.48:3002';
 } else {
   SOCKET_URL = window.location.origin;
 }
@@ -2403,6 +2407,22 @@ function App() {
   useEffect(() => {
     currentUserRef.current = currentUser;
   }, [currentUser]);
+
+  // ═══ Звонки 1:1 (WebRTC) ═══
+  const callApi = useCall({
+    socket,
+    currentUser,
+    onNotice: (m) => { if (typeof m === 'string') showInAppNotification('Звонок', m, null, activeChatIdRef.current); }
+  });
+  const callActions = {
+    acceptIncoming: callApi.acceptIncoming,
+    declineIncoming: callApi.declineIncoming,
+    cancelOutgoing: callApi.cancelOutgoing,
+    hangup: callApi.hangup,
+    toggleMic: callApi.toggleMic,
+    toggleCam: callApi.toggleCam,
+    toggleShare: callApi.toggleShare
+  };
 
   // Обработчик открытия чата из уведомления (для Electron).
   // Подписка однократная: свежие данные берём из рефов — иначе колбэк
@@ -9796,6 +9816,26 @@ function App() {
               </div>
 
               <div className="chat-header-actions">
+                {activeChat.type === 'direct' && activeChat.participantsDetails && (() => {
+                  const other = activeChat.participantsDetails.find(
+                    p => p.username !== currentUser?.username
+                  );
+                  if (!other || other.username === 'Помощник') return null;
+                  return (
+                    <>
+                      <button
+                        className="chat-search-btn"
+                        title="Аудиозвонок"
+                        onClick={() => callApi.start(other, 'audio')}
+                      >📞</button>
+                      <button
+                        className="chat-search-btn"
+                        title="Видеозвонок"
+                        onClick={() => callApi.start(other, 'video')}
+                      >📹</button>
+                    </>
+                  );
+                })()}
                 <button
                   className={`chat-search-btn ${chatSearchActive ? 'active' : ''}`}
                   onClick={toggleChatSearch}
@@ -12868,6 +12908,26 @@ function App() {
             </div>
 
             <div className="modal-footer">
+              {viewUserProfileData.id && viewUserProfileData.username !== currentUser?.username && viewUserProfileData.username !== 'Помощник' && (
+                <>
+                  <button
+                    className="create-btn"
+                    title="Аудиозвонок"
+                    onClick={() => {
+                      setViewingUserProfile(false);
+                      callApi.start(viewUserProfileData, 'audio');
+                    }}
+                  >📞</button>
+                  <button
+                    className="create-btn"
+                    title="Видеозвонок"
+                    onClick={() => {
+                      setViewingUserProfile(false);
+                      callApi.start(viewUserProfileData, 'video');
+                    }}
+                  >📹</button>
+                </>
+              )}
               {viewUserProfileData.id && viewUserProfileData.username !== currentUser?.username && (
                 <button
                   className="create-btn"
@@ -14918,7 +14978,15 @@ function App() {
       )}
 
       {/* Конфетти на праздничные сообщения */}
-      {confettiKey > 0 && <ConfettiOverlay key={confettiKey} />}
+        {confettiKey > 0 && <ConfettiOverlay key={confettiKey} />}
+
+        {/* Оверлей звонка (аудио/видео 1:1) */}
+        <CallOverlay
+          call={callApi.call}
+          localStream={callApi.localStream}
+          remoteStream={callApi.remoteStream}
+          actions={callActions}
+        />
     </div>
   );
 }

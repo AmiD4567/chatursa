@@ -921,6 +921,7 @@ try {
   require('./src/routes/hr')(app, sharedDeps);
   require('./src/routes/announcements')(app, sharedDeps);
   require('./src/routes/polls')(app, sharedDeps);
+  require('./src/routes/calls')(app, sharedDeps);
 
   // Инициализация бота-помощника (после того как db готов)
   bot = initBotEngine({ db, io, uuidv4, encryptText });

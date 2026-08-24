@@ -1,0 +1,109 @@
+/* ══════════ Оверлей звонка ══════════ */
+.call-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 12000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(10, 10, 20, 0.92);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+.call-bg-blur {
+  position: absolute;
+  inset: -40px;
+  background-size: cover;
+  background-position: center;
+  filter: blur(60px) brightness(0.35);
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.call-remote-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: #000;
+}
+
+.call-center {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  color: #fff;
+}
+
+.call-avatar {
+  width: 128px;
+  height: 128px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 4px solid rgba(102, 126, 234, 0.7);
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.5);
+  animation: callPulse 1.8s ease-in-out infinite;
+}
+
+@keyframes callPulse {
+  0%, 100% { box-shadow: 0 12px 48px rgba(0,0,0,.5), 0 0 0 0 rgba(102,126,234,.5); }
+  50%      { box-shadow: 0 12px 48px rgba(0,0,0,.5), 0 0 0 18px rgba(102,126,234,0); }
+}
+.call-overlay.active .call-avatar { animation: none; }
+
+.call-peer-name {
+  font-size: 26px;
+  font-weight: 700;
+  text-shadow: 0 2px 8px rgba(0,0,0,.6);
+}
+
+.call-status {
+  font-size: 15px;
+  opacity: .85;
+}
+
+.call-local-pip {
+  position: absolute;
+  right: 24px;
+  top: 24px;
+  width: 220px;
+  height: 160px;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 8px 28px rgba(0,0,0,.45);
+  background: #000;
+}
+.call-local-pip video { width: 100%; height: 100%; object-fit: cover; }
+
+/* ── Кнопки ── */
+.call-controls {
+  display: flex;
+  gap: 18px;
+  margin-top: 18px;
+}
+
+.call-controls.wide { margin-top: 34px; }
+
+.call-btn {
+  width: 58px;
+  height: 58px;
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+  font-size: 22px;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.14);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transition: transform .15s ease, background .15s ease;
+}
+.call-btn:hover  { transform: scale(1.08); }
+.call-btn.big    { width: 74px; height: 74px; font-size: 30px; }
+.call-btn.danger { background: #e74c3c; }
+.call-btn.success{ background: #2ecc71; }
+.call-btn.warn   { background: rgba(233, 156, 61, .9); }

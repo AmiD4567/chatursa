@@ -12,6 +12,85 @@ module.exports = function registerSocketHandlers(deps) {
           userTotalUploadSize, DEFAULT_UPLOAD_QUOTA, conversationStates, botAnalytics } = deps;
 
 
+
+  // ══════════════════════════════════════════
+  // Звонки 1:1 — сигналинг WebRTC
+  // ══════════════════════════════════════════
+  const CALL_RING_TIMEOUT = parseInt(process.env.CALL_RING_TIMEOUT_MS || '45000', 10);
+  const callRings = new Map();   // callId -> timeout гудков
+  const callPeers  = new Map();  // callId -> { initiatorId, peerId, status, callType }
+  const callBusy   = new Map();  // userId -> callId (занят существующим звонком)
+
+  const endRingTimer = (callId) => {
+    const t = callRings.get(callId);
+    if (t) { clearTimeout(t); callRings.delete(callId); }
+  };
+  const releaseBusy = (callId) => {
+    for (const [uid, cid] of Array.from(callBusy.entries())) {
+      if (cid === callId) callBusy.delete(uid);
+    }
+  };
+
+  // Системное сообщение о пропущенном звонке (создаёт direct-чат при необходимости)
+  const insertMissedCallMessage = (fromInfo, toUserId, callType) => {
+    try {
+      let chat = getDirectChatBetweenUsers(fromInfo.id, toUserId);
+      if (!chat || !chat.id) {
+        const chatId = uuidv4();
+        db.run(`INSERT INTO chats (id, type, created_at) VALUES (?, 'direct', CURRENT_TIMESTAMP)`, [chatId]);
+        db.run(`INSERT INTO chat_participants (chat_id, user_id) VALUES (?, ?)`, [chatId, fromInfo.id]);
+        db.run(`INSERT INTO chat_participants (chat_id, user_id) VALUES (?, ?)`, [chatId, toUserId]);
+        chat = { id: chatId };
+      }
+      const label = callType === 'video' ? 'видеозвонок' : 'аудиозвонок';
+      const msg = {
+        id: uuidv4(), chatId: chat.id, senderId: fromInfo.id,
+        text: `📞 Пропущенный ${label}`, timestamp: new Date().toISOString()
+      };
+      db.prepare(`INSERT INTO messages (id, chat_id, sender_id, text, timestamp) VALUES (?, ?, ?, ?, ?)`)
+        .run(msg.id, chat.id, msg.senderId, msg.text, msg.timestamp);
+      distributeChatMessage(chat.id, {
+        ...msg, file: null, reply_to: null,
+        senderName: fromInfo.username, senderAvatar: fromInfo.avatar
+      }, getChatById(chat.id));
+    } catch (e) {
+      console.error('insertMissedCallMessage:', e.message);
+    }
+  };
+
+  // Зачистка при обрыве соединения пользователя
+  const cleanupCallsFor = (userId) => {
+    const callId = callBusy.get(userId);
+    if (!callId) return;
+    const meta = callPeers.get(callId);
+    callBusy.delete(userId);
+    if (!meta) return;
+    const otherId = userId === meta.initiatorId ? meta.peerId : meta.initiatorId;
+    endRingTimer(callId);
+
+    if (meta.status === 'ringing') {
+      if (userId === meta.initiatorId) {
+        meta.status = 'cancelled';
+        db.run(`UPDATE calls SET status='cancelled', ended_at=? WHERE id=?`, [new Date().toISOString(), callId]);
+        releaseBusy(callId);
+        emitToUser(otherId, 'call_cancelled', { callId });
+      } else {
+        meta.status = 'missed';
+        db.run(`UPDATE calls SET status='missed', ended_at=? WHERE id=?`, [new Date().toISOString(), callId]);
+        releaseBusy(callId);
+        const initiator = getUserById(meta.initiatorId);
+        if (initiator) insertMissedCallMessage(initiator, meta.peerId, meta.callType);
+        emitToUser(otherId, 'call_missed', { callId });
+      }
+      return;
+    }
+
+    // активный звонок — вторая сторона видит разрыв
+    meta.status = 'ended';
+    db.run(`UPDATE calls SET status='ended', ended_at=? WHERE id=?`, [new Date().toISOString(), callId]);
+    emitToUser(otherId, 'call_ended', { callId });
+  };
+
 io.on('connection', (socket) => {
   const clientIp = socket.handshake?.address?.replace(/^::ffff:/, '') || 'unknown';
   const userAgent = socket.handshake?.headers?.['user-agent'] || 'unknown';
@@ -514,6 +593,100 @@ io.on('connection', (socket) => {
 
   // Возвращает отображаемое имя чата (для direct — имя собеседника)
   // (определение вынесено на модульный уровень: getChatDisplayName)
+
+
+  socket.on('call_invite', ({ targetUserId, callType } = {}, callback) => {
+    const me = onlineUsers.get(socket.id);
+    if (!me || !targetUserId || !['audio', 'video'].includes(callType)) return;
+    if (targetUserId === me.id) return;
+    if (typeof callback !== 'function') return;
+
+    if (callBusy.has(me.id)) return callback({ ok: false, reason: 'you_busy' });
+    if (callBusy.has(targetUserId)) return callback({ ok: false, reason: 'peer_busy' });
+
+    const callId = uuidv4();
+    const now = new Date().toISOString();
+    db.run(`INSERT INTO calls (id, type, initiator_id, peer_id, status, created_at) VALUES (?, ?, ?, ?, 'ringing', ?)`,
+      [callId, callType, me.id, targetUserId, now]);
+    callPeers.set(callId, { initiatorId: me.id, peerId: targetUserId, status: 'ringing', callType });
+    callBusy.set(me.id, callId);
+    callBusy.set(targetUserId, callId);
+
+    emitToUser(targetUserId, 'call_incoming', {
+      callId, callType,
+      from: { id: me.id, username: me.username, avatar: me.avatar }
+    });
+
+    callRings.set(callId, setTimeout(() => {
+      const meta = callPeers.get(callId);
+      if (!meta || meta.status !== 'ringing') return;
+      meta.status = 'missed';
+      db.run(`UPDATE calls SET status='missed', ended_at=? WHERE id=?`, [new Date().toISOString(), callId]);
+      releaseBusy(callId);
+      emitToUser(meta.initiatorId, 'call_missed', { callId });
+      emitToUser(meta.peerId, 'call_cancelled', { callId });
+      insertMissedCallMessage(me, targetUserId, callType);
+    }, CALL_RING_TIMEOUT));
+
+    callback({ ok: true, callId });
+  });
+
+  socket.on('call_accept', ({ callId } = {}) => {
+    const me = onlineUsers.get(socket.id);
+    const meta = callPeers.get(callId);
+    if (!me || !meta || meta.peerId !== me.id || meta.status !== 'ringing') return;
+    endRingTimer(callId);
+    meta.status = 'active';
+    db.run(`UPDATE calls SET status='active', answered_at=? WHERE id=?`, [new Date().toISOString(), callId]);
+    emitToUser(meta.initiatorId, 'call_accepted', { callId });
+  });
+
+  socket.on('call_decline', ({ callId } = {}) => {
+    const me = onlineUsers.get(socket.id);
+    const meta = callPeers.get(callId);
+    if (!me || !meta || meta.peerId !== me.id || meta.status !== 'ringing') return;
+    endRingTimer(callId);
+    meta.status = 'declined';
+    releaseBusy(callId);
+    db.run(`UPDATE calls SET status='declined', ended_at=? WHERE id=?`, [new Date().toISOString(), callId]);
+    emitToUser(meta.initiatorId, 'call_declined', { callId });
+  });
+
+  socket.on('call_cancel', ({ callId } = {}) => {
+    const me = onlineUsers.get(socket.id);
+    const meta = callPeers.get(callId);
+    if (!me || !meta || meta.initiatorId !== me.id || meta.status !== 'ringing') return;
+    endRingTimer(callId);
+    meta.status = 'cancelled';
+    releaseBusy(callId);
+    db.run(`UPDATE calls SET status='cancelled', ended_at=? WHERE id=?`, [new Date().toISOString(), callId]);
+    emitToUser(meta.peerId, 'call_cancelled', { callId });
+  });
+
+  socket.on('call_hangup', ({ callId } = {}) => {
+    const me = onlineUsers.get(socket.id);
+    const meta = callPeers.get(callId);
+    if (!me || !meta) return;
+    if (me.id !== meta.initiatorId && me.id !== meta.peerId) return;
+    endRingTimer(callId);
+    meta.status = 'ended';
+    releaseBusy(callId);
+    db.run(`UPDATE calls SET status='ended', ended_at=? WHERE id=?`, [new Date().toISOString(), callId]);
+    const otherId = me.id === meta.initiatorId ? meta.peerId : meta.initiatorId;
+    emitToUser(otherId, 'call_ended', { callId });
+  });
+
+  // Ретрансляция SDP/ICE между участниками звонка
+  socket.on('rtc_relay', ({ toUserId, payload } = {}) => {
+    const me = onlineUsers.get(socket.id);
+    const callId = payload && payload.callId;
+    const meta = callPeers.get(callId);
+    if (!me || !meta || !toUserId || !payload) return;
+    if (me.id !== meta.initiatorId && me.id !== meta.peerId) return;
+    if (toUserId !== meta.initiatorId && toUserId !== meta.peerId) return;
+    emitToUser(toUserId, 'rtc_signal', { fromUserId: me.id, payload });
+  });
+
 
   // Отправка сообщения
   socket.on('send_message', (data) => {
@@ -1297,6 +1470,8 @@ io.on('connection', (socket) => {
   // Отключение
   socket.on('disconnect', () => {
     wsRateMap.delete(socket.id);
+    const disconnectingUser = onlineUsers.get(socket.id);
+    if (disconnectingUser) cleanupCallsFor(disconnectingUser.id);
     const now = new Date().toISOString();
     const onlineUser = onlineUsers.get(socket.id);
     if (onlineUser) {
