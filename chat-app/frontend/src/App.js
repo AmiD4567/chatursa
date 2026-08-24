@@ -11192,7 +11192,7 @@ function App() {
             <div className="report-viewer-header">
               <h3>{selectedReport.name}</h3>
               <div className="report-viewer-actions">
-                <a className="report-viewer-download" href={`${SOCKET_URL}/api/pbi-reports/${selectedReport.id}/pdf`} target="_blank" rel="noopener noreferrer" title="Скачать PDF">
+                <a className="report-viewer-download" href={`${SOCKET_URL}/api/pbi-reports/${selectedReport.id}/pdf`} download title="Скачать PDF">
                   <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
                     <polyline points="7 10 12 15 17 10"/>
@@ -11668,7 +11668,7 @@ function App() {
                 <div className="wiki-file-list">
                   {wikiFiles.filter(f => !f.mime_type?.startsWith('image/')).map(f => (
                     <div key={f.id} className="wiki-file-item">
-                      <a href={`${SOCKET_URL}/api/download/${f.file_path}`} target="_blank" rel="noopener noreferrer" className="wiki-file-link">{f.file_name}</a>
+                      <a href={`${SOCKET_URL}/api/download/${f.file_path}`} download className="wiki-file-link">{f.file_name}</a>
                       <div style={{display: 'flex', alignItems: 'center', gap: 6, marginTop: 2}}>
                         <span className="wiki-file-size">({(f.file_size / 1024).toFixed(1)} KB)</span>
                         {wikiEditMode && isAdmin && (

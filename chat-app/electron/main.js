@@ -259,6 +259,17 @@ function createWindow() {
   // Убираем меню (File, Edit, View, Window, Help)
   Menu.setApplicationMenu(null);
 
+  // Не создаём новые окна приложения: target="_blank"/window.open
+  // открываем в системном браузере (иначе — пустое белое окно).
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) {
+      shell.openExternal(url).catch((err) => {
+        logError(`Ошибка открытия внешней ссылки: ${err.message}`);
+      });
+    }
+    return { action: 'deny' };
+  });
+
   // Оставляем Ctrl+Shift+I для открытия консоли
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (input.control && input.shift && input.key.toLowerCase() === 'i' && !input.alt && !input.meta) {
