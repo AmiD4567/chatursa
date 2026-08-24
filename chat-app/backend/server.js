@@ -20,8 +20,17 @@ const speakeasy = require('speakeasy');
 const QRCode = require('qrcode');
 const cookieParser = require('cookie-parser');
 
-// Загрузка .env файла
-try { require('dotenv').config({ path: path.join(__dirname, '.env') }); } catch (e) {}
+// Асинхронный логгер: переопределяет console.* и ставит process-обработчики
+const { registerFatalSaveHook, flushLogsSync } = require('./src/logger');
+
+// Конфигурация (.env/config.json/пути/SSL)
+const {
+  config, HOST, PORT, HTTPS_PORT, DB_PATH, UPLOADS_PATH,
+  SERVER_URL, useHttps, httpsOptions, getLocalIP
+} = require('./src/config');
+
+// Шифрование конфиденциальных полей БД
+const { encryptText, decryptText, isEncrypted } = require('./src/crypto');
 
 // Firebase Admin SDK (FCM)
 const FCM_SERVICE_ACCOUNT_PATH = process.env.FCM_SERVICE_ACCOUNT_PATH || path.join(__dirname, 'firebase-service-account.json');
@@ -42,342 +51,26 @@ const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || 'BHOqP4mk3F0J_T0HPrs3Kf
 const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || 'y4O_8-8mDdYR4Cw6sUJLKYB9SO2nMxOquGpfyFOqxY0';
 webPush.setVapidDetails('mailto:admin@chatursa.local', VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
 
-// Настройки шифрования для конфиденциальности сообщений
-const ENCRYPTION_KEY = process.env.CHAT_ENCRYPTION_KEY;
-if (!ENCRYPTION_KEY) {
-  console.error('⚠️  CHAT_ENCRYPTION_KEY не задан в .env! Используется insecure default!');
-  console.error('⚠️  Создайте .env файл с CHAT_ENCRYPTION_KEY=<ваш-ключ>');
-}
-const FALLBACK_KEY = ENCRYPTION_KEY || 'my-super-secret-key-2026';
-const IV_LENGTH = 16;
-
-// Проверка: строка уже зашифрована? (формат: hexIV:hexCiphertext)
-function isEncrypted(text) {
-  if (!text || typeof text !== 'string') return false;
-  const parts = text.split(':');
-  if (parts.length < 2) return false;
-  try {
-    Buffer.from(parts[0], 'hex');
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// Функция шифрования текста
-function encryptText(text) {
-  if (!text || text.length === 0) return null;
-  // Если уже зашифровано — не шифруем повторно
-  if (isEncrypted(text)) return text;
-
-  const iv = crypto.randomBytes(IV_LENGTH);
-  const cipher = crypto.createCipheriv('aes-256-cbc', crypto.createHash('sha256').update(FALLBACK_KEY).digest(), iv);
-  let encrypted = cipher.update(text, 'utf8', 'hex');
-  encrypted += cipher.final('hex');
-
-  // Сохраняем IV вместе с зашифрованным текстом (IV нужен для расшифровки)
-  return iv.toString('hex') + ':' + encrypted;
-}
-
-// Функция расшифровки текста
-function decryptText(encryptedText) {
-  if (!encryptedText || encryptedText.length === 0) return null;
-  // Если не зашифровано — вернуть как есть (для обратной совместимости с существующими данными)
-  if (!isEncrypted(encryptedText)) return encryptedText;
-
-  try {
-    const [ivHex, encryptedHex] = encryptedText.split(':');
-    // Проверяем, что оба значения не пустые
-    if (!ivHex || !encryptedHex) {
-      // Не логгируем — бот может отправлять plaintext-сообщения, которые
-      // корректно возвращаются как есть (см. issue: console spam on bot usage)
-      return encryptedText;
-    }
-
-    const iv = Buffer.from(ivHex, 'hex');
-    // Проверяем длину IV (должна быть 16 байт для aes-256-cbc)
-    if (iv.length !== 16) {
-      // Не логгируем — см. выше
-      return encryptedText;
-    }
-    
-    const decipher = crypto.createDecipheriv('aes-256-cbc', crypto.createHash('sha256').update(FALLBACK_KEY).digest(), iv);
-    let decrypted = decipher.update(encryptedHex, 'hex', 'utf8');
-    decrypted += decipher.final('utf8');
-    return decrypted;
-  } catch (err) {
-    console.error('Ошибка расшифровки:', err.message);
-    // При ошибке возвращаем оригинальный текст для предотвращения потери данных
-    return encryptedText;
-  }
-}
-
 // Функция для получения локального IP
-
-// ============================================
-// Асинхронный буферизированный логгер
-// Полностью неблокирующий: ни один console.* вызов не происходит синхронно
-// ============================================
-const LOG_FILE = path.join(__dirname, 'server-runtime.log');
-const LOG_FLUSH_INTERVAL = 3000; // flush каждые 3 сек (было 2с)
-const LOG_MAX_BATCH_SIZE = 100;  // макс. строк в одном write (было 50)
-const LOG_MAX_SIZE = 50 * 1024 * 1024; // ротация при 50MB
-const LOG_MAX_FILES = 5;               // хранить до 5 старых логов
-
-const logQueue = [];             // очередь сообщений
-let logFlushTimer = null;        // таймер периодического сброса
-let isFlushing = false;          // флаг: идёт запись в файл
-
-/**
- * enqueue — добавить сообщение в очередь логирования.
- * Не блокирует event loop, запись происходит асинхронно.
- */
-function logEnqueue(level, ...args) {
-  const timestamp = new Date().toISOString();
-  const line = `[${timestamp}] [${level}] ${args.join(' ')}\n`;
-
-  // ERROR — приоритетная очередь (в начало), но выводим асинхронно
-  if (level === 'ERROR') {
-    logQueue.unshift(line);
-    flushLogs();
-    return;
-  }
-
-  // Обычные логи — в очередь
-  logQueue.push(line);
-
-  // Защита от переполнения очереди
-  if (logQueue.length > 10000) {
-    logQueue.splice(0, 5000);
-  }
-
-  // Если таймер ещё не запущен — запускаем debounce
-  if (!logFlushTimer) {
-    logFlushTimer = setTimeout(() => {
-      flushLogs();
-    }, LOG_FLUSH_INTERVAL);
-  }
-}
-
-/**
- * rotateLogFile — ротация лог-файла при превышении LOG_MAX_SIZE.
- * server-runtime.log → server-runtime.1.log → ... → server-runtime.N.log
- */
-function rotateLogFile() {
-  try {
-    const stat = fs.statSync(LOG_FILE);
-    if (stat.size < LOG_MAX_SIZE) return;
-    // Удаляем самый старый файл
-    const oldest = path.join(__dirname, `server-runtime.${LOG_MAX_FILES}.log`);
-    if (fs.existsSync(oldest)) fs.unlinkSync(oldest);
-    // Сдвигаем: N → N+1, ... , 1 → 2
-    for (let i = LOG_MAX_FILES - 1; i >= 1; i--) {
-      const oldName = path.join(__dirname, `server-runtime.${i}.log`);
-      const newName = path.join(__dirname, `server-runtime.${i + 1}.log`);
-      if (fs.existsSync(oldName)) fs.renameSync(oldName, newName);
-    }
-    // Текущий → .1
-    fs.renameSync(LOG_FILE, path.join(__dirname, 'server-runtime.1.log'));
-  } catch (err) {
-    origConsoleError(`[logger] Ошибка ротации лога: ${err.message}`);
-  }
-}
-
-/**
- * flushLogs — записать накопленные логи в файл И вывести в консоль.
- * Вызывается по таймеру или при переполнении буфера.
- */
-async function flushLogs() {
-  if (isFlushing) return;
-  isFlushing = true;
-
-  // Собираем батч из очереди
-  const batch = logQueue.splice(0, LOG_MAX_BATCH_SIZE);
-  if (batch.length === 0) {
-    isFlushing = false;
-    // Если очередь ещё есть — планируем следующий flush
-    if (logQueue.length > 0) {
-      logFlushTimer = setTimeout(flushLogs, 100);
-    }
-    return;
-  }
-
-  const data = batch.join('');
-
-  try {
-    rotateLogFile(); // проверяем размер перед записью
-    await fs.promises.appendFile(LOG_FILE, data);
-  } catch (err) {
-    // Если файл-лог недоступен — выводим в консоль как ошибку
-      origConsoleError(`[logger] Ошибка записи в лог-файл: ${err.message}`);
-  }
-
-  isFlushing = false;
-
-  // Если остались сообщения — продолжаем flush
-  if (logQueue.length > 0) {
-    logFlushTimer = setTimeout(flushLogs, 100);
-  } else {
-    logFlushTimer = null;
-  }
-}
-
-/**
- * flushLogsSync — синхронный сброс (только для graceful shutdown).
- */
-function flushLogsSync() {
-  if (logQueue.length === 0) return;
-  try {
-    const data = logQueue.join('');
-    fs.appendFileSync(LOG_FILE, data);
-  } catch (err) {
-    process.stderr.write(`[logger] Ошибка синхронной записи в лог: ${err.message}\n`);
-  }
-  logQueue.length = 0;
-}
-
-// Сохраняем оригинальный console.log для sql.js (WASM конфликтует с setImmediate)
-const origConsoleLog = console.log.bind(console);
-const origConsoleWarn = console.warn.bind(console);
-const origConsoleError = console.error.bind(console);
-
-// Переопределяем console.log / console.warn → полностью асинхронный логгер
-console.log = (...args) => {
-  origConsoleLog(...args);
-  logEnqueue('INFO', ...args);
-};
-
-console.warn = (...args) => {
-  origConsoleWarn(...args);
-  logEnqueue('WARN', ...args);
-};
-
-// console.error тоже полностью асинхронный
-console.error = (...args) => {
-  origConsoleError(...args);
-  logEnqueue('ERROR', ...args);
-};
-
-// Глобальный обработчик unhandledRejection → асинхронный лог + graceful shutdown
-process.on('unhandledRejection', (reason, promise) => {
-  const reasonStr = reason?.stack || reason;
-  origConsoleError('[unhandledRejection]', reasonStr);
-  logEnqueue('ERROR', '[unhandledRejection]', reasonStr);
-});
-
-// Глобальный обработчик uncaughtException — синхронное исключение, процесс умирает.
-// Сохраняем БД + логи, потом выходим.
-process.on('uncaughtException', (err) => {
-  const errStr = err?.stack || err;
-  origConsoleError('[uncaughtException]', errStr);
-  logEnqueue('ERROR', '[uncaughtException]', errStr);
-  flushLogsSync();
-  if (db) {
-    try {
-      saveDatabaseSync();
-    } catch (e) {
-      origConsoleError('[uncaughtException] Ошибка сохранения БД:', e);
-    }
-    try {
-      db.close();
-    } catch (e) {
-      // игнорируем
-    }
-  }
-  process.exit(1);
-});
-
-// Запускаем первый flush-таймер при старте
-logFlushTimer = setTimeout(flushLogs, LOG_FLUSH_INTERVAL);
-
 
 // ============================================
 // Конец асинхронного логгера
 // ============================================
 
-// Загрузка конфигурации
-let config = {};
-const configPath = path.join(__dirname, 'config.json');
-if (fs.existsSync(configPath)) {
-  try {
-    const configFileContent = fs.readFileSync(configPath, 'utf8');
-    config = JSON.parse(configFileContent);
-    console.log('Конфигурация загружена из config.json');
-  } catch (err) {
-    console.error('Ошибка чтения конфигурации:', err.message);
-  }
-} else {
-  console.log('Файл config.json не найден, используем настройки по умолчанию');
-}
-
-// Используем переменные окружения от Electron или значения из config
-const HOST = process.env.CHAT_APP_HOST || config.server?.host || '0.0.0.0';
-const PORT = process.env.CHAT_APP_PORT || config.server?.port || 3001;
-const DATA_PATH = process.env.CHAT_APP_DATA_PATH || __dirname;
-const DB_PATH = process.env.CHAT_APP_DB_PATH || path.join(__dirname, 'chat.db');
-const UPLOADS_PATH = process.env.CHAT_APP_UPLOADS_PATH || config.uploads?.path || path.join(__dirname, 'uploads');
-
-// Функция для получения локального IP
-function getLocalIP() {
-  const os = require('os');
-  const interfaces = os.networkInterfaces();
-  for (const name of Object.keys(interfaces)) {
-    for (const iface of interfaces[name]) {
-      if (iface.family === 'IPv4' && !iface.internal) {
-        return iface.address;
-      }
-    }
-  }
-  return 'localhost';
-}
-
-// URL сервера для доступа клиентам к файлам: по умолчанию localhost (для Electron), можно переопределить через env
-// Если SERVER_URL не задан в окружении или конфиге, используем локальный IP для доступности в сети
-let SERVER_URL = process.env.CHAT_APP_SERVER_URL || config.server?.url;
-if (!SERVER_URL) {
-  const localIP = getLocalIP();
-  SERVER_URL = `http://${localIP}:${PORT}`;
-}
-
-
 const app = express();
 
-// SSL опции — по умолчанию HTTPS выключен.
-// Для включения установите HTTPS_ENABLED=true в .env
-// и разместите сертификаты в ssl/server.key и ssl/server.crt (или укажите свои пути)
-const HTTPS_ENABLED = process.env.HTTPS_ENABLED === 'true';
-const SSL_KEY_PATH = process.env.SSL_KEY_PATH || path.join(__dirname, '../../ssl/server.key');
-const SSL_CERT_PATH = process.env.SSL_CERT_PATH || path.join(__dirname, '../../ssl/server.crt');
-let httpsOptions = null;
-let useHttps = false;
-if (HTTPS_ENABLED) {
-  if (fs.existsSync(SSL_KEY_PATH) && fs.existsSync(SSL_CERT_PATH)) {
-    try {
-      httpsOptions = {
-        key: fs.readFileSync(SSL_KEY_PATH, 'utf8'),
-        cert: fs.readFileSync(SSL_CERT_PATH, 'utf8')
-      };
-      useHttps = true;
-      console.log('SSL сертификаты загружены, включён HTTPS');
-    } catch (err) {
-      console.error('Ошибка загрузки SSL сертификатов:', err.message);
-      console.log('Сервер работает по HTTP');
-    }
-  } else {
-    console.log(`HTTPS_ENABLED=true, но сертификаты не найдены: ${SSL_KEY_PATH}, ${SSL_CERT_PATH}`);
-    console.log('Сервер работает по HTTP');
-  }
-} else {
-  console.log('Сервер работает по HTTP (для включения HTTPS установите HTTPS_ENABLED=true)');
-}
-
-const server = useHttps ? https.createServer(httpsOptions, app) : http.createServer(app);
-const io = new Server(server, {
+// Dual-mode: HTTP-сервер всегда активен (для Electron/Android/web по http),
+// HTTPS-сервер поднимается дополнительно при HTTPS_ENABLED=true (для iOS/веб).
+const httpServer = http.createServer(app);
+const httpsServer = useHttps ? https.createServer(httpsOptions, app) : null;
+const io = new Server({
   cors: {
     origin: "*",
     methods: ["GET", "POST"]
   }
 });
+io.attach(httpServer);
+if (httpsServer) io.attach(httpsServer);
 
 let db = null;
 
@@ -522,7 +215,12 @@ function initDatabase() {
     { table: 'messages', column: 'button_data', type: 'TEXT' },
     { table: 'users', column: 'onboarding_completed', type: 'INTEGER DEFAULT 0' },
     { table: 'wiki_articles', column: 'views', type: 'INTEGER DEFAULT 0' },
-    { table: 'wiki_articles', column: 'access_level', type: 'TEXT DEFAULT \'public\'' }
+    { table: 'wiki_articles', column: 'access_level', type: 'TEXT DEFAULT \'public\'' },
+    { table: 'users', column: 'can_view_kpi', type: 'INTEGER DEFAULT 0' },
+    { table: 'users', column: 'app_version', type: 'TEXT DEFAULT \'\'' },
+    { table: 'chat_user_settings', column: 'deleted_at', type: 'TEXT' },
+    { table: 'calendar_tasks', column: 'source_chat_id', type: 'TEXT' },
+    { table: 'calendar_tasks', column: 'source_message_id', type: 'TEXT' }
   ];
 
   migrations.forEach(({ table, column, type }) => {
@@ -734,6 +432,17 @@ function initDatabase() {
     );
     CREATE INDEX IF NOT EXISTS idx_push_user ON push_subscriptions(user_id);
 
+    CREATE TABLE IF NOT EXISTS chat_user_settings (
+      user_id TEXT NOT NULL,
+      chat_id TEXT NOT NULL,
+      pinned INTEGER DEFAULT 0,
+      muted INTEGER DEFAULT 0,
+      force_unread INTEGER DEFAULT 0,
+      cleared_at TEXT,
+      PRIMARY KEY (user_id, chat_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_chat_user_settings_user ON chat_user_settings(user_id);
+
     CREATE TABLE IF NOT EXISTS hr_requests (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
@@ -861,6 +570,14 @@ function initDatabase() {
     INSERT OR IGNORE INTO bot_settings (setting_key, setting_value) VALUES ('poll_creation_enabled', '1');
     INSERT OR IGNORE INTO bot_settings (setting_key, setting_value) VALUES ('support_enabled', '1');
     INSERT OR IGNORE INTO bot_settings (setting_key, setting_value) VALUES ('birthday_notifications_enabled', '1');
+    INSERT OR IGNORE INTO bot_settings (setting_key, setting_value) VALUES ('daily_thought_notifications_enabled', '1');
+
+    CREATE TABLE IF NOT EXISTS sent_daily_thoughts (
+      user_id TEXT NOT NULL,
+      thought_index INTEGER NOT NULL,
+      sent_date TEXT NOT NULL,
+      PRIMARY KEY (user_id, thought_index)
+    );
 
     CREATE TABLE IF NOT EXISTS support_requests (
       id TEXT PRIMARY KEY,
@@ -929,6 +646,61 @@ function initDatabase() {
     db.exec('ALTER TABLE user_sessions ADD COLUMN socket_ids TEXT NOT NULL DEFAULT \'[]\'');
   } catch (e) {
     // Колонка уже существует
+  }
+
+  // Миграция: переписываем старые http:// URL файлов и аватаров на текущий HTTPS-адрес.
+  // Приложение работает по HTTPS, поэтому http:// ссылки блокируются браузером (mixed content).
+  const migrateHttpUrl = (value) => {
+    if (typeof value !== 'string' || !value.startsWith('http://')) return value;
+    try {
+      const u = new URL(value);
+      return SERVER_URL + u.pathname + u.search;
+    } catch (e) {
+      return value;
+    }
+  };
+
+  try {
+    const fileRows = db.prepare("SELECT id, file_data FROM messages WHERE file_data LIKE '%http://%'").all();
+    let filesFixed = 0;
+    const fixFileStmt = db.prepare('UPDATE messages SET file_data = ? WHERE id = ?');
+    for (const row of fileRows) {
+      let parsed;
+      try {
+        parsed = JSON.parse(row.file_data);
+      } catch (e) {
+        continue;
+      }
+      let changed = false;
+      for (const key of Object.keys(parsed)) {
+        if ((key === 'url' || key === 'path') && typeof parsed[key] === 'string') {
+          const fixed = migrateHttpUrl(parsed[key]);
+          if (fixed !== parsed[key]) {
+            parsed[key] = fixed;
+            changed = true;
+          }
+        }
+      }
+      if (changed) {
+        fixFileStmt.run(JSON.stringify(parsed), row.id);
+        filesFixed++;
+      }
+    }
+
+    const avatarRows = db.prepare("SELECT id, avatar FROM users WHERE avatar LIKE 'http://%'").all();
+    let avatarsFixed = 0;
+    const fixAvatarStmt = db.prepare('UPDATE users SET avatar = ? WHERE id = ?');
+    for (const row of avatarRows) {
+      const fixed = migrateHttpUrl(row.avatar);
+      if (fixed !== row.avatar) {
+        fixAvatarStmt.run(fixed, row.id);
+        avatarsFixed++;
+      }
+    }
+
+    console.log(`Миграция http→https URL: сообщений=${filesFixed}, аватаров=${avatarsFixed}`);
+  } catch (e) {
+    console.error('Ошибка миграции http→https URL:', e.message);
   }
 
   console.log('База данных инициализирована');
@@ -1137,9 +909,11 @@ const upload = multer({
   limits: { fileSize: config.uploads?.maxFileSize || 50 * 1024 * 1024 } // 50MB лимит
 });
 
-// Принудительный редирект HTTP → HTTPS (код 301)
+// Принудительный редирект HTTP → HTTPS (код 301).
+// Отключён по умолчанию: в dual-mode HTTP-порт нужен десктопу/Android.
+// Включается только явно через HTTPS_REDIRECT=true в .env.
 app.use((req, res, next) => {
-  if (useHttps && !req.secure && req.headers['x-forwarded-proto'] !== 'https') {
+  if (process.env.HTTPS_REDIRECT === 'true' && useHttps && !req.secure && req.headers['x-forwarded-proto'] !== 'https') {
     return res.redirect(301, `https://${req.headers.host}${req.url}`);
   }
   next();
@@ -1148,17 +922,18 @@ app.use((req, res, next) => {
 // Helmet с настройками, совместимыми с WebSocket и стикерами
 const PROTOCOL = useHttps ? 'https' : 'http';
 const WS_PROTOCOL = useHttps ? 'wss:' : 'ws:';
+const LAN_HTTP_ORIGIN = `http://${getLocalIP()}:${PORT}`;
 const CSP_ORIGINS = process.env.CHAT_APP_SERVER_URL || `${PROTOCOL}://localhost:${PORT}`;
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      imgSrc: ["'self'", 'data:', 'https://ui-avatars.com', 'https://cdn.jsdelivr.net', CSP_ORIGINS],
-      connectSrc: ["'self'", WS_PROTOCOL, 'wss:', 'https://api.github.com', CSP_ORIGINS, 'capacitor://localhost', `${PROTOCOL}://localhost`],
+      imgSrc: ["'self'", 'data:', 'https://ui-avatars.com', 'https://cdn.jsdelivr.net', CSP_ORIGINS, LAN_HTTP_ORIGIN],
+      connectSrc: ["'self'", WS_PROTOCOL, 'wss:', 'https://api.github.com', CSP_ORIGINS, LAN_HTTP_ORIGIN, 'capacitor://localhost', `${PROTOCOL}://localhost`],
       fontSrc: ["'self'", 'data:', 'https://fonts.gstatic.com'],
       styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
       scriptSrc: ["'self'", "'unsafe-inline'"],
-      mediaSrc: ["'self'", CSP_ORIGINS],
+      mediaSrc: ["'self'", CSP_ORIGINS, LAN_HTTP_ORIGIN],
       workerSrc: ["'self'"],
     }
   },
@@ -1185,7 +960,7 @@ app.use((req, res, next) => {
 });
 
 // CORS — разрешаем только наш фронтенд
-const ALLOWED_ORIGINS = [CSP_ORIGINS, `${PROTOCOL}://localhost:3000`, `${PROTOCOL}://localhost:3001`, 'capacitor://localhost', `${PROTOCOL}://localhost`]; 
+const ALLOWED_ORIGINS = [CSP_ORIGINS, LAN_HTTP_ORIGIN, `${PROTOCOL}://localhost:3000`, `${PROTOCOL}://localhost:3001`, 'capacitor://localhost', `${PROTOCOL}://localhost`]; 
 app.use(cors({
   origin: (origin, cb) => {
     if (!origin || ALLOWED_ORIGINS.includes(origin) || origin.startsWith('http://192.168.') || origin.startsWith('https://192.168.') || origin.startsWith('capacitor://')) return cb(null, true);
@@ -1362,7 +1137,7 @@ app.get('/api/admin/users', (req, res) => {
     return res.status(403).json({ error: 'Доступ запрещён' });
   }
 
-  const userList = db.prepare('SELECT id, username, email, full_name, status, is_admin, created_at, last_seen, host, ip_address, can_book_meeting_room, can_edit_wiki FROM users ORDER BY username').all().map(row => ({
+  const userList = db.prepare('SELECT id, username, email, full_name, status, is_admin, created_at, last_seen, host, ip_address, can_book_meeting_room, can_edit_wiki, can_view_kpi, app_version FROM users ORDER BY username').all().map(row => ({
     id: row.id,
     username: row.username,
     email: row.email,
@@ -1374,10 +1149,19 @@ app.get('/api/admin/users', (req, res) => {
     host: row.host || 'unknown',
     ip_address: row.ip_address || 'unknown',
     can_book_meeting_room: row.can_book_meeting_room || 0,
-    can_edit_wiki: row.can_edit_wiki || 0
+    can_edit_wiki: row.can_edit_wiki || 0,
+    can_view_kpi: row.can_view_kpi || 0,
+    app_version: row.app_version || null
   }));
 
-  res.json({ users: userList });
+  // Версия сервера для бейджей «актуальная/устарела» — читаем безопасно
+  let serverVersion = '1.0.0';
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+    serverVersion = pkg.version || '1.0.0';
+  } catch (e) { /* package.json недоступен — используем дефолт */ }
+
+  res.json({ users: userList, serverVersion });
 });
 
 // Блокировка/разблокировка пользователя
@@ -1543,6 +1327,28 @@ app.put('/api/admin/users/:userId/wiki-rights', (req, res) => {
     res.json({ success: true });
   } catch (err) {
     console.error('Ошибка изменения права на wiki:', err);
+    res.status(500).json({ error: 'Ошибка при изменении права' });
+  }
+});
+
+app.put('/api/admin/users/:userId/kpi-rights', (req, res) => {
+  const { userId } = req.params;
+  const { can_view_kpi, adminId } = req.body;
+
+  if (!checkAdmin(adminId)) {
+    return res.status(403).json({ error: 'Доступ запрещён' });
+  }
+
+  const userCheck = db.prepare('SELECT username FROM users WHERE id = ?').get(userId);
+  if (userCheck && userCheck.username === 'Root') {
+    return res.status(400).json({ error: 'Нельзя изменить права Root' });
+  }
+
+  try {
+    db.run('UPDATE users SET can_view_kpi = ? WHERE id = ?', [can_view_kpi ? 1 : 0, userId]);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Ошибка изменения права на KPI:', err);
     res.status(500).json({ error: 'Ошибка при изменении права' });
   }
 });
@@ -2079,7 +1885,7 @@ app.post('/api/login', (req, res) => {
 
 // API для получения профиля пользователя
 app.get('/api/profile/:userId', (req, res) => {
-  const user = db.prepare('SELECT id, username, email, avatar, full_name, birth_date, about, mobile_phone, work_phone, status_text, is_admin, can_edit_wiki, can_book_meeting_room FROM users WHERE id = ?').get(req.params.userId);
+  const user = db.prepare('SELECT id, username, email, avatar, full_name, birth_date, about, mobile_phone, work_phone, status_text, is_admin, can_edit_wiki, can_book_meeting_room, can_view_kpi FROM users WHERE id = ?').get(req.params.userId);
   if (!user) {
     return res.status(404).json({ error: 'Пользователь не найден' });
   }
@@ -2381,9 +2187,15 @@ app.delete('/api/sessions/:sessionId', (req, res) => {
 // API для удаления чата
 app.delete('/api/chats/:chatId', (req, res) => {
   const { chatId } = req.params;
+  const userId = req.query.userId || (req.body || {}).userId;
 
   if (!chatId) {
     return res.status(400).json({ error: 'chatId обязателен' });
+  }
+
+  // Полное удаление чата (у всех участников) — только администратор
+  if (!userId || !checkAdmin(userId)) {
+    return res.status(403).json({ error: 'Удалять чат у всех участников может только администратор' });
   }
 
   try {
@@ -2404,6 +2216,117 @@ app.delete('/api/chats/:chatId', (req, res) => {
   } catch (err) {
     console.error('Ошибка удаления чата:', err);
     res.status(500).json({ error: 'Ошибка при удалении чата' });
+  }
+});
+
+// Закрепить / открепить чат для пользователя
+app.put('/api/chats/:chatId/pin', (req, res) => {
+  const { chatId } = req.params;
+  const { userId, pinned } = req.body;
+  if (!chatId || !userId) {
+    return res.status(400).json({ error: 'chatId и userId обязательны' });
+  }
+  try {
+    db.run(`
+      INSERT INTO chat_user_settings (user_id, chat_id, pinned, muted, force_unread, cleared_at)
+      VALUES (?, ?, ?, 0, 0, NULL)
+      ON CONFLICT(user_id, chat_id)
+      DO UPDATE SET pinned = ?
+    `, [userId, chatId, pinned ? 1 : 0, pinned ? 1 : 0]);
+    res.json({ success: true, pinned: !!pinned });
+  } catch (err) {
+    console.error('Ошибка закрепа чата:', err);
+    res.status(500).json({ error: 'Ошибка сервера' });
+  }
+});
+
+// Выключить / включить уведомления для чата
+app.put('/api/chats/:chatId/mute', (req, res) => {
+  const { chatId } = req.params;
+  const { userId, muted } = req.body;
+  if (!chatId || !userId) {
+    return res.status(400).json({ error: 'chatId и userId обязательны' });
+  }
+  try {
+    db.run(`
+      INSERT INTO chat_user_settings (user_id, chat_id, pinned, muted, force_unread, cleared_at)
+      VALUES (?, ?, 0, ?, 0, NULL)
+      ON CONFLICT(user_id, chat_id)
+      DO UPDATE SET muted = ?
+    `, [userId, chatId, muted ? 1 : 0, muted ? 1 : 0]);
+    res.json({ success: true, muted: !!muted });
+  } catch (err) {
+    console.error('Ошибка изменения уведомлений чата:', err);
+    res.status(500).json({ error: 'Ошибка сервера' });
+  }
+});
+
+// Пометить чат как прочитанный / непрочитанный
+app.put('/api/chats/:chatId/unread', (req, res) => {
+  const { chatId } = req.params;
+  const { userId, forceUnread } = req.body;
+  if (!chatId || !userId) {
+    return res.status(400).json({ error: 'chatId и userId обязательны' });
+  }
+  try {
+    db.run(`
+      INSERT INTO chat_user_settings (user_id, chat_id, pinned, muted, force_unread, cleared_at)
+      VALUES (?, ?, 0, 0, ?, NULL)
+      ON CONFLICT(user_id, chat_id)
+      DO UPDATE SET force_unread = ?
+    `, [userId, chatId, forceUnread ? 1 : 0, forceUnread ? 1 : 0]);
+    res.json({ success: true, forceUnread: !!forceUnread });
+  } catch (err) {
+    console.error('Ошибка отметки непрочитанного:', err);
+    res.status(500).json({ error: 'Ошибка сервера' });
+  }
+});
+
+// Очистить историю чата (только для этого пользователя)
+app.post('/api/chats/:chatId/clear', (req, res) => {
+  const { chatId } = req.params;
+  const { userId } = req.body;
+  if (!chatId || !userId) {
+    return res.status(400).json({ error: 'chatId и userId обязательны' });
+  }
+  try {
+    const now = new Date().toISOString();
+    db.run(`
+      INSERT INTO chat_user_settings (user_id, chat_id, pinned, muted, force_unread, cleared_at)
+      VALUES (?, ?, 0, 0, 0, ?)
+      ON CONFLICT(user_id, chat_id)
+      DO UPDATE SET cleared_at = ?, force_unread = 0
+    `, [userId, chatId, now, now]);
+    // Сбрасываем непрочитанные для пользователя в этом чате
+    db.run('DELETE FROM unread_messages WHERE user_id = ? AND chat_id = ?', [userId, chatId]);
+    res.json({ success: true, clearedAt: now });
+  } catch (err) {
+    console.error('Ошибка очистки истории:', err);
+    res.status(500).json({ error: 'Ошибка сервера' });
+  }
+});
+
+// Удалить чат только у себя (собеседника не затрагивает).
+// Чат скрыт до нового сообщения от собеседника — тогда возвращается в список (без старой истории за счёт cleared_at)
+app.post('/api/chats/:chatId/hide', (req, res) => {
+  const { chatId } = req.params;
+  const { userId } = req.body;
+  if (!chatId || !userId) {
+    return res.status(400).json({ error: 'chatId и userId обязательны' });
+  }
+  try {
+    const now = new Date().toISOString();
+    db.run(`
+      INSERT INTO chat_user_settings (user_id, chat_id, pinned, muted, force_unread, cleared_at, deleted_at)
+      VALUES (?, ?, 0, 0, 0, ?, ?)
+      ON CONFLICT(user_id, chat_id)
+      DO UPDATE SET cleared_at = ?, deleted_at = ?, force_unread = 0
+    `, [userId, chatId, now, now, now, now]);
+    db.run('DELETE FROM unread_messages WHERE user_id = ? AND chat_id = ?', [userId, chatId]);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Ошибка удаления чата у себя:', err);
+    res.status(500).json({ error: 'Ошибка сервера' });
   }
 });
 
@@ -2756,26 +2679,55 @@ function trimFilenameCache() {
 
 function findOriginalFilenameByUuid(uuid) {
   if (filenameCache.has(uuid)) return filenameCache.get(uuid);
-  if (typeof uuid !== 'string' || !/^[0-9a-fA-F-]+$/.test(uuid)) return null;
+  if (typeof uuid !== 'string') return null;
+
+  // UUID может содержать расширение файла (например: 08f464a3-...-abc.docx)
+  const baseUuid = uuid.replace(/\.[^.]+$/, '');
+  if (!/^[0-9a-fA-F-]+$/.test(baseUuid)) return null;
+
+  let originalFilename = null;
 
   try {
-    const searchPattern = `%"url":"${uuid}"%`;
-    const row = db.prepare(
-      "SELECT file_data FROM messages WHERE file_data LIKE ? LIMIT 1"
-    ).get(searchPattern);
-
-    if (row) {
-      try {
-        const parsed = JSON.parse(row.file_data);
-        if (parsed && parsed.filename) {
-          trimFilenameCache();
-          filenameCache.set(uuid, parsed.filename);
-          return parsed.filename;
-        }
-      } catch (e) { /* skip invalid JSON */ }
+    // 1) Файлы базы знаний: оригинальное имя в wiki_article_files.file_name
+    const wikiFile = db.prepare(
+      'SELECT file_name FROM wiki_article_files WHERE file_path = ? LIMIT 1'
+    ).get(uuid);
+    if (wikiFile && wikiFile.file_name) {
+      originalFilename = wikiFile.file_name;
     }
   } catch (err) {
-    console.error('Ошибка поиска оригинального имени файла:', err);
+    console.error('Ошибка поиска имени файла базы знаний:', err);
+  }
+
+  if (!originalFilename) {
+    try {
+      // 2) Файлы из чата: имя в messages.file_data (uuid — последний сегмент URL)
+      const searchPattern = `%"url":"%${uuid}"%`;
+      const row = db.prepare(
+        "SELECT file_data FROM messages WHERE file_data LIKE ? LIMIT 1"
+      ).get(searchPattern);
+
+      if (row) {
+        try {
+          const parsed = JSON.parse(row.file_data);
+          if (parsed && parsed.filename) {
+            originalFilename = parsed.filename;
+          }
+        } catch (e) { /* skip invalid JSON */ }
+      }
+    } catch (err) {
+      console.error('Ошибка поиска оригинального имени файла:', err);
+    }
+  }
+
+  if (originalFilename) {
+    // Старые записи могли испортить UTF-8 — пробуем восстановить (для чистых имён no-op)
+    try {
+      originalFilename = decodeURIComponent(escape(originalFilename));
+    } catch (_) {}
+    trimFilenameCache();
+    filenameCache.set(uuid, originalFilename);
+    return originalFilename;
   }
 
   trimFilenameCache();
@@ -2803,9 +2755,13 @@ app.get('/api/download/:uuid', (req, res) => {
     .replace(/%29/g, "%29")   // ) → %29
     .replace(/%2A/g, "%2A");  // * → %2A
 
+  // Legacy filename должен быть ASCII (Node не принимает сырой UTF-8 в заголовках):
+  // настоящая кириллица передаётся через filename* (RFC 5987)
+  const legacyName = uuid;
+
   res.setHeader(
     'Content-Disposition',
-    `attachment; filename*=UTF-8''${encodedName}; filename="${displayName}";`
+    `attachment; filename*=UTF-8''${encodedName}; filename="${legacyName}";`
   );
   res.setHeader('Cache-Control', 'no-cache');
   res.sendFile(filePath);
@@ -3062,7 +3018,7 @@ app.put('/api/meeting-room/bookings/:id', (req, res) => {
 
 // API для создания задачи
 app.post('/api/calendar/tasks', (req, res) => {
-  const { userId, title, description, taskDate, taskTime, taskEndTime, color, reminderType } = req.body;
+  const { userId, title, description, taskDate, taskTime, taskEndTime, color, reminderType, sourceChatId, sourceMessageId } = req.body;
 
   if (!userId || !title || !taskDate) {
     return res.status(400).json({ error: 'userId, title и taskDate обязательны' });
@@ -3087,7 +3043,7 @@ app.post('/api/calendar/tasks', (req, res) => {
         reminderTime = new Date(baseDate.getTime() - 6 * 60 * 60 * 1000).toISOString().slice(0, 19);
       } else if (reminderType === 'custom' && req.body.reminderCustomTime) {
         // reminderCustomTime — строка времени HH:MM
-        reminderTime = `${taskDate}T${req.body.reminderCustomTime}:00`;
+        reminderTime = new Date(`${taskDate}T${req.body.reminderCustomTime}`).toISOString().slice(0, 19);
       }
 
       if (reminderTime && user) {
@@ -3096,9 +3052,9 @@ app.post('/api/calendar/tasks', (req, res) => {
     }
 
     db.run(`
-      INSERT INTO calendar_tasks (id, user_id, title, description, task_date, task_time, task_end_time, color, reminder_time, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-    `, [taskId, userId, title, description || null, taskDate, taskTime || null, taskEndTime || null, color || '#667eea', reminderTime]);
+      INSERT INTO calendar_tasks (id, user_id, title, description, task_date, task_time, task_end_time, color, reminder_time, source_chat_id, source_message_id, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    `, [taskId, userId, title, description || null, taskDate, taskTime || null, taskEndTime || null, color || '#667eea', reminderTime, sourceChatId || null, sourceMessageId || null]);
 
 
     const task = db.prepare('SELECT * FROM calendar_tasks WHERE id = ?').get(taskId);
@@ -3138,7 +3094,7 @@ app.put('/api/calendar/tasks/:taskId', (req, res) => {
       } else if (reminderType === '6h') {
         reminderTime = new Date(baseDate.getTime() - 6 * 60 * 60 * 1000).toISOString().slice(0, 19);
       } else if (reminderType === 'custom' && reminderCustomTime) {
-        reminderTime = `${taskDate}T${reminderCustomTime}:00`;
+        reminderTime = new Date(`${taskDate}T${reminderCustomTime}`).toISOString().slice(0, 19);
       }
 
       if (reminderTime && user) {
@@ -3505,13 +3461,24 @@ app.post('/api/calendar/tasks/shared/:shareId/decline', (req, res) => {
 // API для получения сообщений чата
 app.get('/api/messages/:chatId', (req, res) => {
   const { chatId } = req.params;
-  const { userId } = req.query;
+  const { userId, before, limit } = req.query;
 
   if (!chatId || !userId) {
     return res.status(400).json({ error: 'chatId и userId обязательны' });
   }
 
   try {
+    // Пагинация: при наличии before/limit отдаём порцию старых сообщений
+    if (before) {
+      const lim = Math.min(Math.max(parseInt(limit, 10) || 50, 1), 200);
+      const older = getChatMessages(chatId, lim + 1, userId, String(before));
+      const hasMore = older.length > lim;
+      return res.json({ messages: hasMore ? older.slice(0, lim) : older, hasMore });
+    }
+
+    const clearedRow = db.prepare('SELECT cleared_at FROM chat_user_settings WHERE user_id = ? AND chat_id = ?').get(userId, chatId);
+    const clearedAt = clearedRow ? clearedRow.cleared_at : null;
+
     const rows = db.prepare(`
       SELECT m.id, m.chat_id, m.sender_id, m.text, m.file_data, m.reply_to, m.timestamp, m.read_at,
              m.e2ee, m.e2ee_nonce, m.e2ee_ephemeral, m.poll_id,
@@ -3519,8 +3486,9 @@ app.get('/api/messages/:chatId', (req, res) => {
       FROM messages m
       LEFT JOIN users u ON m.sender_id = u.id
       WHERE m.chat_id = ?
+        AND (? IS NULL OR m.timestamp > ?)
       ORDER BY m.timestamp ASC
-    `).all(chatId);
+    `).all(chatId, clearedAt, clearedAt);
 
     const messages = rows.map(row => {
       const isE2EE = row.e2ee === 1 || row.e2ee === true;
@@ -3666,6 +3634,166 @@ app.get('/api/search/messages', (req, res) => {
   }
 });
 
+// Единый поиск файлов: вложения чатов пользователя + файлы базы знаний (по именам файлов)
+app.get('/api/search/files', (req, res) => {
+  const { userId, query } = req.query;
+  if (!userId || !query || !query.trim()) {
+    return res.status(400).json({ error: 'userId и query обязательны' });
+  }
+
+  try {
+    const searchLower = query.trim().toLowerCase();
+
+    // ── 1. Вложения в сообщениях чатов пользователя ──
+    let chatFiles = [];
+    try {
+      const rows = db.prepare(`
+        SELECT m.id AS messageId, m.chat_id AS chatId, m.file_data, m.timestamp,
+               u.username AS senderName, c.name AS chatName,
+               cus.cleared_at AS clearedAt
+        FROM messages m
+        LEFT JOIN users u ON m.sender_id = u.id
+        LEFT JOIN chats c ON m.chat_id = c.id
+        LEFT JOIN chat_user_settings cus ON cus.chat_id = m.chat_id AND cus.user_id = ?
+        WHERE m.chat_id IN (SELECT chat_id FROM chat_participants WHERE user_id = ?)
+          AND m.file_data IS NOT NULL AND m.file_data != ''
+        ORDER BY m.timestamp DESC
+        LIMIT 300
+      `).all(userId, userId);
+
+      chatFiles = rows
+        .map(row => {
+          let file = null;
+          try { file = JSON.parse(row.file_data); } catch (e) { file = null; }
+          if (!file || !file.filename) return null;
+          // Уважаем персональную очистку истории: вложения из неё не показываем
+          if (row.clearedAt && row.timestamp <= row.clearedAt) return null;
+          return {
+            type: 'chatFile',
+            messageId: row.messageId,
+            chatId: row.chatId,
+            chatName: row.chatName || 'Чат',
+            senderName: row.senderName || '',
+            filename: String(file.filename),
+            url: file.url || '',
+            mimetype: file.mimetype || '',
+            size: file.size || 0,
+            timestamp: row.timestamp
+          };
+        })
+        .filter(f => f && f.filename.toLowerCase().includes(searchLower))
+        .slice(0, 30);
+    } catch (err) {
+      console.error('Ошибка поиска вложений чатов:', err);
+    }
+
+    // ── 2. Файлы базы знаний (с учётом прав доступа к статьям) ──
+    let wikiFiles = [];
+    try {
+      const isAdmin = checkAdmin(userId);
+      let sql = `
+        SELECT f.id, f.article_id AS articleId, f.file_name AS fileName,
+               f.file_size AS fileSize, f.mime_type AS mimeType, f.created_at AS createdAt,
+               a.title AS articleTitle
+        FROM wiki_article_files f
+        JOIN wiki_articles a ON f.article_id = a.id
+      `;
+      const params = [];
+      if (!isAdmin) {
+        sql += ` WHERE (
+          a.access_level = 'public' OR
+          a.access_level IS NULL OR
+          a.created_by = ? OR
+          (a.access_level = 'selected' AND a.id IN (
+            SELECT article_id FROM wiki_article_allowed_users WHERE user_id = ?
+          ))
+        )`;
+        params.push(userId, userId);
+      }
+      sql += ` ORDER BY f.created_at DESC`;
+      const rows = db.prepare(sql).all(...params);
+      wikiFiles = rows
+        .map(row => ({
+          type: 'wikiFile',
+          id: row.id,
+          articleId: row.articleId,
+          articleTitle: row.articleTitle || 'Статья',
+          filename: row.fileName || 'Файл',
+          mimeType: row.mimeType || '',
+          size: row.fileSize || 0,
+          createdAt: row.createdAt
+        }))
+        .filter(f => f.filename.toLowerCase().includes(searchLower))
+        .slice(0, 30);
+    } catch (err) {
+      console.error('Ошибка поиска файлов wiki:', err);
+    }
+
+    res.json({ chatFiles, wikiFiles });
+  } catch (err) {
+    console.error('Ошибка поиска файлов:', err);
+    res.status(500).json({ error: 'Ошибка при поиске файлов' });
+  }
+});
+
+// Проверка орфографии через Яндекс.Спеллер (прокси без CORS-проблем + кэш)
+const spellCache = new Map(); // ключ: lang|текст-lower → { ts, errors }
+const SPELL_CACHE_TTL = 10 * 60 * 1000;
+const SPELL_CACHE_MAX = 500;
+
+function fetchYandexSpell(text, lang) {
+  return new Promise((resolve) => {
+    const url = `https://speller.yandex.net/services/spellservice.json/checkText?options=6&lang=${encodeURIComponent(lang)}&text=${encodeURIComponent(text)}`;
+    try {
+      const req = https.get(url, { timeout: 4000 }, (apiRes) => {
+        let raw = '';
+        apiRes.on('data', (chunk) => { raw += chunk; });
+        apiRes.on('end', () => {
+          try {
+            const parsed = JSON.parse(raw);
+            resolve(Array.isArray(parsed) ? parsed : []);
+          } catch (e) {
+            resolve([]);
+          }
+        });
+      });
+      req.on('timeout', () => { req.destroy(); resolve([]); });
+      req.on('error', () => resolve([]));
+    } catch (e) {
+      resolve([]);
+    }
+  });
+}
+
+app.get('/api/spellcheck', async (req, res) => {
+  const text = String(req.query.text || '');
+  const langSafe = ['ru', 'en', 'uk', 'kk'].includes(req.query.lang) ? req.query.lang : 'ru,en';
+  if (!text.trim()) return res.json({ errors: [] });
+
+  const cacheKey = `${langSafe}|${text.toLowerCase()}`;
+  const cached = spellCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < SPELL_CACHE_TTL) {
+    return res.json({ errors: cached.errors });
+  }
+
+  const rawErrors = await fetchYandexSpell(text, langSafe);
+  // Оставляем только ошибки с вариантами исправления
+  const errors = rawErrors
+    .filter(e => e && e.word && Array.isArray(e.s))
+    .map(e => ({ word: String(e.word), s: e.s.slice(0, 5).map(String) }));
+
+  // Вытеснение старейшей записи при переполнении (Map хранит порядок вставки)
+  if (!spellCache.has(cacheKey)) {
+    if (spellCache.size >= SPELL_CACHE_MAX) {
+      const oldestKey = spellCache.keys().next().value;
+      spellCache.delete(oldestKey);
+    }
+    spellCache.set(cacheKey, { ts: Date.now(), errors });
+  }
+
+  res.json({ errors });
+});
+
 // API для отправки сообщения (через REST, для тредов)
 app.post('/api/messages', (req, res) => {
   const { chatId, senderId, text, replyTo } = req.body;
@@ -3707,10 +3835,8 @@ app.post('/api/messages', (req, res) => {
       reactions: undefined
     };
 
-    io.to(chatId).emit('new_message', {
-      message: newMessage,
-      chat: { id: chatId, unreadCount: 0 }
-    });
+    // Полная доставка: unread_messages, realtime-рассылка, push офлайн-участникам
+    distributeChatMessage(chatId, newMessage, getChatById(chatId) || { id: chatId });
 
     res.json({ success: true, message: newMessage });
   } catch (err) {
@@ -3807,6 +3933,7 @@ app.post('/api/messages/read', (req, res) => {
 
   try {
     db.run('DELETE FROM unread_messages WHERE user_id = ? AND chat_id = ?', [userId, chatId]);
+    db.run('UPDATE chat_user_settings SET force_unread = 0 WHERE user_id = ? AND chat_id = ?', [userId, chatId]);
 
     const now = new Date().toISOString();
     db.run(`
@@ -4745,8 +4872,18 @@ app.put('/api/wiki/articles/:id', (req, res) => {
 
 app.delete('/api/wiki/articles/:id', (req, res) => {
   const { userId } = req.body;
-  if (!userId || !checkAdmin(userId)) return res.status(403).json({ error: 'Доступ запрещён' });
+  if (!userId) return res.status(403).json({ error: 'Требуется авторизация' });
   try {
+    const article = db.prepare('SELECT created_by, category_id FROM wiki_articles WHERE id = ?').get(req.params.id);
+    if (!article) return res.status(404).json({ error: 'Статья не найдена' });
+
+    const isAdminCheck = checkAdmin(userId);
+    const isOwnerEditor = article.created_by === userId && article.category_id && checkCategoryEditor(userId, article.category_id);
+
+    if (!isAdminCheck && !isOwnerEditor) {
+      return res.status(403).json({ error: 'Доступ запрещён' });
+    }
+
     const files = db.prepare('SELECT file_path FROM wiki_article_files WHERE article_id = ?').all(req.params.id);
     for (const f of files) {
       const fullPath = path.join(UPLOADS_PATH, f.file_path);
@@ -5082,7 +5219,8 @@ app.post('/api/polls', (req, res) => {
       expires_at: null
     };
 
-    io.to(chatId).emit('new_message', { message: newMessage, chat: { id: chatId, unreadCount: 0 } });
+    // Полная доставка: unread_messages, realtime-рассылка, push офлайн-участникам
+    distributeChatMessage(chatId, newMessage, getChatById(chatId) || { id: chatId });
 
     res.json({ success: true, poll: pollData, messageId, message: newMessage });
   } catch (err) {
@@ -5310,12 +5448,17 @@ function getUserChats(userId) {
   const chats = db.prepare(`
     SELECT c.*,
            (SELECT COUNT(*) FROM unread_messages WHERE chat_id = c.id AND user_id = ?) as unreadCount,
-           (SELECT MAX(timestamp) FROM messages WHERE chat_id = c.id) as last_msg_time
+           (SELECT MAX(timestamp) FROM messages WHERE chat_id = c.id) as last_msg_time,
+           cs.pinned, cs.muted, cs.force_unread, cs.cleared_at
     FROM chats c
     JOIN chat_participants cp ON c.id = cp.chat_id
+    LEFT JOIN chat_user_settings cs ON c.id = cs.chat_id AND cs.user_id = ?
     WHERE cp.user_id = ?
-    ORDER BY last_msg_time DESC, c.created_at DESC
-  `).all(userId, userId);
+      AND (cs.deleted_at IS NULL OR EXISTS (
+        SELECT 1 FROM messages m WHERE m.chat_id = c.id AND m.timestamp > cs.deleted_at
+      ))
+    ORDER BY (cs.pinned = 1) DESC, last_msg_time DESC, c.created_at DESC
+  `).all(userId, userId, userId);
   
   return chats.map(chat => {
     // Получаем участников с полными данными
@@ -5326,15 +5469,18 @@ function getUserChats(userId) {
       WHERE cp.chat_id = ?
     `).all(chat.id);
 
-    // Получаем последнее сообщение с аватаром отправителя
+    const clearedAt = chat.cleared_at || null;
+
+    // Получаем последнее сообщение с аватаром отправителя (после очистки — только новые)
     const msg = db.prepare(`
       SELECT m.*, u.username as senderName, u.avatar as senderAvatar
       FROM messages m
       JOIN users u ON m.sender_id = u.id
       WHERE m.chat_id = ?
+        AND (m.timestamp > ? OR ? IS NULL)
       ORDER BY m.timestamp DESC
       LIMIT 1
-    `).get(chat.id);
+    `).get(chat.id, clearedAt, clearedAt);
     let lastMessage = null;
     if (msg) {
       const msgIsE2EE = msg.e2ee === 1 || msg.e2ee === true;
@@ -5348,16 +5494,29 @@ function getUserChats(userId) {
 
     return {
       ...chat,
+      id: String(chat.id),
       participants: participants.map(p => p.username),
       participantsDetails: participants,
+      unreadCount: chat.unreadCount || 0,
+      pinned: !!chat.pinned,
+      muted: !!chat.muted,
+      forceUnread: !!chat.force_unread,
       lastMessage
     };
   });
 }
 
-function getChatMessages(chatId, limit = 100, userId = null) {
+function getChatMessages(chatId, limit = 100, userId = null, beforeTs = null) {
   try {
+    // Учитываем "очистить историю для меня": скрываем сообщения старше cleared_at
+    let clearedAt = null;
+    if (userId) {
+      const clearedRow = db.prepare('SELECT cleared_at FROM chat_user_settings WHERE user_id = ? AND chat_id = ?').get(userId, chatId);
+      clearedAt = clearedRow ? clearedRow.cleared_at : null;
+    }
+
     // Сначала получаем последние N сообщений в обратном порядке (новые первые)
+    // beforeTs — курсор пагинации: берём сообщения СТАРШЕ указанного timestamp
     // Исключаем просроченные self-destruct сообщения
     const messagesReversed = db.prepare(`
       SELECT m.id, m.chat_id, m.sender_id, m.text, m.file_data, m.reply_to, m.timestamp, m.read_at,
@@ -5368,9 +5527,11 @@ function getChatMessages(chatId, limit = 100, userId = null) {
       JOIN users u ON m.sender_id = u.id
       WHERE m.chat_id = ?
         AND (m.expires_at IS NULL OR m.expires_at > ?)
+        AND (? IS NULL OR m.timestamp > ?)
+        AND (? IS NULL OR m.timestamp < ?)
       ORDER BY m.timestamp DESC
       LIMIT ?
-    `).all(chatId, new Date().toISOString(), limit);
+    `).all(chatId, new Date().toISOString(), clearedAt, clearedAt, beforeTs, beforeTs, limit);
 
     // Переворачиваем чтобы получить в правильном порядке (старые первые)
     const messages = [];
@@ -5591,6 +5752,120 @@ setInterval(() => {
   }
 }, 60000);
 
+// Возвращает отображаемое имя чата (для direct — имя собеседника)
+function getChatDisplayName(chat) {
+  if (!chat) return 'Чат';
+  if (chat.type !== 'direct' && chat.name) return chat.name;
+  if (chat.participantsDetails && chat.participantsDetails.length > 0) {
+    return chat.participantsDetails[0].username || 'Чат';
+  }
+  if (chat.participants && chat.participants.length > 0) {
+    return chat.participants[0] || 'Чат';
+  }
+  return chat.name || 'Чат';
+}
+
+/**
+ * Единая доставка сообщения в чат: авто-join сокетов участников,
+ * простановка unread_messages, realtime-рассылка и push-уведомления (web + FCM)
+ * для офлайн-участников. Используется для обычных сообщений и системных
+ * (приветствия нового участника, опросы, REST-отправка), чтобы любое
+ * сообщение гарантированно отражалось как «новое».
+ * @param {string} chatId
+ * @param {Object} formattedMessage - готовое сообщение для клиента (text в plaintext)
+ * @param {Object|null} chat - объект чата (по умолчанию из БД)
+ * @param {Object} opts
+ * @param {string} [opts.skipUserId] - участник, которому НЕ ставим unread (отправитель)
+ * @param {boolean} [opts.skipPush] - не отправлять push-уведомления
+ */
+function distributeChatMessage(chatId, formattedMessage, chat = null, opts = {}) {
+  if (!chatId || !formattedMessage) return;
+  const chatData = chat || getChatById(chatId) || { id: chatId };
+  const skipUserId = opts.skipUserId || formattedMessage.senderId;
+
+  const partRows = db.prepare('SELECT user_id FROM chat_participants WHERE chat_id = ?').all(chatId);
+  const participants = partRows.map(row => String(row.user_id || ''));
+
+  // Автоматически присоединяем все сессии участников к комнате чата
+  participants.forEach((pUserId) => {
+    const socketIds = getUserSockets(pUserId);
+    socketIds.forEach((sid) => {
+      const sock = io.sockets.sockets.get(sid);
+      if (sock && !sock.rooms.has(chatId)) {
+        sock.join(chatId);
+      }
+    });
+  });
+
+  // Добавляем непрочитанные для всех кроме отправителя (батч)
+  const unreadValues = participants
+    .filter(pUserId => pUserId !== skipUserId)
+    .map(pUserId => `('${pUserId.replace(/'/g, "''")}', '${formattedMessage.id}', '${chatId}')`)
+    .join(',');
+  if (unreadValues) {
+    db.run(`INSERT OR IGNORE INTO unread_messages (user_id, message_id, chat_id) VALUES ${unreadValues}`);
+  }
+
+  // Отправляем сообщение всем в чате (включая отправителя)
+  io.to(chatId).emit('new_message', {
+    message: formattedMessage,
+    chat: { ...chatData, unreadCount: 0 }
+  });
+
+  if (opts.skipPush) return;
+
+  // Push-уведомления для офлайн-участников
+  const onlineUserIds = new Set(Array.from(onlineUsers.values()).map(u => u.id));
+  const chatName = getChatDisplayName(chatData);
+  participants.forEach(pUserId => {
+    if (pUserId === skipUserId || onlineUserIds.has(pUserId)) return;
+    // Пропускаем push, если пользователь приглушил чат
+    const mutedRow = db.prepare('SELECT muted FROM chat_user_settings WHERE user_id = ? AND chat_id = ?').get(pUserId, chatId);
+    if (mutedRow && Number(mutedRow.muted) === 1) return;
+    sendPushNotification(pUserId, chatName, formattedMessage.text || '📎 Файл', formattedMessage.senderAvatar, { chatId, messageId: formattedMessage.id });
+    sendFcmNotification(pUserId, chatName, (formattedMessage.senderName || '') + ': ' + (formattedMessage.text || '📎 Файл'), { chatId, messageId: formattedMessage.id, senderId: formattedMessage.senderId });
+  });
+}
+
+/**
+ * Доставка сообщения бота в личный чат пользователя (bot-chat-*):
+ * простановка unread_messages, realtime-рассылка во все сессии и push офлайн.
+ * @param {string} userId - получатель
+ * @param {Object} payload - { id, chatId, senderId, senderName, senderAvatar, text, timestamp, isBotMessage, buttons }
+ */
+function deliverBotMessage(userId, payload) {
+  if (!userId || !payload || !payload.chatId || !payload.text) return;
+
+  const messageId = payload.id || uuidv4();
+  const ts = payload.timestamp || new Date().toISOString();
+  const chatId = payload.chatId;
+  const senderName = payload.senderName || 'Помощник';
+  const senderAvatar = payload.senderAvatar || 'https://ui-avatars.com/api/?name=🤖+Бот&background=667eea&color=fff';
+
+  db.run(`INSERT OR IGNORE INTO unread_messages (user_id, message_id, chat_id) VALUES (?, ?, ?)`, [userId, messageId, chatId]);
+
+  emitToUser(userId, 'new_message', {
+    message: {
+      id: messageId,
+      chatId,
+      senderId: payload.senderId,
+      senderName,
+      senderAvatar,
+      text: payload.text,
+      timestamp: ts,
+      isBotMessage: payload.isBotMessage !== false,
+      buttons: payload.buttons || []
+    },
+    chat: { id: chatId, name: senderName, type: 'direct' }
+  });
+
+  const onlineUserIds = new Set(Array.from(onlineUsers.values()).map(u => u.id));
+  if (!onlineUserIds.has(userId)) {
+    sendPushNotification(userId, senderName, payload.text, senderAvatar, { chatId, messageId });
+    sendFcmNotification(userId, senderName, payload.text, { chatId, messageId, senderId: payload.senderId });
+  }
+}
+
 // Socket.IO подключение
 io.on('connection', (socket) => {
   const clientIp = socket.handshake?.address?.replace(/^::ffff:/, '') || 'unknown';
@@ -5631,7 +5906,7 @@ io.on('connection', (socket) => {
   // socket.id используется как ключ в onlineUsers Map.
   // Поддерживается несколько сокетов на одного пользователя (несколько вкладок).
   socket.on('user_joined', (data) => {
-    const { userId, email, username, deviceId, deviceName } = data || {};
+    const { userId, email, username, deviceId, deviceName, appVersion } = data || {};
 
     if (!userId && !email && !username) {
       console.error('user_joined: нет userId/email/username');
@@ -5736,6 +6011,11 @@ io.on('connection', (socket) => {
 
       // Обновляем статус в БД
       db.run('UPDATE users SET status = ? WHERE id = ?', ['online', user.id]);
+
+      // Сохраняем версию клиента
+      if (appVersion) {
+        db.run('UPDATE users SET app_version = ? WHERE id = ?', [String(appVersion).slice(0, 50), user.id]);
+      }
       
 
       // Отправляем пользователю его чаты
@@ -5764,7 +6044,7 @@ io.on('connection', (socket) => {
 
   // Пользователь присоединяется (альтернативный путь: через /api/login → join)
   socket.on('join', (data) => {
-    const { username, userId: existingUserId } = data;
+    const { username, userId: existingUserId, appVersion } = data;
 
     let user = null;
 
@@ -5830,6 +6110,11 @@ io.on('connection', (socket) => {
       });
       userActivity.set(user.id, Date.now());
 
+      // Сохраняем версию клиента
+      if (appVersion) {
+        db.run('UPDATE users SET app_version = ? WHERE id = ?', [String(appVersion).slice(0, 50), user.id]);
+      }
+
       // Сохраняем запись для админ-панели сессий
       try {
         const adminSessionId = uuidv4();
@@ -5881,19 +6166,24 @@ io.on('connection', (socket) => {
     if (isFirstJoin) {
       // Помечаем, что пользователь видел приветствие
       db.run('UPDATE users SET has_seen_welcome = 1 WHERE id = ?', [user.id]);
+      const botChatId = `bot-chat-${user.id}`;
       setTimeout(() => {
-        const welcomeMessage = `👋 Здравствуйте, ${user.username}!
+        try {
+          const welcomeMessage = `👋 Здравствуйте, ${user.username}!
 
 Я 🤖 Помощник. Рад видеть вас в команде!
 
 💡 *Совет:* Начните с обучения — это займёт 2 минуты.`;
 
-        const welcomeButtons = [
-          { label: '🎯 Пройти обучение', action: '/онбординг' },
-          { label: '❓ Все команды', action: '/помощь' }
-        ];
+          const welcomeButtons = [
+            { label: '🎯 Пройти обучение', action: '/онбординг' },
+            { label: '❓ Все команды', action: '/помощь' }
+          ];
 
-        sendBotMessage(socket, botChatId, welcomeMessage, welcomeButtons);
+          sendBotMessage(socket, botChatId, welcomeMessage, welcomeButtons);
+        } catch (e) {
+          console.error('Ошибка отправки личного приветствия:', e.message);
+        }
       }, 1000);
     }
 
@@ -5907,37 +6197,40 @@ io.on('connection', (socket) => {
     // Приветствие нового пользователя в общем чате (только при первом входе)
     if (isFirstJoin) {
       setTimeout(() => {
-        const welcomeText = `👋 Коллеги, поприветствуйте нового участника — **[${user.username}](user:${user.username})**!
+        try {
+          const welcomeText = `👋 Коллеги, поприветствуйте нового участника — **[${user.username}](user:${user.username})**!
 
 Рады видеть вас в нашей команде! 🎉`;
 
-        // Отправляем сообщение в общий чат от имени помощника
-        const botResult = db.prepare("SELECT id FROM users WHERE username = 'Помощник'").get();
-        if (botResult) {
-          const botId = botResult.id;
-          const messageId = uuidv4();
-          const encryptedText = encryptText(welcomeText || '');
+          // Отправляем сообщение в общий чат от имени помощника
+          const botResult = db.prepare("SELECT id FROM users WHERE username = 'Помощник'").get();
+          if (botResult) {
+            const botId = botResult.id;
+            const messageId = uuidv4();
+            const encryptedText = encryptText(welcomeText || '');
+            const timestamp = new Date().toISOString();
 
-          db.run(`
-            INSERT INTO messages (id, chat_id, sender_id, text, timestamp)
-            VALUES (?, 'general', ?, ?, ?)
-          `, [messageId, botId, encryptedText, new Date().toISOString()]);
-              // Отправляем всем в общий чат
-          io.to('general').emit('new_message', {
-            message: {
+            db.run(`
+              INSERT INTO messages (id, chat_id, sender_id, text, timestamp)
+              VALUES (?, 'general', ?, ?, ?)
+            `, [messageId, botId, encryptedText, timestamp]);
+
+            // Отправляем всем в общий чат через единый конвейер доставки:
+            // unread_messages + realtime-рассылка + push для офлайн-участников
+            distributeChatMessage('general', {
               id: messageId,
               chatId: 'general',
               senderId: botId,
               senderName: 'Помощник',
               senderAvatar: 'https://ui-avatars.com/api/?name=🤖+Бот&background=667eea&color=fff',
               text: welcomeText,
-              timestamp: new Date().toISOString(),
+              timestamp,
               isBotMessage: true,
               buttons: []
-            },
-            chat: { id: 'general' }
-          });
-
+            }, null, { skipUserId: botId, skipPush: false });
+          }
+        } catch (e) {
+          console.error('Ошибка отправки объявления о новом пользователе:', e.message);
         }
       }, 2000);
     }
@@ -6025,32 +6318,39 @@ io.on('connection', (socket) => {
 
     // Очищаем непрочитанные
     db.run('DELETE FROM unread_messages WHERE user_id = ? AND chat_id = ?', [onlineUser.id, chatId]);
+    db.run('UPDATE chat_user_settings SET force_unread = 0 WHERE user_id = ? AND chat_id = ?', [onlineUser.id, chatId]);
     
 
     
     // Отправляем историю сообщений
     const chatMessages = getChatMessages(chatId, 100, onlineUser.id);
+    const hasMoreHistory = chatMessages.length >= 100;
     const chat = getChatWithDetails(chatId);
 
     socket.emit('chat_history', {
       chatId,
       messages: chatMessages,
+      hasMore: hasMoreHistory,
       chat
     });
   });
 
+  // Пагинация истории: порция сообщений СТАРШЕ курсора before (timestamp)
+  socket.on('get_messages_before', ({ chatId, before, limit = 50 }, callback) => {
+    const onlineUser = onlineUsers.get(socket.id);
+    if (!onlineUser || !chatId || !before) return;
+    if (typeof callback !== 'function') return;
+
+    const lim = Math.min(Math.max(parseInt(limit, 10) || 50, 1), 200);
+    const older = getChatMessages(chatId, lim + 1, onlineUser.id, String(before));
+    const hasMore = older.length > lim;
+    const batch = hasMore ? older.slice(0, lim) : older;
+
+    callback({ messages: batch, hasMore });
+  });
+
   // Возвращает отображаемое имя чата (для direct — имя собеседника)
-  function getChatDisplayName(chat) {
-    if (!chat) return 'Чат';
-    if (chat.type !== 'direct' && chat.name) return chat.name;
-    if (chat.participantsDetails && chat.participantsDetails.length > 0) {
-      return chat.participantsDetails[0].username || 'Чат';
-    }
-    if (chat.participants && chat.participants.length > 0) {
-      return chat.participants[0] || 'Чат';
-    }
-    return chat.name || 'Чат';
-  }
+  // (определение вынесено на модульный уровень: getChatDisplayName)
 
   // Отправка сообщения
   socket.on('send_message', (data) => {
@@ -6158,31 +6458,6 @@ io.on('connection', (socket) => {
         return;
       }
 
-      // Получаем участников чата
-      const partRows = db.prepare('SELECT user_id FROM chat_participants WHERE chat_id = ?').all(chatId);
-      const participants = partRows.map(row => String(row.user_id || ''));
-
-      // Автоматически присоединяем все сессии участников к комнате чата
-      participants.forEach((pUserId) => {
-        const socketIds = getUserSockets(pUserId);
-        socketIds.forEach((sid) => {
-          const sock = io.sockets.sockets.get(sid);
-          if (sock && !sock.rooms.has(chatId)) {
-            sock.join(chatId);
-          }
-        });
-      });
-
-      // Добавляем непрочитанные для всех кроме отправителя (батч)
-      const unreadValues = participants
-        .filter(pUserId => pUserId !== onlineUser.id)
-        .map(pUserId => `('${pUserId.replace(/'/g, "''")}', '${messageId}', '${chatId}')`)
-        .join(',');
-      if (unreadValues) {
-        db.run(`INSERT OR IGNORE INTO unread_messages (user_id, message_id, chat_id) VALUES ${unreadValues}`);
-      }
-      
-
       // Форматируем сообщение
       const formattedMessage = {
         id: messageRow.id,
@@ -6215,21 +6490,9 @@ io.on('connection', (socket) => {
         socket.join(chatId);
       }
 
-      // Отправляем сообщение всем в чате (включая отправителя)
-      io.to(chatId).emit('new_message', {
-        message: formattedMessage,
-        chat: { ...chat, unreadCount: 0 }
-      });
-
-      // Push-уведомления для офлайн-участников
-      const onlineUserIds = new Set(Array.from(onlineUsers.values()).map(u => u.id));
-      const chatName = getChatDisplayName ? getChatDisplayName(chat) : (chat.name || 'Чат');
-      participants.forEach(pUserId => {
-        if (pUserId !== onlineUser.id && !onlineUserIds.has(pUserId)) {
-          sendPushNotification(pUserId, chatName, formattedMessage.text || '📎 Файл', formattedMessage.senderAvatar, { chatId, messageId });
-          sendFcmNotification(pUserId, chatName, (formattedMessage.senderName || '') + ': ' + (formattedMessage.text || '📎 Файл'), { chatId, messageId, senderId: formattedMessage.senderId });
-        }
-      });
+      // Отправляем сообщение всем в чате (включая отправителя):
+      // unread_messages для непрочитанных, realtime-рассылка и push офлайн-участникам
+      distributeChatMessage(chatId, formattedMessage, chat, { skipUserId: onlineUser.id });
 
       // @mentions: уведомляем упомянутых пользователей
       if (formattedMessage.text && !isE2EE) {
@@ -6583,6 +6846,7 @@ io.on('connection', (socket) => {
 
       // Уведомляем получателя о новом сообщении
       // Отправляем сообщение получателю (все сессии)
+      db.run(`INSERT OR IGNORE INTO unread_messages (user_id, message_id, chat_id) VALUES (?, ?, ?)`, [targetUserId, formattedMessage.id, chat.id]);
       emitToUser(targetUserId, 'new_message', {
         message: formattedMessage,
         chat: { id: chat.id, type: chat.type, unreadCount: 1 }
@@ -6653,6 +6917,7 @@ io.on('connection', (socket) => {
       file: null
     };
 
+    db.run(`INSERT OR IGNORE INTO unread_messages (user_id, message_id, chat_id) VALUES (?, ?, ?)`, [targetUserId, newMessageId, chat.id]);
     emitToUser(targetUserId, 'new_message', {
       message: formattedMessage,
       chat: { id: chat.id, type: chat.type, unreadCount: 1 }
@@ -7201,30 +7466,21 @@ function sendTaskReminder(userId, username, taskTitle, taskDate, taskTime) {
       VALUES (?, ?, ?, ?, ?)
     `, [messageId, botChatId, botId, encryptedText, new Date().toISOString()]);
 
-    // Находим сокет пользователя и отправляем через WebSocket
-    const socketItem = Array.from(onlineUsers.entries()).find(([sid, u]) => u.id === userId);
-    if (socketItem) {
-      const userSocket = io.sockets.sockets.get(socketItem[0]);
-      if (userSocket) {
-        userSocket.emit('new_message', {
-          message: {
-            id: messageId,
-            chatId: botChatId,
-            senderId: botId,
-            senderName: 'Помощник',
-            senderAvatar: 'https://ui-avatars.com/api/?name=🤖+Бот&background=667eea&color=fff',
-            text: reminderText,
-            timestamp: new Date().toISOString(),
-            isBotMessage: true,
-            buttons: [
-              { label: '📅 Календарь', action: '/календарь' },
-              { label: '✅ Отметить выполненной', action: '/задача' }
-            ]
-          },
-          chat: { id: botChatId }
-        });
-      }
-    }
+    // Доставка: unread + realtime (все сессии) + push офлайн
+    deliverBotMessage(userId, {
+      id: messageId,
+      chatId: botChatId,
+      senderId: botId,
+      senderName: 'Помощник',
+      senderAvatar: 'https://ui-avatars.com/api/?name=🤖+Бот&background=667eea&color=fff',
+      text: reminderText,
+      timestamp: new Date().toISOString(),
+      isBotMessage: true,
+      buttons: [
+        { label: '📅 Календарь', action: '/календарь' },
+        { label: '✅ Отметить выполненной', action: '/задача' }
+      ]
+    });
 
   } catch (err) {
     console.error('Ошибка отправки напоминания:', err);
@@ -7269,19 +7525,16 @@ function sendMeetingReminder(userId, reminder) {
 
     console.log(`[Reminder] Сообщение сохранено в БД: ${messageId}`);
 
-    // Отправляем через WebSocket всем сессиям пользователя
-    emitToUser(userId, 'new_message', {
-      message: {
-        id: messageId,
-        chatId: botChatId,
-        senderId: botId,
-        senderName: 'Помощник',
-        senderAvatar: 'https://ui-avatars.com/api/?name=🤖+Бот&background=667eea&color=fff',
-        text: reminderText,
-        timestamp: new Date().toISOString(),
-        isBotMessage: true
-      },
-      chat: { id: botChatId, name: 'Помощник', type: 'direct' }
+    // Доставка: unread + realtime (все сессии) + push офлайн
+    deliverBotMessage(userId, {
+      id: messageId,
+      chatId: botChatId,
+      senderId: botId,
+      senderName: 'Помощник',
+      senderAvatar: 'https://ui-avatars.com/api/?name=🤖+Бот&background=667eea&color=fff',
+      text: reminderText,
+      timestamp: new Date().toISOString(),
+      isBotMessage: true
     });
     console.log(`[Reminder] Сообщение отправлено пользователю ${userId}`);
 
@@ -7409,14 +7662,140 @@ function scheduleBirthdayChecker() {
     }
   };
 
-  // Запускаем проверку сразу при старте
-  checkBirthdays();
+  // Рассчитываем задержку до следующего 8:00 утра
+  const now = new Date();
+  const next8am = new Date(now);
+  next8am.setHours(8, 0, 0, 0);
+  if (next8am <= now) {
+    next8am.setDate(next8am.getDate() + 1);
+  }
+  const delay = next8am.getTime() - now.getTime();
 
-  // И далее каждые 6 часов
-  setInterval(checkBirthdays, 6 * 60 * 60 * 1000);
+  setTimeout(() => {
+    checkBirthdays();
+    setInterval(checkBirthdays, 24 * 60 * 60 * 1000);
+  }, delay);
 }
 
 setTimeout(scheduleBirthdayChecker, 10000);
+
+// ============================================
+// Мысль дня — рассылка от помощника по будням
+// ============================================
+
+// Стартовый набор мыслей — если файл не найден, рассылка не запускается
+function loadDailyThoughts() {
+  try {
+    const thoughts = require('./daily-thoughts.json');
+    return Array.isArray(thoughts) ? thoughts : [];
+  } catch (e) {
+    console.error('Ошибка загрузки daily-thoughts.json:', e.message);
+    return [];
+  }
+}
+const dailyThoughts = loadDailyThoughts();
+
+/**
+ * Отправить «мысль дня» каждому пользователю через бота «Помощник».
+ * Каждому — случайную мысль без повторов, пока не будет исчерпан весь список.
+ */
+function sendDailyThought(targetUserId = null) {
+  try {
+    if (dailyThoughts.length === 0) return;
+
+    const now = new Date();
+    const day = now.getDay(); // 0 = вск, 6 = сб
+    if (day === 6 || day === 0) return; // только будни
+
+    const setting = db.prepare("SELECT setting_value FROM bot_settings WHERE setting_key = 'daily_thought_notifications_enabled'").get();
+    if (setting && setting.setting_value !== '1') return;
+
+    const botUser = db.prepare("SELECT id FROM users WHERE username = 'Помощник'").get();
+    if (!botUser) return;
+
+    const pad = n => String(n).padStart(2, '0');
+    const sentDate = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+    const usedStmt = db.prepare('SELECT thought_index FROM sent_daily_thoughts WHERE user_id = ?');
+    const insertStmt = db.prepare('INSERT INTO sent_daily_thoughts (user_id, thought_index, sent_date) VALUES (?, ?, ?)');
+    const deleteUserStmt = db.prepare('DELETE FROM sent_daily_thoughts WHERE user_id = ?');
+
+    const users = targetUserId
+      ? (() => {
+          const u = db.prepare("SELECT id, username FROM users WHERE username != 'Помощник' AND id = ?").get(targetUserId);
+          return u ? [u] : [];
+        })()
+      : db.prepare("SELECT id, username FROM users WHERE username != 'Помощник'").all();
+
+    users.forEach(user => {
+      try {
+        // Дудедуп: если мысль сегодня уже отправлена пользователю (например, после рестарта сервера)
+        const alreadyToday = db.prepare('SELECT 1 FROM sent_daily_thoughts WHERE user_id = ? AND sent_date = ?').get(user.id, sentDate);
+        if (alreadyToday) return;
+
+        // Кандидаты — индексы из списка, которые пользователь ещё не получал
+        const usedRows = usedStmt.all(user.id);
+        const usedSet = new Set(usedRows.map(r => r.thought_index));
+        let candidates = [];
+        for (let i = 0; i < dailyThoughts.length; i++) {
+          if (!usedSet.has(i)) candidates.push(i);
+        }
+        if (candidates.length === 0) {
+          // Весь список просмотрен — начинаем новый цикл
+          deleteUserStmt.run(user.id);
+          candidates = dailyThoughts.map((_, i) => i);
+        }
+
+        const idx = candidates[Math.floor(Math.random() * candidates.length)];
+        const thought = dailyThoughts[idx];
+        insertStmt.run(user.id, idx, sentDate);
+
+        const botChatId = `bot-chat-${user.id}`;
+        ensureBotChat(user.id);
+        const text = `💡 *Мысль дня*\n\nДоброе утро, ${user.username}!\n\n«${thought.text}»${thought.author ? `\n\n— ${thought.author}` : ''}`;
+        const messageId = uuidv4();
+        const encryptedText = encryptText(text);
+
+        db.run(`INSERT INTO messages (id, chat_id, sender_id, text, timestamp) VALUES (?, ?, ?, ?, ?)`,
+          [messageId, botChatId, botUser.id, encryptedText, new Date().toISOString()]);
+        deliverBotMessage(user.id, {
+          id: messageId,
+          chatId: botChatId,
+          senderId: botUser.id,
+          senderName: 'Помощник',
+          senderAvatar: 'https://ui-avatars.com/api/?name=🤖&background=667eea&color=fff',
+          text,
+          timestamp: new Date().toISOString(),
+          isBotMessage: true,
+          buttons: []
+        });
+      } catch (err) {
+        console.error(`Ошибка отправки мысли дня пользователю ${user.id}:`, err);
+      }
+    });
+  } catch (err) {
+    console.error('Ошибка рассылки мысли дня:', err);
+  }
+}
+
+/**
+ * Планировщик: рассылка каждый будний день в 9:00 по времени сервера.
+ */
+function scheduleDailyThoughtChecker() {
+  const now = new Date();
+  const next9am = new Date(now);
+  next9am.setHours(9, 0, 0, 0);
+  if (next9am <= now) {
+    next9am.setDate(next9am.getDate() + 1);
+  }
+  const delay = next9am.getTime() - now.getTime();
+
+  setTimeout(() => {
+    sendDailyThought();
+    setInterval(sendDailyThought, 24 * 60 * 60 * 1000);
+  }, delay);
+}
+
+setTimeout(scheduleDailyThoughtChecker, 12000);
 
 // Закрытие и сохранение БД при завершении
 process.on('SIGINT', () => {
@@ -7444,6 +7823,15 @@ process.on('SIGINT', () => {
 console.log('Начало инициализации БД...');
 try {
   initDatabase();
+
+  // Сохранение БД при фатальной ошибке (см. src/logger.js → uncaughtException)
+  registerFatalSaveHook(() => {
+    if (db) {
+      try { saveDatabaseSync(); } catch (e) {}
+      try { db.close(); } catch (e) {}
+    }
+  });
+
   console.log('initDatabase завершено успешно, запуск сервера...');
 
   // State machine + аналитика бота
@@ -7464,6 +7852,140 @@ try {
   // Инициализация бота-помощника (после того как db готов)
   bot = initBotEngine({ db, io, uuidv4, encryptText });
   console.log('🤖 Бот-помощник инициализирован');
+
+  // ─── Анонс новых версий ботом «Помощник» ───
+  try {
+    db.exec(`CREATE TABLE IF NOT EXISTS app_meta (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    )`);
+  } catch (e) {
+    console.error('Ошибка создания app_meta:', e.message);
+  }
+
+  function getMeta(key) {
+    try {
+      const row = db.prepare('SELECT value FROM app_meta WHERE key = ?').get(key);
+      return row ? row.value : null;
+    } catch (e) { return null; }
+  }
+
+  function setMeta(key, value) {
+    try {
+      db.run(`INSERT INTO app_meta (key, value) VALUES (?, ?)
+              ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [key, String(value)]);
+    } catch (e) {
+      console.error('Ошибка записи app_meta:', e.message);
+    }
+  }
+
+  async function fetchLatestReleaseInfo() {
+    const response = await fetch('https://api.github.com/repos/AmiD4567/chatursa/releases/latest', {
+      headers: {
+        'Accept': 'application/vnd.github.v3+json',
+        'User-Agent': 'chat-app'
+      }
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    const version = (data.tag_name || '').replace(/^v/i, '');
+    if (!version) return null;
+    return {
+      version,
+      notes: String(data.body || ''),
+      releaseUrl: data.html_url || ''
+    };
+  }
+
+  async function announceNewRelease() {
+    try {
+      const release = await fetchLatestReleaseInfo();
+      if (!release) return;
+
+      const announced = getMeta('announcedVersion');
+      if (announced === release.version) return;
+      if (announced && compareVersions(release.version, announced) <= 0) {
+        setMeta('announcedVersion', release.version);
+        return;
+      }
+
+      // Готовим текст в формате бота (**жирный**, • списки, ссылки кликабельны)
+      let body = release.notes
+        .split('\n')
+        .map(line => {
+          const t = line.trim();
+          if (t.startsWith('- ')) return '• ' + t.slice(2);
+          if (t.startsWith('### ')) return '**' + t.slice(4) + '**';
+          if (t.startsWith('## ')) return '**' + t.slice(3) + '**';
+          return line;
+        })
+        .join('\n')
+        .trim();
+      if (body.length > 1200) body = body.slice(0, 1197) + '...';
+
+      let text = `🚀 **Вышла новая версия ChatApp v${release.version}!**`;
+      if (body) text += `\n\n**Что нового:**\n${body}`;
+      if (release.releaseUrl) text += `\n\n🔗 Полный список изменений: ${release.releaseUrl}`;
+      text += `\n\n🔄 Обновление установится автоматически при перезапуске приложения.`;
+
+      const botUser = db.prepare("SELECT id, username, avatar FROM users WHERE username = 'Помощник'").get();
+      if (!botUser) {
+        console.error('[ReleaseAnnounce] Бот Помощник не найден в базе');
+        return;
+      }
+
+      const usersList = db.prepare("SELECT id FROM users WHERE username != 'Помощник'").all();
+      let sent = 0;
+      for (const user of usersList) {
+        try {
+          // Гарантируем, что диалог с ботом есть в списке чатов пользователя
+          ensureBotChat(user.id);
+          const botChatId = `bot-chat-${user.id}`;
+          const messageId = uuidv4();
+          const timestamp = new Date().toISOString();
+
+          db.run(
+            `INSERT INTO messages (id, chat_id, sender_id, text, timestamp) VALUES (?, ?, ?, ?, ?)`,
+            [messageId, botChatId, botUser.id, encryptText(text), timestamp]
+          );
+          db.run(
+            'INSERT OR IGNORE INTO unread_messages (user_id, message_id, chat_id) VALUES (?, ?, ?)',
+            [user.id, messageId, botChatId]
+          );
+
+          // Живая доставка во ВСЕ сессии пользователя (не через комнаты сокетов)
+          emitToUser(user.id, 'new_message', {
+            message: {
+              id: messageId,
+              chatId: botChatId,
+              senderId: botUser.id,
+              senderName: 'Помощник',
+              senderAvatar: botUser.avatar || 'https://ui-avatars.com/api/?name=🤖&background=667eea&color=fff',
+              text,
+              file: null,
+              reply_to: null,
+              timestamp
+            },
+            chat: { id: botChatId, name: 'Помощник', type: 'direct' }
+          });
+          sent++;
+        } catch (err) {
+          console.error(`[ReleaseAnnounce] Ошибка отправки пользователю ${user.id}:`, err.message);
+        }
+      }
+
+      setMeta('announcedVersion', release.version);
+      console.log(`[ReleaseAnnounce] Анонс v${release.version} отправлен ${sent} пользователям`);
+    } catch (err) {
+      console.error('[ReleaseAnnounce] Ошибка анонса релиза:', err.message);
+    }
+  }
+
+  // Проверка релизов: через 30с после старта сервера и далее раз в час
+  setTimeout(() => {
+    announceNewRelease();
+    setInterval(announceNewRelease, 60 * 60 * 1000);
+  }, 30 * 1000);
 
   // Загружаем квоты загрузок из БД
   try {
@@ -7512,9 +8034,9 @@ try {
     res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   });
 
-  server.listen(PORT, HOST, () => {
+  httpServer.listen(PORT, HOST, () => {
     const displayHost = HOST === '0.0.0.0' ? getLocalIP() : HOST;
-    console.log(`Сервер запущен на ${PROTOCOL}://${displayHost}:${PORT}`);
+    console.log(`HTTP сервер запущен на http://${displayHost}:${PORT}`);
     console.log(`URL для клиентов: ${SERVER_URL}`);
     console.log(`База данных: ${DB_PATH}`);
     console.log(`Путь загрузок: ${UPLOADS_PATH}`);
@@ -7589,6 +8111,16 @@ try {
       }
     }, 30000);
   });
+
+  if (httpsServer) {
+    httpsServer.on('error', (err) => {
+      console.error(`HTTPS сервер не смог запуститься на порту ${HTTPS_PORT}: ${err.message}`);
+    });
+    httpsServer.listen(HTTPS_PORT, HOST, () => {
+      const displayHost = HOST === '0.0.0.0' ? getLocalIP() : HOST;
+      console.log(`HTTPS сервер запущен на https://${displayHost}:${HTTPS_PORT}`);
+    });
+  }
 } catch (err) {
   console.error('Ошибка инициализации БД:', err);
   console.error('Stack:', err.stack);
