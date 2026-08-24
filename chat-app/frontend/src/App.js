@@ -347,6 +347,8 @@ function App() {
   const [selectedFile, setSelectedFile] = useState(null);
   const [isUploading, setIsUploading] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
+  // Файл тащат над областью переписки (а не над полем ввода)
+  const [isDragOverMessages, setIsDragOverMessages] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
   const [typingUsers, setTypingUsers] = useState({}); // { userId: { username, timeout } }
   const [showNewChatModal, setShowNewChatModal] = useState(false);
@@ -5003,11 +5005,15 @@ function App() {
   // Drag-and-drop обработчики файлов
   const preventDefault = (e) => e.preventDefault();
 
+  // Реагируем только на перетаскивание файлов, не текста/выделения внутри чата
+  const isFileDrag = (e) => !!(e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files'));
+
   const handleDragOver = (e) => {
     preventDefault(e);
   };
 
   const handleDragEnter = (e) => {
+    if (!isFileDrag(e)) return;
     preventDefault(e);
     setIsDragOver(true);
   };
@@ -5019,14 +5025,45 @@ function App() {
     setIsDragOver(false);
   };
 
-  const handleDrop = (e) => {
-    preventDefault(e);
-    setIsDragOver(false);
-
+  const attachDroppedFile = (e) => {
     const files = e.dataTransfer.files;
     if (files.length > 0) {
       setSelectedFile(files[0]);
+      // Возвращаем фокус в поле ввода для набора сопроводительного текста
+      setTimeout(() => messageInputRef.current?.focus(), 0);
     }
+  };
+
+  const handleDrop = (e) => {
+    preventDefault(e);
+    setIsDragOver(false);
+    attachDroppedFile(e);
+  };
+
+  // --- Drag-and-drop над самой областью переписки ---
+  const handleMessagesDragEnter = (e) => {
+    if (!isFileDrag(e)) return;
+    preventDefault(e);
+    setIsDragOverMessages(true);
+  };
+
+  const handleMessagesDragOver = (e) => {
+    // Без preventDefault браузер откроет файл вместо того, чтобы отдать его нам
+    if (!isFileDrag(e)) return;
+    preventDefault(e);
+  };
+
+  const handleMessagesDragLeave = (e) => {
+    const relatedTarget = e.relatedTarget;
+    if (relatedTarget && e.currentTarget.contains(relatedTarget)) return;
+    setIsDragOverMessages(false);
+  };
+
+  const handleMessagesDrop = (e) => {
+    if (!isFileDrag(e)) return;
+    preventDefault(e);
+    setIsDragOverMessages(false);
+    attachDroppedFile(e);
   };
 
   const handleTyping = (e) => {
@@ -9762,7 +9799,13 @@ function App() {
               </div>
             )}
 
-            <div className="messages-container-main" key={activeChatId || 'no-chat'} ref={messagesContainerRef} onScroll={handleMessagesScroll}>
+            <div className="messages-area-wrapper">
+            <div className="messages-container-main" key={activeChatId || 'no-chat'} ref={messagesContainerRef} onScroll={handleMessagesScroll}
+              onDragEnter={handleMessagesDragEnter}
+              onDragOver={handleMessagesDragOver}
+              onDragLeave={handleMessagesDragLeave}
+              onDrop={handleMessagesDrop}
+            >
               {historyUi.loadingMore && (
                 <div className="history-loading">⏳ Загружаем историю…</div>
               )}
@@ -10013,6 +10056,17 @@ function App() {
               );
             })}
               <div ref={messagesEndRef} />
+            </div>
+
+            {/* Оверлей «бросьте файл» над областью переписки (pointer-events: none) */}
+            {isDragOverMessages && (
+              <div className="messages-drop-overlay" aria-hidden="true">
+                <div className="messages-drop-overlay-inner">
+                  <span className="messages-drop-icon">📂</span>
+                  <span>Отпустите файл, чтобы прикрепить его к сообщению</span>
+                </div>
+              </div>
+            )}
             </div>
 
             {/* Попап "Кто прочитал" */}
