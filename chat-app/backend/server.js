@@ -399,6 +399,13 @@ function getUserChats(userId) {
       AND (cs.deleted_at IS NULL OR EXISTS (
         SELECT 1 FROM messages m WHERE m.chat_id = c.id AND m.timestamp > cs.deleted_at
       ))
+      -- Пустые direct-чаты (созданные без единого сообщения) не показываем.
+      -- Исключение: чат бота-помощника (создаётся без приветствия).
+      AND (
+        c.type != 'direct'
+        OR c.id LIKE 'bot-chat-%'
+        OR EXISTS (SELECT 1 FROM messages m WHERE m.chat_id = c.id)
+      )
     ORDER BY (cs.pinned = 1) DESC, last_msg_time DESC, c.created_at DESC
   `).all(userId, userId, userId);
   
@@ -870,7 +877,8 @@ try {
     uuidv4, bcrypt, speakeasy, QRCode, webPush, admin, getMessaging,
     checkAdmin, checkWikiEditAccess, checkArticleAccess, checkCategoryEditor,
     checkRateLimit, registerAttempts, loginAttempts, userTotalUploadSize, DEFAULT_UPLOAD_QUOTA,
-    getUserById, getChatById, getDirectChatBetweenUsers, getChatWithDetails,
+    botRateLimit, wsRateMap, checkWsRateLimit, conversationStates, botAnalytics,
+    getUserById, getUserByUsername, getChatById, getDirectChatBetweenUsers, getChatWithDetails,
     getUserChats, getChatMessages, getAllUsers, generateUserId, getClientIp, getClientHost,
     distributeChatMessage, sendPushNotification, sendFcmNotification, sendBotMessage,
     getBotResponse, ensureBotChat, deliverBotMessage, getChatDisplayName

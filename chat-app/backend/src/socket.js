@@ -3,7 +3,13 @@
  * Регистрация выполняется после initDatabase() — зависимости передаются через deps.
  */
 module.exports = function registerSocketHandlers(deps) {
-  const { db, io, onlineUsers, userActivity, userSocketMap, emitToUser, encryptText, decryptText, uuidv4, checkAdmin, getUserById, getUserByUsername, getChatById, getDirectChatBetweenUsers, getChatWithDetails, getUserChats, getChatMessages, getAllUsers, generateUserId, distributeChatMessage, sendBotMessage, getBotResponse, ensureBotChat, getChatDisplayName, botRateLimit, wsRateMap, checkWsRateLimit } = deps;
+  const { db, io, onlineUsers, userActivity, userSocketMap, emitToUser,
+          encryptText, decryptText, uuidv4, checkAdmin,
+          getUserById, getUserByUsername, getChatById, getDirectChatBetweenUsers,
+          getChatWithDetails, getUserChats, getChatMessages, getAllUsers, generateUserId,
+          distributeChatMessage, sendBotMessage, getBotResponse, ensureBotChat, getChatDisplayName,
+          botRateLimit, wsRateMap, checkWsRateLimit,
+          userTotalUploadSize, DEFAULT_UPLOAD_QUOTA, conversationStates, botAnalytics } = deps;
 
 
 io.on('connection', (socket) => {

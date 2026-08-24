@@ -6,14 +6,29 @@ import { SAFE_EMOJIS } from './safe-emojis';
 import { splitTextByUrls, detectUrls } from './urlUtils';
 import { useReactionParticles } from './ReactionParticlesManager';
 import emojiData from './emojiData.json';
-import { saveMessages, getMessages, saveChats, getChats, queueOutgoing, getOutbox, removeFromOutbox } from './db';
+import { saveMessages, getMessages, saveChats, getChats, queueOutgoing, getOutbox, removeFromOutbox, saveCustomBg, getAllCustomBgs, deleteCustomBg } from './db';
 import { initE2EEForUser, ensureSharedKey, encryptMessage, decryptMessage, getCachedSharedKey, setE2EEApiBase, getCachedGroupKey, cacheGroupKey, decryptGroupKey, generateGroupKey, encryptGroupKeyForMember, getPeerPublicKey } from './crypto';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import DisconnectedOverlay from './DisconnectedOverlay';
 import InAppNotification from './InAppNotification';
+import ConfettiOverlay from './ConfettiOverlay';
 
-const SOCKET_URL = 'http://192.168.210.48:3001';
+// Автоопределение адреса сервера.
+// Electron и Android (Capacitor) загружают фронтенд локально,
+// поэтому остаются на дефолтном адресе. Веб-браузер (в т.ч. iPhone)
+// загружается с бэкенда — берём адрес из window.location.
+let SOCKET_URL;
+const isElectron = !!window.electronAPI;
+const isCapacitor = typeof window.Capacitor !== 'undefined';
+const isDevServer = window.location.port === '3000';
+// iOS в браузере/PWA — используем нативные эмодзи, свою панель не показываем
+const isIOSWeb = /iPhone|iPad|iPod/i.test(navigator.userAgent) && !isElectron && !isCapacitor;
+if (isElectron || isCapacitor || isDevServer) {
+  SOCKET_URL = 'http://192.168.210.48:3001';
+} else {
+  SOCKET_URL = window.location.origin;
+}
 const STORAGE_KEY = 'chat_user_data';
 
 // CSRF токен для защиты от межсайтовой подделки запросов
@@ -33,6 +48,34 @@ async function fetchCsrfToken() {
   return null;
 }
 fetchCsrfToken();
+
+// fetch/сеть/TLS-сбой бросают TypeError (сообщения вида "Failed to fetch",
+// "NetworkError", "ERR_..."). Это отличаем от обычных ошибок сервера (HTTP-статусы)
+function isNetworkError(err) {
+  if (!err) return false;
+  if (err instanceof TypeError) return true;
+  return /Failed to fetch|NetworkError|fetch failed|ERR_|ECONN|certificate|SSL/i.test(
+    String((err && err.message) || err)
+  );
+}
+
+// Нормализация URL файлов/аватаров: старые http:// ссылки (до перехода на HTTPS)
+// переписываем на текущий адрес сервера. HTTPS и относительные пути не трогаем.
+function normalizeFileUrl(url) {
+  if (!url || typeof url !== 'string') return url;
+  if (url.startsWith('http://')) {
+    try {
+      const u = new URL(url);
+      return `${SOCKET_URL}${u.pathname}${u.search}`;
+    } catch (e) {
+      return url;
+    }
+  }
+  if (url.startsWith('/')) {
+    return `${SOCKET_URL}${url}`;
+  }
+  return url;
+}
 
 function addCsrfHeader(init) {
   if (init.headers instanceof Headers) {
@@ -211,6 +254,40 @@ function extractFileUuidFromUrl(url) {
 // Быстрые реакции из emojiData (категория "Реакции")
 const QUICK_REACTIONS = emojiData['Реакции']?.emojis.map(e => e.emoji) || ['👍', '❤️', '😂'];
 
+// Шрифты для кастомизации сообщений
+const MESSAGE_FONTS = {
+  inter: "'Inter', sans-serif",
+  system: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif",
+  georgia: "Georgia, 'Times New Roman', serif",
+  mono: "'Cascadia Code', 'Consolas', 'Courier New', monospace"
+};
+
+// Пресеты скругления углов облачков: [основной радиус, радиус «хвостика»]
+const BUBBLE_RADIUS_MAP = {
+  0: ['6px', '2px'],
+  1: ['12px', '3px'],
+  2: ['18px', '4px']
+};
+
+// Готовые стили облачков сообщений
+const BUBBLE_PRESETS = [
+  { id: 'classic', name: 'Классика', own: ['#667eea', '#764ba2'], ownText: '#ffffff', other: '#ffffff', otherText: '#1a1a2e' },
+  { id: 'telegram', name: 'Telegram', own: ['#E1FFC7', '#B9E7A7'], ownText: '#000000', other: '#FFFFFF', otherText: '#000000' },
+  { id: 'whatsapp', name: 'WhatsApp', own: ['#D9FDD3', '#A8DEC1'], ownText: '#111B21', other: '#FFFFFF', otherText: '#111B21' },
+  { id: 'discord', name: 'Discord', own: ['#5865F2', '#404EED'], ownText: '#FFFFFF', other: '#313338', otherText: '#DCDDDE' },
+  { id: 'mono', name: 'Монохром', own: ['#2b2b2b', '#4a4a4a'], ownText: '#EEEEEE', other: '#E8E8E8', otherText: '#222222' }
+];
+
+// Слова и эмодзи, запускающие конфетти (проверка без учёта регистра, как подстрока)
+const CONFETTI_KEYWORDS = ['поздравляю', 'с днём рождения', 'день рождения', 'happy birthday', 'congratulations', 'ура'];
+const CONFETTI_EMOJIS = ['🎉', '🥳', '🎊'];
+
+function shouldTriggerConfetti(text) {
+  if (!text || typeof text !== 'string') return false;
+  const lower = text.toLowerCase();
+  return CONFETTI_KEYWORDS.some(k => lower.includes(k)) || CONFETTI_EMOJIS.some(e => text.includes(e));
+}
+
 function App() {
   const [socket, setSocket] = useState(null);
   const [currentUser, setCurrentUser] = useState(null);
@@ -241,20 +318,30 @@ function App() {
   const [rememberMe, setRememberMe] = useState(false); // Запомнить меня
   const [authError, setAuthError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  // true — ошибка сети/TLS (сервер недоступен), показываем кнопку «Повторить»
+  const [isNetworkError, setIsNetworkError] = useState(false);
 
   // In-app уведомления (Telegram-стиль)
   const [inAppNotifications, setInAppNotifications] = useState([]);
   const inAppNotificationIdRef = useRef(0);
 
   const [chats, setChats] = useState([]);
+  const chatsRef = useRef([]);
   const [activeChatId, setActiveChatId] = useState(null);
   const [botTypingChatId, setBotTypingChatId] = useState(null);
   const [messages, setMessages] = useState([]);
+  // Пагинация истории: мета активного чата + реф контейнера ленты
+  const [historyUi, setHistoryUi] = useState({ loadingMore: false, hasMore: true });
+  const historyMetaRef = useRef({});   // { [chatId]: { hasMore, loadingMore, oldestTs } }
+  const messagesContainerRef = useRef(null);
   const [users, setUsers] = useState([]);
 
   // Видимость приложения (для корректного подсчёта непрочитанных)
   const [isAppVisible, setIsAppVisible] = useState(true);
   const isAppVisibleRef = useRef(true);
+  // Фокус окна (для системных уведомлений и счётчика непрочитанных)
+  const [isWindowFocused, setIsWindowFocused] = useState(true);
+  const isWindowFocusedRef = useRef(true);
 
   const [inputText, setInputText] = useState('');
   const [selectedFile, setSelectedFile] = useState(null);
@@ -287,12 +374,27 @@ function App() {
     reactionsExpanded: false,
   });
 
+  // Контекстное меню чата (в списке чатов по правому клику)
+  const [chatContextMenu, setChatContextMenu] = useState({
+    visible: false,
+    x: 0,
+    y: 0,
+    chat: null,
+  });
+
   // Контекстное меню поля ввода
   const [inputContextMenu, setInputContextMenu] = useState({
     visible: false,
     x: 0,
-    y: 0
+    y: 0,
+    word: null,        // слово под курсором ПКМ
+    suggestions: null, // варианты исправления (null = ещё не проверялось)
+    checking: false
   });
+  // Проверка орфографии: кэш вариантов и диапазон слова для замены
+  const spellCacheRef = useRef(new Map());
+  const spellTargetRef = useRef(null);
+  const spellDebounceRef = useRef(null);
 
   // Реакции на сообщения
   const [messageReactions, setMessageReactions] = useState({});
@@ -371,6 +473,7 @@ function App() {
   });
   const [canBookMeetingRoom, setCanBookMeetingRoom] = useState(false); // Право на бронирование
   const [canEditWiki, setCanEditWiki] = useState(false); // Право на редактирование wiki
+  const [canViewKpi, setCanViewKpi] = useState(false); // Право на просмотр показателей
   const [showTaskModal, setShowTaskModal] = useState(false);
   const [editingTask, setEditingTask] = useState(null);
   const [taskForm, setTaskForm] = useState({
@@ -379,12 +482,17 @@ function App() {
     taskDate: '',
     taskTime: '',
     taskEndTime: '',
-    color: '#667eea'
+    color: '#667eea',
+    reminderType: 'none',
+    reminderCustomTime: ''
   });
   const [selectedDayTasks, setSelectedDayTasks] = useState([]);
+  // Источник задачи «из сообщения»: { chatId, messageId } — сохраняется с задачей для кнопки перехода
+  const [taskSource, setTaskSource] = useState(null);
   const [showChatMenu, setShowChatMenu] = useState(false);
   const [showMediaViewer, setShowMediaViewer] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [chatToDelete, setChatToDelete] = useState(null);
   const [messageToDelete, setMessageToDelete] = useState(null);
   const [chatMenuPosition, setChatMenuPosition] = useState({ top: 0, right: 0 });
   const [showAddMenu, setShowAddMenu] = useState(false);
@@ -425,6 +533,7 @@ function App() {
   const [showSearchMessages, setShowSearchMessages] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
+  const [fileResults, setFileResults] = useState([]); // Результаты единого поиска файлов (чаты + wiki)
   const [currentSearchIndex, setCurrentSearchIndex] = useState(0);
   const [isSearching, setIsSearching] = useState(false);
   const [chatSearchActive, setChatSearchActive] = useState(false);
@@ -452,6 +561,23 @@ function App() {
   const [disappearingTasks, setDisappearingTasks] = useState([]); // Задачи с анимацией исчезновения
   const [expandedSections, setExpandedSections] = useState({ birthdays: true, tasks: true, sharedTasks: true });
   const [unreadNotificationsCount, setUnreadNotificationsCount] = useState(0); // Количество непрочитанных уведомлений
+  // Дата последнего просмотра уведомлений — гасит бейдж дней рождения до конца дня
+  const [birthdaysBadgeSeenDate, setBirthdaysBadgeSeenDate] = useState(() => localStorage.getItem('birthdayBadgeSeenDate') || '');
+  // Бейдж на кнопке уведомлений: сегодняшние дни рождения (кроме своего), пока уведомления не просмотрены сегодня
+  const birthdaysBadgeTodayKey = new Date().toDateString();
+  const birthdaysBadgeCount = birthdaysBadgeSeenDate === birthdaysBadgeTodayKey
+    ? 0
+    : birthdaysToday.filter(b => b.id !== currentUser?.id).length;
+
+  // Конфетти на праздничные сообщения (анти-дребезг через lastConfettiRef)
+  const [confettiKey, setConfettiKey] = useState(0);
+  const lastConfettiRef = useRef(0);
+
+  // Режим выбора сообщений для мульти-пересылки
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedMessageIds, setSelectedMessageIds] = useState([]);
+  // Снапшот выбранных id на время открытой модалки пересылки
+  const [pendingForwardIds, setPendingForwardIds] = useState([]);
   const [showNotificationSettings, setShowNotificationSettings] = useState(false);
   const [showPollModal, setShowPollModal] = useState(false);
   const [pollQuestion, setPollQuestion] = useState('');
@@ -475,6 +601,7 @@ function App() {
   const [wikiCategoryName, setWikiCategoryName] = useState('');
   const [wikiCategoryDesc, setWikiCategoryDesc] = useState('');
   const [wikiFileUploading, setWikiFileUploading] = useState(false);
+  const [wikiCreating, setWikiCreating] = useState(false);
   const [wikiFiles, setWikiFiles] = useState([]);
   const [wikiSearch, setWikiSearch] = useState('');
   const [wikiAccessLevel, setWikiAccessLevel] = useState('public');
@@ -529,7 +656,17 @@ function App() {
     themeColor: '#667eea',
     themeGradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
     textSizeLevel: 1, // -1 = мин., 0 = мал., 1 = ср., 2 = бол.
-    chatBackground: 0  // индекс фона чата (0 = нет)
+    chatBackground: 0,  // индекс фона чата (0 = нет)
+    chatBackgroundImage: null, // собственная картинка фона чата (dataURL) — легаси, см. библиотеку
+    chatBackgroundCustomId: null, // id фона из библиотеки пользователя (IndexedDB)
+    bubbleOwnColor: '#667eea',   // фон исходящего облачка (начало градиента)
+    bubbleOwnColor2: '#764ba2',  // фон исходящего облачка (конец градиента)
+    bubbleOwnText: '#ffffff',    // цвет текста исходящих сообщений
+    bubbleOtherColor: '#ffffff', // фон входящего облачка
+    bubbleOtherText: '#1a1a2e',  // цвет текста входящих сообщений
+    bubbleRadiusLevel: 2,        // скругление углов: 0=острые, 1=средние, 2=скруглённые
+    messageFont: 'inter',        // шрифт сообщений (ключ MESSAGE_FONTS)
+    spellCheckEnabled: true      // проверка орфографии в поле ввода (Яндекс.Спеллер)
   });
 
   // Тема (тёмная/светлая)
@@ -579,6 +716,7 @@ function App() {
   const [supportRequests, setSupportRequests] = useState([]);
   const [supportActiveFilter, setSupportActiveFilter] = useState('open');
   const [adminUsers, setAdminUsers] = useState([]);
+  const [adminServerVersion, setAdminServerVersion] = useState(null);
   const [activeAdminTab, setActiveAdminTab] = useState('dashboard');
   const [showCreateUserModal, setShowCreateUserModal] = useState(false);
   const [newUserData, setNewUserData] = useState({
@@ -630,6 +768,11 @@ function App() {
   const loginFormRef = useRef(null);
   const loginTimeoutRef = useRef(null);
   const prevViewRef = useRef(null);
+  const chatBgFileRef = useRef(null);
+  // Библиотека пользовательских фонов чата (IndexedDB) + активная картинка
+  const [customBackgrounds, setCustomBackgrounds] = useState([]);
+  const [activeCustomBgUrl, setActiveCustomBgUrl] = useState(null);
+  const clientVersionRef = useRef('web');
 
   // Вычисляем активный чат по ID
   const activeChat = chats.find(c => c.id === activeChatId) || null;
@@ -654,7 +797,13 @@ function App() {
     const today = new Date();
     const todayDay = today.getDate();
     const todayMonth = today.getMonth() + 1; // getMonth() возвращает 0-11
-    
+
+    const todayStr = today.toDateString();
+    const lastCheck = localStorage.getItem('lastFrontendBirthdayCheck');
+
+    // Показываем браузерное уведомление только раз в день
+    const shouldNotify = lastCheck !== todayStr;
+
     const birthdays = users.filter(user => {
       if (!user.birth_date) return false;
       const birthDate = new Date(user.birth_date);
@@ -664,13 +813,14 @@ function App() {
       username: user.username,
       avatar: user.avatar
     }));
-    
+
     setBirthdaysToday(birthdays);
 
     // Показываем уведомление для дней рождения
-    if (birthdays.length > 0 && Notification.permission === 'granted' && notificationSettings.birthdays) {
+    if (birthdays.length > 0 && shouldNotify && Notification.permission === 'granted' && notificationSettings.birthdays) {
+      localStorage.setItem('lastFrontendBirthdayCheck', todayStr);
       const names = birthdays.map(b => b.username).join(', ');
-      
+
       // Звук уведомления
       if (notificationSettings.sound) {
         try {
@@ -678,7 +828,7 @@ function App() {
           audio.play().catch(() => {});
         } catch (e) {}
       }
-      
+
       new Notification('🎂 День рождения!', {
         body: `У ${names} сегодня день рождения!`,
         icon: '/favicon.ico',
@@ -855,23 +1005,46 @@ function App() {
     // Градация размера текста: -1=мин(11px), 0=мал(13px), 1=ср(15px), 2=бол(18px)
     const sizeMap = { '-1': '11px', '0': '13px', '1': '15px', '2': '18px' };
     const emojiSizeMap = { '-1': '16px', '0': '18px', '1': '22px', '2': '28px' };
+    const emojiBigSizeMap = { '-1': '36px', '0': '44px', '1': '52px', '2': '60px' };
     const baseSizeMap = { '-1': '11px', '0': '13px', '1': '15px', '2': '18px' };
     const level = userUiSettings.textSizeLevel ?? 1;
     document.documentElement.style.setProperty('--font-size-base', baseSizeMap[level] || '15px');
     document.documentElement.style.setProperty('--message-font-size', sizeMap[level] || '15px');
     document.documentElement.style.setProperty('--message-emoji-size', emojiSizeMap[level] || '22px');
+    document.documentElement.style.setProperty('--message-emoji-big-size', emojiBigSizeMap[level] || '52px');
+    // Кастомизация облачков сообщений
+    const ownColor = userUiSettings.bubbleOwnColor || '#667eea';
+    const ownColor2 = userUiSettings.bubbleOwnColor2 || '#764ba2';
+    document.documentElement.style.setProperty('--bubble-own-bg', `linear-gradient(135deg, ${ownColor} 0%, ${ownColor2} 100%)`);
+    document.documentElement.style.setProperty('--bubble-own-text', userUiSettings.bubbleOwnText || '#ffffff');
+    document.documentElement.style.setProperty('--bubble-other-bg', userUiSettings.bubbleOtherColor || '#ffffff');
+    document.documentElement.style.setProperty('--bubble-other-text', userUiSettings.bubbleOtherText || '#1a1a2e');
+    const [radius, radiusTail] = BUBBLE_RADIUS_MAP[userUiSettings.bubbleRadiusLevel ?? 2] || BUBBLE_RADIUS_MAP[2];
+    document.documentElement.style.setProperty('--bubble-radius', radius);
+    document.documentElement.style.setProperty('--bubble-radius-tail', radiusTail);
+    document.documentElement.style.setProperty('--message-font', MESSAGE_FONTS[userUiSettings.messageFont] || MESSAGE_FONTS.inter);
   }, [userUiSettings]);
 
   // Применение фона чата при изменении настроек или темы
   useEffect(() => {
+    // Приоритет: активный фон из библиотеки → легаси-картинка из настроек → пресет
+    if (activeCustomBgUrl) {
+      document.documentElement.style.setProperty('--chat-bg-image', `url("${activeCustomBgUrl}")`);
+      return;
+    }
+    const custom = userUiSettings.chatBackgroundImage || null;
+    if (custom) {
+      document.documentElement.style.setProperty('--chat-bg-image', `url("${custom}")`);
+      return;
+    }
     const bg = chatBackgrounds.find(b => b.id === (userUiSettings.chatBackground || 0));
     if (bg && bg.id !== 0) {
       const gradient = appTheme === 'light' ? bg.light : bg.dark;
       document.documentElement.style.setProperty('--chat-bg-image', gradient);
     } else {
-      document.documentElement.style.setProperty('--chat-bg-image', 'none');
+      document.documentElement.style.removeProperty('--chat-bg-image');
     }
-  }, [userUiSettings.chatBackground, appTheme]);
+  }, [userUiSettings.chatBackground, userUiSettings.chatBackgroundImage, activeCustomBgUrl, appTheme]);
 
   // Загрузка состояния автозапуска (только Electron)
   useEffect(() => {
@@ -886,12 +1059,61 @@ function App() {
     if (savedSettings && currentUser) {
       try {
         const parsed = JSON.parse(savedSettings);
-        setUserUiSettings(parsed);
+        // Мёрж с дефолтами: у старых сохранений нет новых полей — берутся значения по умолчанию
+        setUserUiSettings(prev => ({ ...prev, ...parsed }));
       } catch (e) {
         console.error('Ошибка загрузки настроек:', e);
       }
     }
-  }, [currentUser]);
+  }, [currentUser?.id]);
+
+  // Загрузка библиотеки пользовательских фонов + миграция легаси-фона из настроек
+  useEffect(() => {
+    if (!currentUser?.id) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        let bgs = await getAllCustomBgs();
+        const settingsKey = `userUiSettings_${currentUser.id}`;
+
+        // Одноразовая миграция: старый единственный фон из localStorage переезжает в библиотеку
+        try {
+          const raw = localStorage.getItem(settingsKey);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (parsed.chatBackgroundImage && !parsed.chatBackgroundCustomId
+                && !bgs.some(b => b.dataUrl === parsed.chatBackgroundImage)) {
+              const id = await saveCustomBg(parsed.chatBackgroundImage);
+              bgs = await getAllCustomBgs();
+              const migrated = { ...parsed, chatBackgroundImage: null, chatBackgroundCustomId: id };
+              // Техническая запись миграции напрямую в localStorage (не через кнопку «Сохранить»)
+              localStorage.setItem(settingsKey, JSON.stringify(migrated));
+              setUserUiSettings(prev => ({ ...prev, chatBackgroundImage: null, chatBackgroundCustomId: id }));
+            }
+          }
+        } catch (e) { /* миграция необязательна */ }
+
+        if (cancelled) return;
+        setCustomBackgrounds(bgs);
+
+        // Подгружаем картинку активного кастомного фона
+        let activeId = null;
+        try {
+          const raw = localStorage.getItem(settingsKey);
+          if (raw) activeId = JSON.parse(raw).chatBackgroundCustomId || null;
+        } catch (e) { activeId = null; }
+        if (activeId && !cancelled) {
+          const found = bgs.find(b => b.id === activeId);
+          setActiveCustomBgUrl(found ? found.dataUrl : null);
+        } else if (!cancelled) {
+          setActiveCustomBgUrl(null);
+        }
+      } catch (err) {
+        console.error('Ошибка загрузки библиотеки фонов:', err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [currentUser?.id]);
 
   // Автофокус на поле ввода при переключении чата + сохранение черновиков
   useEffect(() => {
@@ -973,9 +1195,45 @@ function App() {
 
   // Отслеживание размера окна для адаптивного поведения и клавиатуры
   useEffect(() => {
+    const getViewportHeight = () => {
+      // visualViewport точнее на мобильных (адресная строка/клавиатура iOS)
+      if (window.visualViewport && window.visualViewport.height) {
+        return window.visualViewport.height;
+      }
+      return window.innerHeight;
+    };
+
+    const updateAppHeight = () => {
+      document.documentElement.style.setProperty('--app-height', `${getViewportHeight()}px`);
+    };
+
+    // Клавиатура iOS: низ контейнера поднимается на высоту клавиатуры,
+    // чтобы поле ввода не пряталось под ней
+    const updateKeyboardInset = () => {
+      if (!window.visualViewport) return;
+      const layoutHeight = window.innerHeight;
+      const visibleHeight = window.visualViewport.height;
+      const keyboard = Math.max(0, layoutHeight - visibleHeight);
+      document.documentElement.style.setProperty(
+        '--app-keyboard-inset',
+        keyboard > 40 ? `${keyboard}px` : '0px'
+      );
+    };
+
+    let rafId = null;
+    const handleVisualViewportChange = () => {
+      if (rafId) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        updateAppHeight();
+        updateKeyboardInset();
+      });
+    };
+
     const handleResize = () => {
       setWindowWidth(window.innerWidth);
-      document.documentElement.style.setProperty('--app-height', `${window.innerHeight}px`);
+      updateAppHeight();
+      updateKeyboardInset();
 
       // Сбрасываем мобильный вид при переходе через breakpoint 768px
       if (window.innerWidth > 768) {
@@ -984,9 +1242,21 @@ function App() {
     };
 
     window.addEventListener('resize', handleResize);
+    // iOS: клавиатура/адресная строка меняют visualViewport без window.resize
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', handleVisualViewportChange);
+      window.visualViewport.addEventListener('scroll', handleVisualViewportChange);
+    }
     handleResize(); // Вызываем сразу при монтировании
 
-    return () => window.removeEventListener('resize', handleResize);
+    return () => {
+      if (rafId) cancelAnimationFrame(rafId);
+      window.removeEventListener('resize', handleResize);
+      if (window.visualViewport) {
+        window.visualViewport.removeEventListener('resize', handleVisualViewportChange);
+        window.visualViewport.removeEventListener('scroll', handleVisualViewportChange);
+      }
+    };
   }, []);
 
   // Получение версии приложения
@@ -996,20 +1266,32 @@ function App() {
         try {
           const version = await window.electronAPI.getAppVersion();
           setAppVersion(version);
+          clientVersionRef.current = version;
         } catch (err) {
           console.error('Ошибка получения версии:', err);
         }
 
         // Подписка на статус видимости приложения
         if (window.electronAPI.onAppVisibility) {
-          window.electronAPI.onAppVisibility((visible) => {
-            setIsAppVisible(visible);
-            isAppVisibleRef.current = visible;
-            console.log(`app visibility: ${visible}`);
+          window.electronAPI.onAppVisibility((state) => {
+            setIsAppVisible(!!state.visible);
+            isAppVisibleRef.current = !!state.visible;
+            setIsWindowFocused(!!state.focused);
+            isWindowFocusedRef.current = !!state.focused;
+            console.log(`app visibility: ${state.visible}, focused: ${state.focused}`);
           });
         }
         if (window.electronAPI.getAppVisibilityStatus) {
           window.electronAPI.getAppVisibilityStatus();
+        }
+      } else {
+        try {
+          const resp = await fetch(`${SOCKET_URL}/api/version`);
+          const data = await resp.json();
+          clientVersionRef.current = data.version || 'web';
+          setAppVersion(clientVersionRef.current);
+        } catch (err) {
+          clientVersionRef.current = 'web';
         }
       }
     };
@@ -1153,9 +1435,11 @@ function App() {
     console.log('Сокет подключён:', newSocket.connected);
     console.log('SOCKET_URL:', SOCKET_URL);
 
-    // Таймаут для принудительного показа формы входа
+    // Таймаут для принудительного показа формы входа.
+    // Если сокет всё ещё пытается подключиться/переподключиться — не «выкидываем»
+    // в форму, а даём сокету время: сессия восстановится автоматически по user_joined.
     loginTimeoutRef.current = setTimeout(() => {
-      if (!currentUserRef.current) {
+      if (!currentUserRef.current && !newSocket.connected) {
         console.log('Таймаут входа: показываем форму');
         setIsLoggedIn(false);
         setCurrentUser(null);
@@ -1179,7 +1463,8 @@ function App() {
             username: parsed.username,
             email: parsed.email,
             deviceId: getDeviceId(),
-            deviceName: getDeviceName()
+            deviceName: getDeviceName(),
+            appVersion: clientVersionRef.current
           });
         } catch (e) {
           console.error('Ошибка парсинга savedData при переподключении:', e);
@@ -1270,7 +1555,8 @@ function App() {
           username: parsed.username,
           email: parsed.email,
           deviceId: getDeviceId(),
-          deviceName: getDeviceName()
+          deviceName: getDeviceName(),
+          appVersion: clientVersionRef.current
         });
       } catch (e) {
         console.error('Ошибка парсинга savedData:', e);
@@ -1298,10 +1584,12 @@ function App() {
           const canBook = fullUser.username === 'Root' || data.user.can_book_meeting_room === 1;
           setCanBookMeetingRoom(canBook);
           setCanEditWiki(fullUser.is_admin === 1 || data.user.can_edit_wiki === 1);
+          setCanViewKpi(fullUser.is_admin === 1 || data.user.can_view_kpi === 1);
         } else {
           setCurrentUser(user);
           setCanBookMeetingRoom(false);
           setCanEditWiki(user.is_admin === 1);
+          setCanViewKpi(user.is_admin === 1);
         }
       } catch (err) {
         console.error('Ошибка загрузки профиля:', err);
@@ -1313,9 +1601,10 @@ function App() {
       setIsLoggedIn(true);
       // Сбрасываем unreadCount для всех чатов при загрузке
       // (так как пользователь только что вошел и видел все сообщения)
+      // Но если чат был помечен как непрочитанный — показываем бейдж
       const chatsWithZeroUnread = userChats.map(chat => ({
         ...chat,
-        unreadCount: 0
+        unreadCount: chat.forceUnread ? Math.max(chat.unreadCount || 0, 1) : 0
       }));
       setChats(chatsWithZeroUnread);
 
@@ -1380,7 +1669,7 @@ function App() {
       flushOutbox();
     });
 
-    newSocket.on('chat_history', async ({ chatId, messages: chatMessages }) => {
+    newSocket.on('chat_history', async ({ chatId, messages: chatMessages, hasMore }) => {
       // Очищаем таймаут загрузки если он есть
       if (window.chatLoadTimeout) {
         clearTimeout(window.chatLoadTimeout);
@@ -1396,6 +1685,15 @@ function App() {
       // Устанавливаем сообщения только для активного чата
       if (activeChatIdRef.current === chatId) {
         setMessages(decryptedMessages);
+        // Мета пагинации: сервер сообщает, есть ли более старые сообщения
+        const meta = historyMetaRef.current[chatId] || {};
+        historyMetaRef.current[chatId] = {
+          ...meta,
+          hasMore: !!hasMore,
+          loadingMore: false,
+          oldestTs: decryptedMessages.length ? decryptedMessages[0].timestamp : (meta.oldestTs || null)
+        };
+        setHistoryUi({ loadingMore: false, hasMore: !!hasMore });
 
         // Инициализируем реакции из сообщений
         const reactionsData = {};
@@ -1431,6 +1729,18 @@ function App() {
       // Сохраняем в IndexedDB для офлайн-доступа
       saveMessages(message.chatId, [message]).catch(err => console.error('[Offline] save msg error:', err));
 
+      // Конфетти на праздничные слова/эмодзи (свои и чужие сообщения, кроме замьюченных чатов)
+      try {
+        if (shouldTriggerConfetti(stripStickerMarkers(message.text || ''))) {
+          const isMuted = !!chatsRef.current.find(c => c.id === message.chatId)?.muted;
+          const now = Date.now();
+          if (!isMuted && now - lastConfettiRef.current > 5000) {
+            lastConfettiRef.current = now;
+            setConfettiKey(k => k + 1);
+          }
+        }
+      } catch (e) { /* эффект необязателен */ }
+
       // Используем currentUserRef.current и activeChatIdRef.current для актуальных значений
       const myId = currentUserRef.current?.id;
       const isMyMessage = isOwnMessage || message.senderId === myId;
@@ -1439,24 +1749,28 @@ function App() {
       // Показываем уведомление если:
       // 1. Сообщение не от нас
       if (!isMyMessage) {
+        // Если чат приглушён — звук, in-app и системные уведомления не показываем
+        const isChatMuted = !!chatsRef.current.find(c => c.id === message.chatId)?.muted;
 
         // Звук уведомления
-        if (notificationSettingsRef.current.sound) {
+        if (!isChatMuted && notificationSettingsRef.current.sound) {
           try {
             const audio = new Audio('data:audio/wav;base64,UklGRl9vT19XQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YU');
             audio.play().catch(() => {});
           } catch (e) {}
         }
 
-        // In-app уведомление (Telegram-стиль) — показываем всегда
-        const senderName = message.senderName || 'Чат УРСА';
-        const messageBody = stripStickerMarkers(message.text) || '📎 Файл';
-        showInAppNotification(senderName, messageBody, message.senderAvatar || null, message.chatId);
+        // In-app уведомление (Telegram-стиль) — показываем если чат не приглушён
+        if (!isChatMuted) {
+          const senderName = message.senderName || 'Чат УРСА';
+          const messageBody = stripStickerMarkers(message.text) || '📎 Файл';
+          showInAppNotification(senderName, messageBody, message.senderAvatar || null, message.chatId);
+        }
 
-        // Системное уведомление (на рабочем столе) — как в Telegram + при свёрнутом окне
-        const shouldShowSystemNotification = !isChatActive || !isAppVisibleRef.current;
+        // Системное уведомление (на рабочем столе) — если чат не активен или окно не в фокусе
+        const shouldShowSystemNotification = !isChatActive || !isAppVisibleRef.current || !isWindowFocusedRef.current;
 
-        if (shouldShowSystemNotification && notificationSettingsRef.current.newMessages) {
+        if (!isChatMuted && shouldShowSystemNotification && notificationSettingsRef.current.newMessages) {
           const senderName = message.senderName || 'Чат УРСА';
           const messageBody = (message.senderName ? `${message.senderName}: ` : '') + (stripStickerMarkers(message.text) || '📎 Файл');
 
@@ -1513,11 +1827,11 @@ function App() {
               let newUnreadCount;
 
               // Логика подсчёта непрочитанных:
-              // - Если чат активен И приложение видно → сообщение на экране, unreadCount = 0
-              // - Если чат активен НО приложение скрыто/свёрнуто → пользователь не видит, увеличиваем счётчик
+              // - Если чат активен И приложение видно И в фокусе → сообщение на экране, unreadCount = 0
+              // - Если чат активен, но окно скрыто/свёрнуто/не в фокусе → пользователь не видит, увеличиваем счётчик
               // - Исходящие сообщения → всегда 0
               // - Входящие + чат не активен → увеличиваем счётчик
-              if (!isMessageFromMe && isChatActive && isAppVisibleRef.current) {
+              if (!isMessageFromMe && isChatActive && isAppVisibleRef.current && isWindowFocusedRef.current) {
                 newUnreadCount = 0;
               } else if (isMessageFromMe) {
                 newUnreadCount = 0;
@@ -1540,6 +1854,7 @@ function App() {
             return c;
           });
           return updated.sort((a, b) => {
+            if (!!a.pinned !== !!b.pinned) return !!a.pinned ? -1 : 1;
             const aTime = a.lastMessage?.timestamp || a.createdAt;
             const bTime = b.lastMessage?.timestamp || b.createdAt;
             return new Date(bTime) - new Date(aTime);
@@ -2097,6 +2412,7 @@ function App() {
 
   // Отправляем общее количество непрочитанных сообщений в Electron для отображения бейджа
   useEffect(() => {
+    chatsRef.current = chats;
     // Суммируем все непрочитанные сообщения из всех чатов
     const totalUnread = chats.reduce((sum, chat) => {
       return sum + (chat.unreadCount || 0);
@@ -2260,6 +2576,7 @@ function App() {
   const handleLogin = async (e) => {
     e.preventDefault();
     setAuthError('');
+    setIsNetworkError(false);
     setIsLoading(true);
 
     try {
@@ -2284,7 +2601,8 @@ function App() {
         // Подключаемся к сокету с данными пользователя
         socket.emit('join', {
           username: data.user.username,
-          userId: data.user.id
+          userId: data.user.id,
+          appVersion: clientVersionRef.current
         });
         // Очищаем форму
         setEmail('');
@@ -2309,7 +2627,12 @@ function App() {
         setAuthError(data.error || 'Ошибка входа');
       }
     } catch (err) {
-      setAuthError('Ошибка соединения с сервером');
+      if (isNetworkError(err)) {
+        setIsNetworkError(true);
+        setAuthError('Нет соединения с сервером. Проверьте Wi-Fi/интернет и повторите.');
+      } else {
+        setAuthError('Ошибка соединения с сервером');
+      }
     } finally {
       setIsLoading(false);
     }
@@ -2319,6 +2642,7 @@ function App() {
   const handleRegister = async (e) => {
     e.preventDefault();
     setAuthError('');
+    setIsNetworkError(false);
     setIsLoading(true);
 
     if (password.length < 8) {
@@ -2381,7 +2705,12 @@ function App() {
         setAuthError(data.error || 'Ошибка регистрации');
       }
     } catch (err) {
-      setAuthError('Ошибка соединения с сервером');
+      if (isNetworkError(err)) {
+        setIsNetworkError(true);
+        setAuthError('Нет соединения с сервером. Проверьте Wi-Fi/интернет и повторите.');
+      } else {
+        setAuthError('Ошибка соединения с сервером');
+      }
     } finally {
       setIsLoading(false);
     }
@@ -2528,6 +2857,7 @@ function App() {
       if (response.ok) {
         const data = await response.json();
         setAdminUsers(data.users);
+        setAdminServerVersion(data.serverVersion || null);
         
         // Подсчитываем количество пользователей на каждый host
         const counts = {};
@@ -2691,6 +3021,32 @@ function App() {
       }
     } catch (err) {
       console.error('Ошибка изменения права на wiki:', err);
+    }
+  };
+
+  const handleToggleKpiRights = async (userId, currentCanView) => {
+    const newCanView = currentCanView === 1 ? 0 : 1;
+
+    try {
+      const response = await fetch(`${SOCKET_URL}/api/admin/users/${userId}/kpi-rights`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          can_view_kpi: newCanView,
+          adminId: currentUser.id
+        })
+      });
+
+      if (response.ok) {
+        loadAdminUsers();
+        if (userId === currentUser.id) {
+          setCanViewKpi(newCanView === 1);
+        }
+      } else {
+        alert('Ошибка изменения права на просмотр показателей');
+      }
+    } catch (err) {
+      console.error('Ошибка изменения права на KPI:', err);
     }
   };
 
@@ -3059,10 +3415,75 @@ function App() {
     setActiveSettingsTab('about');
   };
 
+  const handleChatBgUpload = (file) => {
+    if (!file || !file.type.startsWith('image/')) {
+      alert('Пожалуйста, выберите изображение');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      const img = new Image();
+      img.onload = async () => {
+        try {
+          const MAX = 1920;
+          const scale = Math.min(1, MAX / Math.max(img.width, img.height));
+          const w = Math.round(img.width * scale);
+          const h = Math.round(img.height * scale);
+          const canvas = document.createElement('canvas');
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, w, h);
+          const isPng = file.type === 'image/png';
+          const dataUrl = canvas.toDataURL(isPng ? 'image/png' : 'image/jpeg', 0.85);
+
+          // Сохраняем в личную библиотеку фонов и сразу применяем
+          const id = await saveCustomBg(dataUrl);
+          setCustomBackgrounds(await getAllCustomBgs());
+          setActiveCustomBgUrl(dataUrl);
+          setUserUiSettings(prev => ({ ...prev, chatBackground: 0, chatBackgroundImage: null, chatBackgroundCustomId: id }));
+        } catch (err) {
+          console.error('Ошибка обработки изображения:', err);
+          alert('Не удалось обработать изображение');
+        }
+      };
+      img.onerror = () => alert('Не удалось прочитать изображение');
+      img.src = e.target.result;
+    };
+    reader.onerror = () => alert('Не удалось прочитать файл');
+    reader.readAsDataURL(file);
+  };
+
+  // Выбрать фон из библиотеки
+  const selectCustomBackground = (bg) => {
+    setActiveCustomBgUrl(bg.dataUrl);
+    setUserUiSettings(prev => ({ ...prev, chatBackground: 0, chatBackgroundImage: null, chatBackgroundCustomId: bg.id }));
+  };
+
+  // Удалить фон из библиотеки (если он активный — снять выбор)
+  const removeCustomBackground = async (bg) => {
+    try {
+      await deleteCustomBg(bg.id);
+      const rest = await getAllCustomBgs();
+      setCustomBackgrounds(rest);
+      if ((userUiSettings.chatBackgroundCustomId || '') === bg.id) {
+        setActiveCustomBgUrl(null);
+        setUserUiSettings(prev => ({ ...prev, chatBackgroundCustomId: null }));
+      }
+    } catch (err) {
+      console.error('Ошибка удаления фона:', err);
+    }
+  };
+
   const handleSaveUserUiSettings = () => {
     // Сохраняем настройки в localStorage для текущего пользователя
     if (currentUser?.id) {
-      localStorage.setItem(`userUiSettings_${currentUser.id}`, JSON.stringify(userUiSettings));
+      try {
+        localStorage.setItem(`userUiSettings_${currentUser.id}`, JSON.stringify(userUiSettings));
+      } catch (err) {
+        console.error('Ошибка сохранения настроек:', err);
+        alert('Не удалось сохранить настройки: файл слишком большой для локального хранилища');
+      }
     }
     // Настройки применяются автоматически через useEffect
   };
@@ -3219,6 +3640,11 @@ function App() {
     // Очищаем индикаторы печати при смене чата
     setTypingUsers({});
 
+    // Сбрасываем мету пагинации для нового чата
+    const meta = historyMetaRef.current[chat.id] || { hasMore: true, loadingMore: false, oldestTs: null };
+    historyMetaRef.current[chat.id] = meta;
+    setHistoryUi({ loadingMore: false, hasMore: !!meta.hasMore });
+
     // Проверяем подключение сокета
     if (!socket || !socket.connected) {
       console.warn('Сокет не подключён, пытаемся загрузить сообщения через API...');
@@ -3311,11 +3737,74 @@ function App() {
     setCurrentSearchIndex(0);
   };
 
+  // ─── Пагинация истории: догрузка старых сообщений при скролле вверх ───
+
+  const loadOlderMessages = () => {
+    const chatId = activeChatIdRef.current;
+    if (!chatId || !socket) return;
+    const meta = historyMetaRef.current[chatId];
+    if (!meta || meta.loadingMore || !meta.hasMore || !meta.oldestTs) return;
+
+    meta.loadingMore = true;
+    setHistoryUi(prev => ({ ...prev, loadingMore: true }));
+
+    socket.emit('get_messages_before', {
+      chatId,
+      before: meta.oldestTs,
+      limit: 50
+    }, async (res) => {
+      try {
+        if (!res || !Array.isArray(res.messages)) {
+          if (meta) meta.loadingMore = false;
+          setHistoryUi(prev => ({ ...prev, loadingMore: false }));
+          return;
+        }
+
+        // Дешифруем E2EE-сообщения порции
+        const decrypted = await decryptE2EEMessages(res.messages, chatId);
+
+        // Сохраняем порцию в офлайн-кеш
+        saveMessages(chatId, decrypted).catch(() => {});
+
+        const container = messagesContainerRef.current;
+        const prevHeight = container ? container.scrollHeight : 0;
+
+        // Вставляем СВЕРХУ только если чат всё ещё активен
+        if (activeChatIdRef.current === chatId) {
+          setMessages(prev => [...decrypted, ...prev]);
+        }
+
+        meta.hasMore = !!res.hasMore;
+        if (decrypted.length) meta.oldestTs = decrypted[0].timestamp;
+        meta.loadingMore = false;
+        setHistoryUi({ loadingMore: false, hasMore: !!res.hasMore });
+
+        // Удерживаем позицию скролла: компенсируем добавленную высоту сверху
+        requestAnimationFrame(() => {
+          const c = messagesContainerRef.current;
+          if (c && container) c.scrollTop += c.scrollHeight - prevHeight;
+        });
+      } catch (err) {
+        console.error('Ошибка догрузки истории:', err);
+        if (meta) meta.loadingMore = false;
+        setHistoryUi(prev => ({ ...prev, loadingMore: false }));
+      }
+    });
+  };
+
+  // Скролл ленты: у верхней границы догружаем историю
+  const handleMessagesScroll = () => {
+    const container = messagesContainerRef.current;
+    if (!container || container.scrollTop > 120) return;
+    loadOlderMessages();
+  };
+
   // Поиск по сообщениям и пользователям (во всех чатах)
   const handleSearchMessages = async () => {
     if (!searchQuery.trim()) {
       setSearchResults([]);
       setUserSearchResults([]);
+      setFileResults([]);
       setIsSearching(false);
       return;
     }
@@ -3353,12 +3842,45 @@ function App() {
       console.error('Ошибка поиска сообщений:', err);
     }
 
+    // 3. Ищем файлы: вложения чатов + база знаний
+    let files = [];
+    try {
+      const filesRes = await fetch(`${SOCKET_URL}/api/search/files?userId=${currentUser?.id}&query=${encodeURIComponent(query)}`);
+      if (filesRes.ok) {
+        const filesData = await filesRes.json();
+        files = [...(filesData.chatFiles || []), ...(filesData.wikiFiles || [])].slice(0, 12);
+      }
+    } catch (err) {
+      console.error('Ошибка поиска файлов:', err);
+    }
+
     // Объединяем результаты: сначала пользователи, потом сообщения
     const allResults = [...userResults, ...messages];
     setSearchResults(allResults);
     setUserSearchResults(userResults);
+    setFileResults(files);
     setCurrentSearchIndex(0);
     setIsSearching(false);
+  };
+
+  // Клик по файлу из поиска: файл чата → переход к сообщению, файл wiki → открыть статью
+  const handleFileResultClick = (f) => {
+    if (f.type === 'wikiFile') {
+      handleCloseSearch();
+      openWikiArticleById(f.articleId);
+      return;
+    }
+    const chat = chats.find(c => c.id === f.chatId);
+    if (!chat) return;
+    if (activeChatId !== chat.id) handleSelectChat(chat);
+    handleCloseSearch();
+    const retryScroll = (attempts = 40) => {
+      if (attempts <= 0) return;
+      const el = document.getElementById(`message-${f.messageId}`);
+      if (el) scrollToMessage(f.messageId);
+      else setTimeout(() => retryScroll(attempts - 1), 150);
+    };
+    setTimeout(retryScroll, 300);
   };
 
   const handleSearchResultClick = (result) => {
@@ -3371,7 +3893,9 @@ function App() {
       if (existingChat) {
         handleSelectChat(existingChat);
       } else {
-        createDirectChat(result.id);
+        // Чата ещё нет — показываем профиль вместо создания пустого чата
+        const fullUser = users.find(u => u.id === result.id);
+        handleViewUserProfile(fullUser || result);
       }
       handleCloseSearch();
       return;
@@ -3415,9 +3939,8 @@ function App() {
       
       if (existingChat) {
         handleSelectChat(existingChat);
-      } else {
-        createDirectChat(nextResult.id);
       }
+      // Чат не создаём — пустые чаты в списке недопустимы
       setTimeout(() => scrollToUser(nextResult.id), 100);
     } else {
       // Если это сообщение
@@ -3445,9 +3968,8 @@ function App() {
       
       if (existingChat) {
         handleSelectChat(existingChat);
-      } else {
-        createDirectChat(prevResult.id);
       }
+      // Чат не создаём — пустые чаты в списке недопустимы
       setTimeout(() => scrollToUser(prevResult.id), 100);
     } else {
       // Если это сообщение
@@ -3470,6 +3992,27 @@ function App() {
     }
   };
 
+  // Переход к сообщению из другого места (например, из задачи «из сообщения»):
+  // переключаем вкладку/чат, ждём загрузку ленты и скроллим с подсветкой
+  const jumpToMessage = (chatId, messageId) => {
+    if (!chatId || !messageId) return;
+    if (activeView !== 'chats') setActiveView('chats');
+    if (activeChatIdRef.current !== chatId) {
+      setActiveChatId(chatId);
+    }
+    let attempts = 0;
+    const timer = setInterval(() => {
+      attempts++;
+      const el = document.getElementById(`message-${messageId}`);
+      if (el) {
+        clearInterval(timer);
+        setTimeout(() => scrollToMessage(messageId), 150);
+      } else if (attempts >= 12) {
+        clearInterval(timer);
+      }
+    }, 300);
+  };
+
   const scrollToUser = (userId) => {
     // Ищем элемент чата с этим пользователем в sidebar
     const chatElement = document.querySelector(`[data-user-id="${userId}"]`);
@@ -3483,24 +4026,11 @@ function App() {
     }
   };
 
-  const createDirectChat = async (userId) => {
-    if (!socket) return;
-    
-    const user = users.find(u => u.id === userId);
-    if (!user) return;
-    
-    // Создаём чат через сокет
-    socket.emit('create_chat', {
-      type: 'direct',
-      participants: [userId],
-      userId: currentUser.id
-    });
-  };
-
   const handleCloseSearch = () => {
     setShowSearchMessages(false);
     setSearchQuery('');
     setSearchResults([]);
+    setFileResults([]);
     setCurrentSearchIndex(0);
   };
 
@@ -3695,6 +4225,8 @@ function App() {
     nodes.forEach(node => {
       if (node.nodeType === Node.TEXT_NODE) {
         text += node.textContent;
+      } else if (node.nodeType === Node.ELEMENT_NODE && node.tagName === 'BR') {
+        text += '\n';
       } else if (node.nodeType === Node.ELEMENT_NODE && node.tagName === 'IMG' && node.classList.contains('emoji')) {
         text += node.alt || '';
       } else if (node.nodeType === Node.ELEMENT_NODE && node.dataset && node.dataset.sticker === 'true') {
@@ -3704,7 +4236,7 @@ function App() {
       }
     });
     
-    return text;
+    return text.replace(/^\n+|\n+$/g, '');
   };
 
   // E2EE: получить общий ключ для чата
@@ -4183,6 +4715,7 @@ function App() {
 
   const wikiOpenArticle = async (article) => {
     setWikiActiveArticle(article);
+    setWikiActiveCategory(null);
     await wikiLoadFiles(article.id);
   };
 
@@ -4609,6 +5142,29 @@ function App() {
     return text.startsWith(marker) && text.endsWith(marker) && text.split(marker).filter(Boolean).length === 1;
   };
 
+  // Сообщение состоит ровно из одного эмодзи без текста — рендерим его крупно («джамбо», как в Telegram).
+  // Важно: не используем Intl.Segmenter — в Chromium он склеивает подряд идущие эмодзи в один сегмент,
+  // из-за чего «🫠🥳😁» ошибочно считался одним смайлом. Вместо этого считаем юниты регуляркой.
+  const isSingleEmojiMessage = (text) => {
+    if (!text || typeof text !== 'string') return false;
+    const trimmed = text.trim();
+    if (!trimmed) return false;
+
+    // Юнит эмодзи: флаг (пара региональных индикаторов), кейкап (1️⃣),
+    // пиктографика с тоном кожи / VS16 и ZWJ-цепочками (👨‍👩‍👧)
+    const unitRe = /[\u{1F1E6}-\u{1F1FF}]{2}|[0-9#*]\uFE0F?\u20E3|\p{Extended_Pictographic}(?:[\u{1F3FB}-\u{1F3FF}\u{FE0E}\u{FE0F}]|\u200D\p{Extended_Pictographic}(?:[\u{1F3FB}-\u{1F3FF}\u{FE0E}\u{FE0F}])?)*/gu;
+
+    let units = 0;
+    let covered = 0;
+    for (const m of trimmed.matchAll(unitRe)) {
+      units++;
+      covered += m[0].length;
+    }
+
+    // Ровно один юнит, и он покрывает всю строку целиком (без лишних символов)
+    return units === 1 && covered === trimmed.length;
+  };
+
   const renderMessageContent = (text) => {
     if (!text) return text;
     const marker = '\x00STICKER\x00';
@@ -4638,6 +5194,30 @@ function App() {
         }
       }
       return result;
+    }
+
+    // Единственный эмодзи без текста — крупный смайл, чтобы выделялся (как в Telegram)
+    if (isSingleEmojiMessage(text)) {
+      const singleEmoji = text.trim();
+      const unified = emojiToUnified(singleEmoji);
+      return (
+        <img
+          className="emoji emoji-big"
+          src={`https://cdn.jsdelivr.net/npm/emoji-datasource-apple@15.0.1/img/apple/64/${unified}.png`}
+          alt={singleEmoji}
+          style={{ width: 'var(--message-emoji-big-size, 48px)', height: 'var(--message-emoji-big-size, 48px)',
+                   objectFit: 'contain', verticalAlign: 'middle', display: 'inline-block' }}
+          onError={(e) => {
+            // Если картинка не загрузилась — показываем нативный символ тем же размером
+            const span = document.createElement('span');
+            span.className = 'emoji-big-fallback';
+            span.textContent = singleEmoji;
+            span.style.fontSize = 'var(--message-emoji-big-size, 48px)';
+            span.style.lineHeight = '1';
+            e.target.parentNode.replaceChild(span, e.target);
+          }}
+        />
+      );
     }
 
     // Regular text: split by URLs, render text parts normally and URLs as clickable links
@@ -5004,17 +5584,212 @@ function App() {
     setContextMenu({ visible: false, x: 0, y: 0, messageId: null, messageText: '', messageChatId: null, messageSenderId: null, reactionsExpanded: false });
   };
 
+  // --- Контекстное меню чата (правый клик по строке в списке чатов) ---
+
+  const openChatContextMenu = (e, chat) => {
+    e.preventDefault();
+    e.stopPropagation();
+    // Закрываем меню сообщений, если открыто
+    if (contextMenu.visible) closeContextMenu();
+
+    const menuWidth = 250;
+    const menuHeight = 330;
+    const margin = 8;
+
+    let x = e.clientX;
+    let y = e.clientY;
+
+    if (x + menuWidth > window.innerWidth - margin) x = window.innerWidth - menuWidth - margin;
+    if (x < margin) x = margin;
+    if (y + menuHeight > window.innerHeight - margin) y = window.innerHeight - menuHeight - margin;
+    if (y < margin) y = margin;
+
+    setChatContextMenu({ visible: true, x, y, chat });
+  };
+
+  const closeChatContextMenu = () => {
+    setChatContextMenu({ visible: false, x: 0, y: 0, chat: null });
+  };
+
+  // Закрепить / открепить чат
+  const toggleChatPin = async (chat) => {
+    const pinned = !chat.pinned;
+    try {
+      await fetch(`${SOCKET_URL}/api/chats/${chat.id}/pin`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: currentUser?.id, pinned }),
+      });
+      setChats(prev => prev.map(c => c.id === chat.id ? { ...c, pinned } : c));
+      closeChatContextMenu();
+    } catch (err) {
+      console.error('Ошибка закрепа чата:', err);
+      alert('Не удалось закрепить чат');
+    }
+  };
+
+  // Выключить / включить уведомления чата
+  const toggleChatMute = async (chat) => {
+    const muted = !chat.muted;
+    try {
+      await fetch(`${SOCKET_URL}/api/chats/${chat.id}/mute`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: currentUser?.id, muted }),
+      });
+      setChats(prev => prev.map(c => c.id === chat.id ? { ...c, muted } : c));
+      closeChatContextMenu();
+    } catch (err) {
+      console.error('Ошибка изменения уведомлений чата:', err);
+      alert('Не удалось изменить уведомления чата');
+    }
+  };
+
+  // Пометить чат как непрочитанное
+  const setChatUnread = async (chat, forceUnread) => {
+    try {
+      await fetch(`${SOCKET_URL}/api/chats/${chat.id}/unread`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: currentUser?.id, forceUnread }),
+      });
+      setChats(prev => prev.map(c => {
+        if (c.id === chat.id) {
+          const unreadCount = forceUnread ? Math.max(c.unreadCount || 0, 1) : 0;
+          return { ...c, forceUnread, unreadCount };
+        }
+        return c;
+      }));
+      closeChatContextMenu();
+    } catch (err) {
+      console.error('Ошибка отметки непрочитанного:', err);
+      alert('Не удалось пометить чат');
+    }
+  };
+
+  // Очистить историю чата (только для этого пользователя)
+  const clearChatHistory = async (chat) => {
+    if (!window.confirm('Очистить историю этого чата (только для вас)?')) return;
+    try {
+      closeChatContextMenu();
+      const res = await fetch(`${SOCKET_URL}/api/chats/${chat.id}/clear`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: currentUser?.id }),
+      });
+      if (res.ok) {
+        // Если чат сейчас открыт — перезагружаем его историю (с сервера она уже отфильтрована)
+        if (activeChatIdRef.current === chat.id) {
+          if (socketRef.current?.connected) {
+            socketRef.current.emit('join_chat', chat.id);
+          } else {
+            const messagesRes = await fetch(`${SOCKET_URL}/api/messages/${chat.id}?userId=${currentUser?.id}`);
+            if (messagesRes.ok) {
+              const data = await messagesRes.json();
+              setMessages(data.messages || []);
+            }
+          }
+        }
+        const now = new Date().toISOString();
+        setChats(prev => prev.map(c => c.id === chat.id
+          ? { ...c, unreadCount: 0, forceUnread: false, lastMessage: null, clearedAt: now }
+          : c
+        ));
+      }
+    } catch (err) {
+      console.error('Ошибка очистки истории:', err);
+      alert('Не удалось очистить историю');
+    }
+  };
+
   /** Переключатель развёрнутого состояния реакций */
   const toggleReactionsExpand = useCallback(() => {
     setContextMenu(prev => ({ ...prev, reactionsExpanded: !prev.reactionsExpanded }));
   }, []);
 
   // Открытие контекстного меню поля ввода
+  // ─── Проверка орфографии (Яндекс.Спеллер через бэкенд) ───
+
+  // Слово под курсором в contentEditable: текстовый узел + границы \S+
+  const getWordRangeAtPoint = (x, y) => {
+    let range = null;
+    try {
+      if (document.caretRangeFromPoint) {
+        range = document.caretRangeFromPoint(x, y);
+      } else if (document.caretPositionFromPoint) {
+        const pos = document.caretPositionFromPoint(x, y);
+        if (pos) {
+          range = document.createRange();
+          range.setStart(pos.offsetNode, pos.offset);
+          range.collapse(true);
+        }
+      }
+    } catch (err) { range = null; }
+    if (!range || !range.startContainer || range.startContainer.nodeType !== Node.TEXT_NODE) return null;
+
+    const node = range.startContainer;
+    const text = node.textContent || '';
+    const offset = Math.min(range.startOffset ?? 0, text.length);
+
+    let start = offset;
+    let end = offset;
+    while (start > 0 && /\S/.test(text[start - 1])) start--;
+    while (end < text.length && /\S/.test(text[end])) end++;
+    if (start === end) return null;
+
+    const word = text.slice(start, end);
+    // Проверяем только слова, содержащие буквы (не числа/эмодзи)
+    if (!/[a-zA-Zа-яА-ЯёЁ]{2,}/.test(word)) return null;
+    return { node, start, end, word };
+  };
+
+  // Точечный запрос вариантов для слова (результат кэшируется; [] = слово верно)
+  const fetchSpellSuggestions = async (word) => {
+    try {
+      const res = await fetch(`${SOCKET_URL}/api/spellcheck?lang=ru,en&text=${encodeURIComponent(word)}`);
+      if (!res.ok) return [];
+      const data = await res.json();
+      const errObj = (data.errors || []).find(e => e.word && Array.isArray(e.s));
+      return errObj ? errObj.s : [];
+    } catch (err) {
+      return [];
+    }
+  };
+
   const handleInputContextMenu = (e) => {
     e.preventDefault();
-    
-    const menuWidth = 180;
-    const menuHeight = 140;
+
+    // Определяем слово под курсором для подсказок орфографии
+    let wordInfo = null;
+    let suggestions = null; // null = не проверялось
+    let checking = false;
+    if ((userUiSettings.spellCheckEnabled ?? true) && messageInputRef.current?.contains(e.target)) {
+      wordInfo = getWordRangeAtPoint(e.clientX, e.clientY);
+      if (wordInfo) {
+        const lower = wordInfo.word.toLowerCase();
+        spellTargetRef.current = { node: wordInfo.node, start: wordInfo.start, end: wordInfo.end };
+        if (spellCacheRef.current.has(lower)) {
+          suggestions = spellCacheRef.current.get(lower);
+        } else {
+          checking = true;
+          // Точечный запрос — обновляем открытое меню по приходу ответа
+          fetchSpellSuggestions(wordInfo.word).then(list => {
+            spellCacheRef.current.set(lower, list);
+            setInputContextMenu(prev => (prev.visible && prev.word === wordInfo.word)
+              ? { ...prev, checking: false, suggestions: list }
+              : prev);
+          });
+        }
+      } else {
+        spellTargetRef.current = null;
+      }
+    } else {
+      spellTargetRef.current = null;
+    }
+
+    const menuWidth = 200;
+    const extraHeight = checking ? 40 : (suggestions ? suggestions.length * 34 + 16 : 0);
+    const menuHeight = 140 + extraHeight;
     const margin = 8;
 
     let x = e.clientX;
@@ -5036,14 +5811,70 @@ function App() {
     setInputContextMenu({
       visible: true,
       x,
-      y
+      y,
+      word: wordInfo ? wordInfo.word : null,
+      suggestions,
+      checking
     });
   };
 
   // Закрытие контекстного меню поля ввода
   const closeInputContextMenu = () => {
-    setInputContextMenu({ ...inputContextMenu, visible: false });
+    setInputContextMenu({ visible: false, x: 0, y: 0, word: null, suggestions: null, checking: false });
   };
+
+  // Заменить слово с ошибкой на выбранный вариант (точно на месте ПКМ)
+  const applySpellSuggestion = (replacement) => {
+    closeInputContextMenu();
+    const t = spellTargetRef.current;
+    if (!t || !t.node || !messageInputRef.current) return;
+    try {
+      const range = document.createRange();
+      range.setStart(t.node, t.start);
+      range.setEnd(t.node, t.end);
+      range.deleteContents();
+      const newNode = document.createTextNode(replacement);
+      range.insertNode(newNode);
+
+      // Курсор сразу после вставленного слова
+      const sel = window.getSelection();
+      if (sel) {
+        const caret = document.createRange();
+        caret.setStartAfter(newNode);
+        caret.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(caret);
+      }
+
+      setInputText(getMessageText());
+      messageInputRef.current.focus();
+    } catch (err) {
+      console.error('Ошибка замены слова:', err);
+    } finally {
+      spellTargetRef.current = null;
+    }
+  };
+
+  // Прогрев кэша орфографии: через паузу после набора проверяем весь текст разом
+  useEffect(() => {
+    if (!(userUiSettings.spellCheckEnabled ?? true)) return;
+    const text = (inputText || '').trim();
+    if (!text) return;
+    if (spellDebounceRef.current) clearTimeout(spellDebounceRef.current);
+    spellDebounceRef.current = setTimeout(async () => {
+      try {
+        const res = await fetch(`${SOCKET_URL}/api/spellcheck?lang=ru,en&text=${encodeURIComponent(text.slice(0, 1000))}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        (data.errors || []).forEach(errItem => {
+          if (errItem?.word && Array.isArray(errItem.s)) {
+            spellCacheRef.current.set(String(errItem.word).toLowerCase(), errItem.s);
+          }
+        });
+      } catch (err) { /* фича необязательна — молча */ }
+    }, 1500);
+    return () => { if (spellDebounceRef.current) clearTimeout(spellDebounceRef.current); };
+  }, [inputText]);
 
   // Закрытие контекстного меню при клике вне его и поля ввода
   useEffect(() => {
@@ -5340,8 +6171,13 @@ function App() {
 
   // Отправка пересланного сообщения
   const handleSendForwardedMessage = () => {
-    if (!selectedForwardUser || !contextMenu.messageId) {
-      console.error('Нет получателя или messageId:', { selectedForwardUser, contextMessageId: contextMenu.messageId });
+    // Мульти-пересылка: снапшот выбранных сообщений, иначе одиночная из contextMenu
+    const idsToForward = pendingForwardIds.length > 0
+      ? pendingForwardIds
+      : (contextMenu.messageId ? [contextMenu.messageId] : []);
+
+    if (!selectedForwardUser || idsToForward.length === 0) {
+      console.error('Нет получателя или сообщений для пересылки:', { selectedForwardUser, idsToForward });
       return;
     }
 
@@ -5355,22 +6191,19 @@ function App() {
       return;
     }
 
-    console.log('Пересылка сообщения:', {
-      messageId: contextMenu.messageId,
-      targetUserId: selectedForwardUser.id,
-      targetUsername: selectedForwardUser.username
-    });
-
-    // Эмитим событие пересылки сообщения
-    socket.emit('forward_message', {
-      messageId: contextMenu.messageId,
-      targetUserId: selectedForwardUser.id,
-      targetChatId: null // Сервер сам определит чат
+    // Эмитим событие пересылки для каждого сообщения — сервер сложит их по порядку
+    idsToForward.forEach(messageId => {
+      socket.emit('forward_message', {
+        messageId,
+        targetUserId: selectedForwardUser.id,
+        targetChatId: null // Сервер сам определит чат
+      });
     });
 
     setShowForwardModal(false);
     setForwardSearchQuery('');
     setSelectedForwardUser(null);
+    if (pendingForwardIds.length > 0) exitSelectionMode();
   };
 
   // Отправка статьи из базы знаний пользователю
@@ -5400,6 +6233,33 @@ function App() {
     setForwardSearchQuery('');
     setSelectedForwardUser(null);
   };
+
+  // ─── Режим выбора сообщений (мульти-пересылка) ───
+  const enterSelectionMode = (messageId) => {
+    closeContextMenu();
+    setSelectionMode(true);
+    setSelectedMessageIds(messageId ? [messageId] : []);
+  };
+
+  const exitSelectionMode = () => {
+    setSelectionMode(false);
+    setSelectedMessageIds([]);
+    setPendingForwardIds([]);
+  };
+
+  const toggleMessageSelection = (messageId) => {
+    setSelectedMessageIds(prev => prev.includes(messageId)
+      ? prev.filter(id => id !== messageId)
+      : [...prev, messageId]);
+  };
+
+  // Esc выходит из режима выбора
+  useEffect(() => {
+    if (!selectionMode) return;
+    const onKeyDown = (e) => { if (e.key === 'Escape') exitSelectionMode(); };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [selectionMode]);
 
   const handleViewProfileBySender = async (senderName, senderAvatar) => {
     // Ищем пользователя по имени в списке пользователей
@@ -5644,6 +6504,32 @@ function App() {
       taskEndTime: '',
       color: '#667eea'
     });
+    setTaskSource(null);
+    setEditingTask(null);
+    setShowTaskModal(true);
+  };
+
+  // Создать задачу из сообщения (ПКМ по сообщению → «Создать задачу»)
+  const createTaskFromMessage = () => {
+    closeContextMenu();
+    const rawText = stripStickerMarkers(contextMenu.messageText || '').replace(/\s+/g, ' ').trim();
+    if (!rawText) return;
+
+    const firstLine = rawText.split('\n')[0].trim();
+    const sourceChat = chats.find(c => c.id === contextMenu.messageChatId);
+    const chatSuffix = sourceChat?.name ? `\n\n— из чата «${sourceChat.name}»` : '';
+
+    setTaskSource({ chatId: contextMenu.messageChatId, messageId: contextMenu.messageId });
+    setTaskForm({
+      title: firstLine.length > 60 ? `${firstLine.slice(0, 57)}...` : firstLine,
+      description: `${rawText}${chatSuffix}`,
+      taskDate: new Date().toISOString().slice(0, 10),
+      taskTime: '',
+      taskEndTime: '',
+      color: '#667eea',
+      reminderType: 'none',
+      reminderCustomTime: ''
+    });
     setEditingTask(null);
     setShowTaskModal(true);
   };
@@ -5658,12 +6544,14 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           userId: currentUser.id,
-          ...taskForm
+          ...taskForm,
+          ...(taskSource ? { sourceChatId: taskSource.chatId, sourceMessageId: taskSource.messageId } : {})
         })
       });
 
       if (response.ok) {
         setShowTaskModal(false);
+        setTaskSource(null);
         const startOfMonth = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1);
         const endOfMonth = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0);
         fetchCalendarTasks(startOfMonth, endOfMonth);
@@ -5703,7 +6591,9 @@ function App() {
       taskDate: task.task_date,
       taskTime: task.task_time || '',
       taskEndTime: task.task_end_time || '',
-      color: task.color
+      color: task.color,
+      reminderType: task.reminder_time ? 'custom' : 'none',
+      reminderCustomTime: task.reminder_time ? task.reminder_time.slice(11, 16) : ''
     });
     setShowTaskModal(true);
   };
@@ -5984,17 +6874,17 @@ function App() {
     setShowChatMenu(true);
   };
 
-  const handleViewUserInfo = () => {
-    if (activeChat && activeChat.type === 'direct' && activeChat.participantsDetails) {
-      const otherUser = activeChat.participantsDetails.find(p => p.username !== currentUser?.username);
-      if (otherUser) {
-        handleViewUserProfile({
-          id: otherUser.id,
-          username: otherUser.username,
-          avatar: otherUser.avatar,
-          status: otherUser.status
-        });
-      }
+  const handleViewUserInfo = (user) => {
+    const targetUser = user || (activeChat && activeChat.type === 'direct' && activeChat.participantsDetails
+      ? activeChat.participantsDetails.find(p => p.username !== currentUser?.username)
+      : null);
+    if (targetUser) {
+      handleViewUserProfile({
+        id: targetUser.id,
+        username: targetUser.username,
+        avatar: targetUser.avatar,
+        status: targetUser.status
+      });
     }
     setShowChatMenu(false);
   };
@@ -6168,28 +7058,63 @@ function App() {
     }
   };
 
-  const handleDeleteChat = () => {
+  const handleDeleteChat = (chat) => {
+    setChatToDelete(chat || null);
     setShowDeleteConfirm(true);
     setShowChatMenu(false);
   };
 
   const confirmDeleteChat = async () => {
-    if (!activeChat) return;
+    // Полное удаление чата у всех участников — доступно только администраторам
+    const chatToRemove = chatToDelete || activeChat;
+    if (!chatToRemove) return;
 
     try {
-      const response = await fetch(`${SOCKET_URL}/api/chats/${activeChat.id}`, {
+      const response = await fetch(`${SOCKET_URL}/api/chats/${chatToRemove.id}?userId=${currentUser?.id}`, {
         method: 'DELETE'
       });
 
       if (response.ok) {
-        setChats(prev => prev.filter(c => c.id !== activeChat.id));
-        setActiveChatId(null);
-        setMessages([]);
+        setChats(prev => prev.filter(c => c.id !== chatToRemove.id));
+        if (activeChatIdRef.current === chatToRemove.id) {
+          setActiveChatId(null);
+          setMessages([]);
+        }
+      } else {
+        alert('Не удалось удалить чат: только администратор может удалить чат у всех участников');
       }
     } catch (err) {
       console.error('Ошибка удаления чата:', err);
     } finally {
       setShowDeleteConfirm(false);
+      setChatToDelete(null);
+    }
+  };
+
+  // Удалить чат только у себя (собеседника не затрагивает)
+  const confirmDeleteChatForMe = async () => {
+    const chatToRemove = chatToDelete || activeChat;
+    if (!chatToRemove || !currentUser) return;
+
+    try {
+      const response = await fetch(`${SOCKET_URL}/api/chats/${chatToRemove.id}/hide`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: currentUser.id })
+      });
+
+      if (response.ok) {
+        setChats(prev => prev.filter(c => c.id !== chatToRemove.id));
+        if (activeChatIdRef.current === chatToRemove.id) {
+          setActiveChatId(null);
+          setMessages([]);
+        }
+      }
+    } catch (err) {
+      console.error('Ошибка удаления чата у себя:', err);
+    } finally {
+      setShowDeleteConfirm(false);
+      setChatToDelete(null);
     }
   };
 
@@ -6351,6 +7276,7 @@ function App() {
         if (showAddMenu) setShowAddMenu(false);
         if (showMediaViewer) setShowMediaViewer(false);
         if (contextMenu.visible) closeContextMenu();
+        if (chatContextMenu.visible) closeChatContextMenu();
         if (showEmojiPicker) {
           setShowEmojiPicker(false);
           setEmojiPickerPinned(false);
@@ -6361,6 +7287,9 @@ function App() {
     const handleClickOutside = (e) => {
       if (contextMenu.visible && !e.target.closest('.message-context-menu')) {
         closeContextMenu();
+      }
+      if (chatContextMenu.visible && !e.target.closest('.chat-context-menu')) {
+        closeChatContextMenu();
       }
       if (showEmojiPicker && !emojiPickerPinned && !e.target.closest('.emoji-btn-send') && !e.target.closest('.emoji-picker-area')) {
         setShowEmojiPicker(false);
@@ -6376,7 +7305,7 @@ function App() {
       document.removeEventListener('keydown', handleEscKey);
       document.removeEventListener('mousedown', handleClickOutside);
     };
-  }, [showImagePreview, showChatMenu, showAddMenu, showMediaViewer, contextMenu.visible, showEmojiPicker, emojiPickerPinned]);
+  }, [showImagePreview, showChatMenu, showAddMenu, showMediaViewer, contextMenu.visible, chatContextMenu.visible, showEmojiPicker, emojiPickerPinned]);
 
   // Обновляем список пользователей при открытии модалки создания чата
   useEffect(() => {
@@ -6846,6 +7775,11 @@ function App() {
               </div>
 
               {authError && <div className="auth-error">{authError}</div>}
+              {isNetworkError && (
+                <button type="button" className="auth-btn auth-retry-btn" onClick={(e) => handleLogin(e)}>
+                  ⟳ Повторить попытку
+                </button>
+              )}
 
               <button type="submit" disabled={isLoading} className="auth-btn">
                 {isLoading ? 'Вход...' : 'Войти'}
@@ -6954,6 +7888,11 @@ function App() {
               </div>
 
               {authError && <div className="auth-error">{authError}</div>}
+              {isNetworkError && (
+                <button type="button" className="auth-btn auth-retry-btn" onClick={(e) => handleRegister(e)}>
+                  ⟳ Повторить попытку
+                </button>
+              )}
 
               <button type="submit" disabled={isLoading} className="auth-btn">
                 {isLoading ? 'Регистрация...' : 'Зарегистрироваться'}
@@ -7125,6 +8064,9 @@ function App() {
               await getUpcomingNotifications(true);
               setShowNotifications(true);
               setUnreadNotificationsCount(0);
+              const seenKey = new Date().toDateString();
+              setBirthdaysBadgeSeenDate(seenKey);
+              localStorage.setItem('birthdayBadgeSeenDate', seenKey);
             }}
             title="Уведомления"
           >
@@ -7133,8 +8075,8 @@ function App() {
                 <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
                 <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
               </svg>
-              {unreadNotificationsCount > 0 && (
-                <span className="nav-btn-badge">{unreadNotificationsCount > 9 ? '9+' : unreadNotificationsCount}</span>
+              {unreadNotificationsCount + birthdaysBadgeCount > 0 && (
+                <span className="nav-btn-badge">{unreadNotificationsCount + birthdaysBadgeCount > 9 ? '9+' : unreadNotificationsCount + birthdaysBadgeCount}</span>
               )}
             </div>
             <span className="nav-btn-label">Уведомления</span>
@@ -7189,20 +8131,22 @@ function App() {
           </button>
 
           {/* Показатели */}
-          <button
-            className={`nav-sidebar-btn ${activeView === 'kpi' ? 'active' : ''}`}
-            onClick={handleOpenKpi}
-            title="Показатели"
-          >
-            <div className="nav-btn-icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="18" y1="20" x2="18" y2="10"/>
-                <line x1="12" y1="20" x2="12" y2="4"/>
-                <line x1="6" y1="20" x2="6" y2="14"/>
-              </svg>
-            </div>
-            <span className="nav-btn-label">Показатели</span>
-          </button>
+          {canViewKpi && (
+            <button
+              className={`nav-sidebar-btn ${activeView === 'kpi' ? 'active' : ''}`}
+              onClick={handleOpenKpi}
+              title="Показатели"
+            >
+              <div className="nav-btn-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="18" y1="20" x2="18" y2="10"/>
+                  <line x1="12" y1="20" x2="12" y2="4"/>
+                  <line x1="6" y1="20" x2="6" y2="14"/>
+                </svg>
+              </div>
+              <span className="nav-btn-label">Показатели</span>
+            </button>
+          )}
 
           {/* База знаний */}
           <button
@@ -7613,8 +8557,10 @@ function App() {
                           <th>Роль</th>
                           <th>Компьютер</th>
                           <th>IP</th>
+                          <th>Версия</th>
                           <th>Бронирование</th>
                           <th>База знаний</th>
+                          <th>Показатели</th>
                           <th>Действия</th>
                         </tr>
                       </thead>
@@ -7651,6 +8597,15 @@ function App() {
                                 <code>{user.host || 'unknown'}</code>
                               </td>
                               <td className="ip-cell">{user.ip_address || 'unknown'}</td>
+                              <td className="version-cell">
+                                {user.app_version ? (
+                                  adminServerVersion && user.app_version === adminServerVersion ? (
+                                    <span className="version-badge ok">актуальная v{user.app_version}</span>
+                                  ) : (
+                                    <span className="version-badge outdated">устарела: v{user.app_version}</span>
+                                  )
+                                ) : '—'}
+                              </td>
                               <td>
                                 <label className="toggle-switch">
                                   <input
@@ -7674,6 +8629,22 @@ function App() {
                                     onChange={() => handleToggleWikiRights(user.id, user.can_edit_wiki)}
                                     disabled={user.username === 'Root'}
                                     title={user.can_edit_wiki === 1 ? 'Запретить создание статей' : 'Разрешить создание статей'}
+                                  />
+                                  <span className="toggle-slider"></span>
+                                </label>
+                              )}
+                            </td>
+                            <td>
+                              {user.is_admin === 1 ? (
+                                <span style={{fontSize: '12px'}}>Полный</span>
+                              ) : (
+                                <label className="toggle-switch">
+                                  <input
+                                    type="checkbox"
+                                    checked={user.can_view_kpi === 1}
+                                    onChange={() => handleToggleKpiRights(user.id, user.can_view_kpi)}
+                                    disabled={user.username === 'Root'}
+                                    title={user.can_view_kpi === 1 ? 'Запретить просмотр показателей' : 'Разрешить просмотр показателей'}
                                   />
                                   <span className="toggle-slider"></span>
                                 </label>
@@ -8270,47 +9241,77 @@ function App() {
             {isSearching && <span className="chats-search-loading">🔍</span>}
           </div>
 
-          {searchResults.length > 0 ? (
+          {(searchResults.length > 0 || fileResults.length > 0) ? (
             <div className="chats-list">
-              {searchResults.map((result, idx) => (
-                <div
-                  key={result.id || idx}
-                  className={`chat-item ${currentSearchIndex === idx ? 'active' : ''}`}
-                  onClick={() => handleSearchResultClick(result)}
-                >
-                  <div className="chat-item-left" style={{ cursor: 'pointer' }}>
-                    {result.type === 'message' ? (
-                      result.senderAvatar ? (
-                        <img src={result.senderAvatar} alt="" className="chat-avatar-img" onError={(e) => { e.target.style.display = 'none'; }} />
-                      ) : (
-                        <div className="chat-icon chat-avatar-fallback">{(result.senderName || '?')[0].toUpperCase()}</div>
-                      )
-                    ) : result.type === 'user' ? '👤' : getChatIcon(result)}
-                    <div className="chat-info">
-                      <div className="chat-name-row">
-                        <span className="chat-name">
-                          {result.type === 'user' ? result.username : result.chatName || result.senderName || 'Чат'}
-                        </span>
-                        <span className="chat-time">{result.timestamp ? formatSearchTime(result.timestamp) : ''}</span>
-                      </div>
-                      <div className="chat-preview-row">
-                        <span className="chat-preview">
-                          {result.type === 'user' ? result.fullName || result.email || '' : result.senderName ? `${result.senderName}: ` : ''}{result.text || ''}
-                        </span>
+              {searchResults.length > 0 && (
+                <>
+                  {searchResults.map((result, idx) => (
+                    <div
+                      key={result.id || idx}
+                      className={`chat-item ${currentSearchIndex === idx ? 'active' : ''}`}
+                      onClick={() => handleSearchResultClick(result)}
+                    >
+                      <div className="chat-item-left" style={{ cursor: 'pointer' }}>
+                        {result.type === 'message' ? (
+                          result.senderAvatar ? (
+                            <img src={result.senderAvatar} alt="" className="chat-avatar-img" onError={(e) => { e.target.style.display = 'none'; }} />
+                          ) : (
+                            <div className="chat-icon chat-avatar-fallback">{(result.senderName || '?')[0].toUpperCase()}</div>
+                          )
+                        ) : result.type === 'user' ? '👤' : getChatIcon(result)}
+                        <div className="chat-info">
+                          <div className="chat-name-row">
+                            <span className="chat-name">
+                              {result.type === 'user' ? result.username : result.chatName || result.senderName || 'Чат'}
+                            </span>
+                            <span className="chat-time">{result.timestamp ? formatSearchTime(result.timestamp) : ''}</span>
+                          </div>
+                          <div className="chat-preview-row">
+                            <span className="chat-preview">
+                              {result.type === 'user' ? result.fullName || result.email || '' : result.senderName ? `${result.senderName}: ` : ''}{result.text || ''}
+                            </span>
+                          </div>
+                        </div>
                       </div>
                     </div>
+                  ))}
+                  <div className="search-nav-controls">
+                    <button className="search-nav-btn" onClick={handleSearchPrev}>↑</button>
+                    <span className="search-count">{currentSearchIndex + 1} / {searchResults.length}</span>
+                    <button className="search-nav-btn" onClick={handleSearchNext}>↓</button>
                   </div>
+                </>
+              )}
+              {fileResults.length > 0 && (
+                <div className="file-search-section">
+                  <div className="file-search-header">📁 Файлы</div>
+                  {fileResults.map((f, idx) => (
+                    <div
+                      key={`${f.type}-${f.messageId || f.id}-${idx}`}
+                      className="file-search-item"
+                      onClick={() => handleFileResultClick(f)}
+                    >
+                      <span className="file-search-icon">{getFileIcon(f.mimetype)}</span>
+                      <div className="file-search-info">
+                        <span className="file-search-name">{f.filename}</span>
+                        <span className="file-search-source">
+                          {f.type === 'wikiFile'
+                            ? `Wiki · ${f.articleTitle}`
+                            : `${f.chatName}${f.senderName ? ` · ${f.senderName}` : ''}`}
+                        </span>
+                      </div>
+                      <span className="file-search-date">
+                        {new Date(f.timestamp || f.createdAt).toLocaleDateString()}
+                      </span>
+                    </div>
+                  ))}
                 </div>
-              ))}
-              <div className="search-nav-controls">
-                <button className="search-nav-btn" onClick={handleSearchPrev}>↑</button>
-                <span className="search-count">{currentSearchIndex + 1} / {searchResults.length}</span>
-                <button className="search-nav-btn" onClick={handleSearchNext}>↓</button>
-              </div>
+              )}
             </div>
           ) : (
             <div className="chats-list">
               {chats.sort((a, b) => {
+                if (!!a.pinned !== !!b.pinned) return !!a.pinned ? -1 : 1;
                 const aTime = a.lastMessage?.timestamp || a.createdAt;
                 const bTime = b.lastMessage?.timestamp || b.createdAt;
                 return new Date(bTime) - new Date(aTime);
@@ -8325,6 +9326,7 @@ function App() {
                   key={chat.id}
                   className={`chat-item ${activeChat?.id === chat.id ? 'active' : ''} ${chat.id?.startsWith('bot-chat-') ? 'bot-chat' : ''}`}
                   data-user-id={otherUserId || ''}
+                  onContextMenu={(e) => openChatContextMenu(e, chat)}
                 >
                 <div
                   className="chat-item-left"
@@ -8378,6 +9380,8 @@ function App() {
                     <div className="chat-name-row">
                       <span className="chat-name">
                         {getChatDisplayName(chat)}
+                        {chat.pinned && <span className="pinned-chat-badge" title="Закреплён">📌</span>}
+                        {chat.muted && <span className="muted-chat-badge" title="Уведомления выключены">🔕</span>}
                         {e2eeEnabled[chat.id] && <span className="e2ee-chat-badge" title="E2EE включено">🔒</span>}
                         {chat.type === 'direct' && chat.participantsDetails && (() => {
                           const otherUser = chat.participantsDetails.find(p => p.username !== currentUser?.username);
@@ -8706,7 +9710,13 @@ function App() {
               </div>
             )}
 
-            <div className="messages-container-main" key={activeChatId || 'no-chat'}>
+            <div className="messages-container-main" key={activeChatId || 'no-chat'} ref={messagesContainerRef} onScroll={handleMessagesScroll}>
+              {historyUi.loadingMore && (
+                <div className="history-loading">⏳ Загружаем историю…</div>
+              )}
+              {!historyUi.hasMore && !historyUi.loadingMore && (
+                <div className="history-start">— Начало переписки —</div>
+              )}
               {/* Панель закреплённых сообщений */}
               {showPinnedBar && pinnedMessages[activeChatIdRef.current] && pinnedMessages[activeChatIdRef.current].length > 0 && (
                 <>
@@ -8769,14 +9779,22 @@ function App() {
                   {isOwn && <div className="message-avatar-spacer" />}
                   {!isOwn && (
                     <img
-                      src={message.senderAvatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(message.senderName || 'U')}&background=667eea&color=fff`}
+                      src={normalizeFileUrl(message.senderAvatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(message.senderName || 'U')}&background=667eea&color=fff`)}
                       alt={message.senderName}
                       className="message-avatar"
                       onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || message.senderName || 'U')}&background=667eea&color=fff`; }}
                     />
                   )}
                   <div className="message-content" data-message-id={message.id}>
-                    <div className="message-bubble-wrapper">
+                    <div
+                      className={`message-bubble-wrapper${selectionMode && selectedMessageIds.includes(message.id) ? ' selection-selected' : ''}`}
+                      onClick={selectionMode ? () => toggleMessageSelection(message.id) : undefined}
+                    >
+                      {selectionMode && (
+                        <span className={`message-select-checkbox${selectedMessageIds.includes(message.id) ? ' checked' : ''}`}>
+                          {selectedMessageIds.includes(message.id) ? '✓' : ''}
+                        </span>
+                      )}
                       {!isBotMessage(message) && message.forwarded_from && (
                         <span className="forwarded-badge">
                           ↗️ Переслано от {message.forwarded_from.sender_name}
@@ -8910,13 +9928,13 @@ function App() {
                       <div className="message-file-main">
                         {message.file.mimetype?.startsWith('image/') ? (
                           <img
-                            src={message.file.url}
+                            src={normalizeFileUrl(message.file.url)}
                             alt={message.file.filename}
-                            onClick={() => handleImageClick(message.file.url, message.file.filename)}
+                            onClick={() => handleImageClick(normalizeFileUrl(message.file.url), message.file.filename)}
                             className="message-image-clickable"
                           />
                         ) : message.file.mimetype?.startsWith('audio/') ? (
-                          <VoiceMessagePlayer src={message.file.url} />
+                          <VoiceMessagePlayer src={normalizeFileUrl(message.file.url)} />
                         ) : (
                           <a href={`${SOCKET_URL}/api/download/${extractFileUuidFromUrl(message.file.url)}`} className="file-link-main" title={message.file.filename} download>
                             <span className="file-icon-main">{getFileIcon(message.file.mimetype)}</span>
@@ -8932,7 +9950,7 @@ function App() {
                   {/* Аватар для исходящих — после контента (скрывается через CSS при группировке) */}
                   {isOwn && (
                     <img
-                      src={message.senderAvatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(message.senderName || 'U')}&background=667eea&color=fff`}
+                      src={normalizeFileUrl(message.senderAvatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(message.senderName || 'U')}&background=667eea&color=fff`)}
                       alt={message.senderName}
                       className="message-avatar"
                       onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || message.senderName || 'U')}&background=667eea&color=fff`; }}
@@ -8990,6 +10008,37 @@ function App() {
               onDragLeave={handleDragLeave}
               onDrop={handleDrop}
             >
+              {/* Панель режима выбора сообщений (мульти-пересылка) */}
+              {selectionMode && (
+                <div className="selection-action-bar">
+                  <span className="selection-count">Выбрано: {selectedMessageIds.length}</span>
+                  <button
+                    className="selection-btn primary"
+                    disabled={selectedMessageIds.length === 0}
+                    onClick={() => {
+                      setPendingForwardIds([...selectedMessageIds]);
+                      setShowForwardModal(true);
+                      setForwardSearchQuery('');
+                      setSelectedForwardUser(null);
+                    }}
+                    title="Переслать выбранные сообщения"
+                  >
+                    ➤ Переслать
+                  </button>
+                  <button className="selection-btn" onClick={exitSelectionMode} title="Отменить выбор">✕</button>
+                </div>
+              )}
+              {/* Inline reply preview — над формой ввода */}
+              {replyToMessage && (
+                <div className="inline-reply-preview">
+                  <div className="inline-reply-bar">
+                    <span className="inline-reply-icon">↩</span>
+                    <span className="inline-reply-label">Ответ на сообщение от {replyToMessage.senderName}</span>
+                    <button type="button" className="inline-reply-cancel" onClick={cancelReply} title="Отменить ответ">✕</button>
+                  </div>
+                  <p className="inline-reply-text">{stripStickerMarkers(replyToMessage.text)}</p>
+                </div>
+              )}
               <form className="message-form-main" style={{ position: 'relative' }} onSubmit={handleSendMessage}>
               {/* Inline picker смайлов */}
               <EmojiInlinePicker
@@ -9004,17 +10053,6 @@ function App() {
                 serverUrl={SOCKET_URL}
               />
 
-              {/* Inline reply preview */}
-              {replyToMessage && (
-                <div className="inline-reply-preview">
-                  <div className="inline-reply-bar">
-                    <span className="inline-reply-icon">↩</span>
-                    <span className="inline-reply-label">Ответ на сообщение от {replyToMessage.senderName}</span>
-                    <button type="button" className="inline-reply-cancel" onClick={cancelReply} title="Отменить ответ">✕</button>
-                  </div>
-                  <p className="inline-reply-text">{stripStickerMarkers(replyToMessage.text)}</p>
-                </div>
-              )}
               {/* Индикатор режима редактирования */}
               {isEditMode && (
                 <div className="edit-mode-indicator">
@@ -9107,6 +10145,7 @@ function App() {
                 disabled={isUploading}
               />
               <div className="message-actions">
+                {!isIOSWeb && (
                 <button
                   type="button"
                   className={`emoji-btn-send ${showEmojiPicker ? 'active' : ''}`}
@@ -9133,6 +10172,7 @@ function App() {
                     <line x1="15" y1="9" x2="15.01" y2="9"/>
                   </svg>
                 </button>
+                )}
                 <button type="submit" disabled={isUploading || (!hasInputContent() && !selectedFile)}>
                   {isUploading ? '⏳' : '➤'}
                 </button>
@@ -9623,6 +10663,18 @@ function App() {
                               <div className="calendar-task-title-row">
                                 <div className="calendar-task-title">{task.title}</div>
                                 <div className="calendar-task-actions">
+                                  {task.source_message_id && task.source_chat_id && (
+                                    <button
+                                      className="task-action-btn jump"
+                                      onClick={(e) => { e.stopPropagation(); jumpToMessage(task.source_chat_id, task.source_message_id); }}
+                                      title="Перейти к исходному сообщению"
+                                    >
+                                      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                        <line x1="7" y1="17" x2="17" y2="7"/>
+                                        <polyline points="7,7 17,7 17,17"/>
+                                      </svg>
+                                    </button>
+                                  )}
                                   <button
                                     className="task-action-btn share"
                                     onClick={(e) => { e.stopPropagation(); handleShareTask(task); }}
@@ -10088,8 +11140,10 @@ function App() {
           <aside className="wiki-sidebar">
             <div className="wiki-sidebar-header">
               <h3>📚 База знаний</h3>
-              {(isAdmin || canEditWiki || isAnyCategoryEditor) && (
-                <button className="wiki-new-article-btn" onClick={async () => {
+               {(isAdmin || canEditWiki || isAnyCategoryEditor) && (
+                <button className="wiki-new-article-btn" disabled={wikiCreating} onClick={async () => {
+                  const activeCat = wikiActiveCategory;
+                  setWikiCreating(true);
                   try {
                     const res = await fetch(`${SOCKET_URL}/api/wiki/articles`, {
                       method: 'POST',
@@ -10097,7 +11151,7 @@ function App() {
                       body: JSON.stringify({
                         title: 'Новая статья',
                         content: '',
-                        categoryId: wikiActiveCategory || null,
+                        categoryId: activeCat || null,
                         userId: currentUser.id
                       })
                     });
@@ -10107,25 +11161,26 @@ function App() {
                       setWikiEditMode(true);
                       setWikiEditTitle('');
                       setWikiEditContent('');
-                      setWikiEditCategory(wikiActiveCategory || '');
+                      setWikiEditCategory(activeCat || '');
                       setWikiFiles([]);
                       setWikiAccessLevel('public');
                       setWikiAllowedUsers([]);
+                      loadWikiData();
                     }
                   } catch (err) {
                     console.error('Ошибка создания статьи:', err);
+                  } finally {
+                    setWikiCreating(false);
                   }
-                }}>+ Статья</button>
+                }}>{wikiCreating ? '⏳ Создание...' : '+ Статья'}</button>
               )}
               {(isAdmin || isAnyCategoryEditor) && (
                 <button className="wiki-new-cat-btn" onClick={() => { setWikiEditingCategory(null); setWikiCategoryName(''); setWikiCategoryDesc(''); setWikiCategoryParent(wikiActiveCategory || ''); setWikiCategoryEditorIds([]); setWikiCategoryEditorSearch(''); setShowWikiCategoryModal(true); }}>+ Категория</button>
               )}
+              <input type="text" className="wiki-search-input" placeholder="🔍 Поиск по статьям..."
+                value={wikiSearch} onChange={e => setWikiSearch(e.target.value)} />
             </div>
             <div className="wiki-category-list">
-              <div className={`wiki-cat-item ${!wikiActiveCategory ? 'active' : ''}`}
-                onClick={() => { setWikiActiveCategory(null); setWikiActiveArticle(null); setWikiEditMode(false); setWikiFiles([]); }}>
-                📋 Все статьи
-              </div>
               {(() => {
                 const renderTree = (parentId, depth) => {
                   return wikiCategories
@@ -10133,21 +11188,30 @@ function App() {
                     .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || a.name.localeCompare(b.name))
                     .map(cat => {
                       const hasChildren = wikiCategories.some(c => c.parent_id === cat.id);
+                      const hasArticles = wikiArticles.some(a => a.category_id === cat.id);
                       const isExpanded = wikiExpandedCategories.has(cat.id);
+                      const catArticles = wikiArticles
+                        .filter(a => a.category_id === cat.id && (!wikiSearch || a.title.toLowerCase().includes(wikiSearch.toLowerCase()) || a.content.toLowerCase().includes(wikiSearch.toLowerCase())))
+                        .sort((a, b) => a.title.localeCompare(b.title));
+                      const showExpand = hasChildren || hasArticles;
                       return (
                         <React.Fragment key={cat.id}>
                           <div className={`wiki-cat-item ${wikiActiveCategory === cat.id ? 'active' : ''}`}
                             style={{ paddingLeft: 16 + depth * 20 }}
-                            onClick={() => { setWikiActiveCategory(cat.id); setWikiActiveArticle(null); setWikiEditMode(false); setWikiFiles([]); }}>
+                            onClick={() => {
+                              setWikiActiveArticle(null);
+                              setWikiEditMode(false);
+                              setWikiFiles([]);
+                              const newSet = new Set(wikiExpandedCategories);
+                              if (isExpanded) newSet.delete(cat.id);
+                              else newSet.add(cat.id);
+                              setWikiExpandedCategories(newSet);
+                              setWikiActiveCategory(cat.id);
+                            }}>
                             <span className="wiki-expand-btn"
-                              style={{ visibility: hasChildren ? 'visible' : 'hidden' }}
-                              onClick={hasChildren ? e => {
-                                e.stopPropagation();
-                                const newSet = new Set(wikiExpandedCategories);
-                                if (isExpanded) newSet.delete(cat.id);
-                                else newSet.add(cat.id);
-                                setWikiExpandedCategories(newSet);
-                              } : undefined}>{isExpanded ? '▼' : '▶'}</span>
+                              style={{ visibility: showExpand ? 'visible' : 'hidden' }}>
+                              {isExpanded ? '▼' : '▶'}
+                            </span>
                             <span>📂 {cat.name}</span>
                             {(isAdmin || isCategoryEditable(cat.id)) && (
                               <span className="wiki-cat-actions">
@@ -10156,13 +11220,33 @@ function App() {
                               </span>
                             )}
                           </div>
-                          {hasChildren && isExpanded && renderTree(cat.id, depth + 1)}
+                          {isExpanded && (
+                            <>
+                              {renderTree(cat.id, depth + 1)}
+                              {catArticles.map(article => (
+                                <div key={article.id} className={`wiki-article-item ${wikiActiveArticle?.id === article.id ? 'active' : ''}`}
+                                  style={{ paddingLeft: 16 + (depth + 1) * 20 }}
+                                  onClick={() => { wikiOpenArticle(article); }}>
+                                  📄 {article.title}
+                                </div>
+                              ))}
+                            </>
+                          )}
                         </React.Fragment>
                       );
                     });
                 };
                 return renderTree(null, 0);
               })()}
+              {wikiArticles.filter(a => !a.category_id && (!wikiSearch || a.title.toLowerCase().includes(wikiSearch.toLowerCase()) || a.content.toLowerCase().includes(wikiSearch.toLowerCase())))
+                .sort((a, b) => a.title.localeCompare(b.title))
+                .map(article => (
+                  <div key={article.id} className={`wiki-article-item ${wikiActiveArticle?.id === article.id ? 'active' : ''}`}
+                    style={{ paddingLeft: 16 }}
+                    onClick={() => { wikiOpenArticle(article); }}>
+                    📄 {article.title}
+                  </div>
+                ))}
             </div>
           </aside>
           <main className="wiki-main">
@@ -10315,6 +11399,46 @@ function App() {
                     setTimeout(() => { ta.focus(); ta.selectionStart = start + 1; ta.selectionEnd = start + 1; }, 0);
                   }} title="Ссылка">🔗</button>
                   <button type="button" className="wiki-md-btn" onClick={() => {
+                    document.getElementById('wiki-image-input').click();
+                  }} title="Изображение">🖼️</button>
+                  <input type="file" id="wiki-image-input" accept="image/*" style={{ display: 'none' }}
+                    onChange={async e => {
+                      const file = e.target.files[0];
+                      if (!file || !wikiActiveArticle) return;
+                      e.target.value = '';
+                      const formData = new FormData();
+                      formData.append('file', file);
+                      formData.append('userId', currentUser.id);
+                      setWikiFileUploading(true);
+                      try {
+                        const res = await fetch(`${SOCKET_URL}/api/wiki/articles/${wikiActiveArticle.id}/files`, {
+                          method: 'POST', body: formData
+                        });
+                        if (!res.ok) {
+                          const text = await res.text();
+                          try { const j = JSON.parse(text); alert('Ошибка: ' + (j.error || text)); } catch { alert('Ошибка: ' + text.substring(0, 200)); }
+                          return;
+                        }
+                        const data = await res.json();
+                        if (data.success) {
+                          const ta = document.querySelector('.wiki-edit-content');
+                          if (ta) {
+                            const start = ta.selectionStart;
+                            const before = wikiEditContent.substring(0, start);
+                            const after = wikiEditContent.substring(start);
+                            const alt = file.name.replace(/\.[^.]+$/, '');
+                            const markdown = `![${alt}](${SOCKET_URL}/uploads/${data.file.file_path})`;
+                            setWikiEditContent(before + markdown + after);
+                            setTimeout(() => { ta.focus(); ta.selectionStart = start + markdown.length; ta.selectionEnd = start + markdown.length; }, 0);
+                          }
+                        }
+                      } catch (err) {
+                        console.error('Ошибка загрузки изображения:', err);
+                      } finally {
+                        setWikiFileUploading(false);
+                      }
+                    }} />
+                  <button type="button" className="wiki-md-btn" onClick={() => {
                     const ta = document.querySelector('.wiki-edit-content');
                     const start = ta.selectionStart;
                     const before = wikiEditContent.substring(0, start);
@@ -10334,34 +11458,38 @@ function App() {
                   }} title="Цитата">❝</button>
                 </div>
                 <textarea className="wiki-edit-content" placeholder="Текст статьи (поддерживает Markdown)..."
-                  value={wikiEditContent} onChange={e => setWikiEditContent(e.target.value)} rows={20} />
-                {(isAdmin || canEditWiki || isAnyCategoryEditor) && (
-                  <div className="wiki-edit-files">
-                    <label className="wiki-file-upload-btn">
-                      {wikiFileUploading ? '⏳ Загрузка...' : '📎 Прикрепить файл'}
-                      <input type="file" style={{ display: 'none' }} onChange={e => {
-                        const file = e.target.files[0];
-                        if (file && wikiActiveArticle) {
-                          wikiUploadFile(wikiActiveArticle.id, file);
-                        }
-                        e.target.value = '';
-                      }} disabled={wikiFileUploading} />
-                    </label>
-                    {wikiFiles.length > 0 && (
-                      <div className="wiki-file-list">
-                        {wikiFiles.map(f => (
-                          <div key={f.id} className="wiki-file-item">
-                            <a href={`${SOCKET_URL}/api/download/${f.file_path}`} target="_blank" rel="noopener noreferrer" className="wiki-file-link">{f.file_name}</a>
-                            <span className="wiki-file-size">({(f.file_size / 1024).toFixed(1)} KB)</span>
-                            {isAdmin && (
-                              <button className="wiki-file-remove" onClick={() => wikiDeleteFile(wikiActiveArticle.id, f.id)} title="Удалить">✕</button>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
+                  value={wikiEditContent} onChange={e => setWikiEditContent(e.target.value)} rows={20}
+                  onDragOver={e => e.preventDefault()}
+                  onDrop={async e => {
+                    e.preventDefault();
+                    const file = e.dataTransfer.files[0];
+                    if (!file || !file.type.startsWith('image/') || !wikiActiveArticle) return;
+                    const formData = new FormData();
+                    formData.append('file', file);
+                    formData.append('userId', currentUser.id);
+                    setWikiFileUploading(true);
+                    try {
+                      const res = await fetch(`${SOCKET_URL}/api/wiki/articles/${wikiActiveArticle.id}/files`, {
+                        method: 'POST', body: formData
+                      });
+                      if (!res.ok) return;
+                      const data = await res.json();
+                      if (data.success) {
+                        const ta = e.target;
+                        const start = ta.selectionStart;
+                        const before = wikiEditContent.substring(0, start);
+                        const after = wikiEditContent.substring(start);
+                        const alt = file.name.replace(/\.[^.]+$/, '');
+                        const markdown = `![${alt}](${SOCKET_URL}/uploads/${data.file.file_path})`;
+                        setWikiEditContent(before + markdown + after);
+                        setTimeout(() => { ta.focus(); ta.selectionStart = start + markdown.length; ta.selectionEnd = start + markdown.length; }, 0);
+                      }
+                    } catch (err) {
+                      console.error('Ошибка загрузки изображения:', err);
+                    } finally {
+                      setWikiFileUploading(false);
+                    }
+                  }} />
                 <div className="wiki-editor-actions">
                   <button className="cancel-btn" onClick={() => { setWikiEditMode(false); setWikiActiveArticle(null); setWikiFiles([]); }}>Отмена</button>
                   <button className="save-btn" onClick={wikiSaveArticle} disabled={!wikiEditTitle.trim()}>💾 Сохранить</button>
@@ -10400,7 +11528,7 @@ function App() {
                         wikiLoadFiles(wikiActiveArticle.id);
                       }}>✏️ Редактировать</button>
                     )}
-                    {isAdmin && (
+                    {(isAdmin || (isCategoryEditable(wikiActiveArticle.category_id) && wikiActiveArticle.created_by === currentUser?.id)) && (
                       <button className="delete-btn" onClick={() => {
                         if (confirm('Удалить статью?')) wikiDeleteArticle(wikiActiveArticle.id);
                       }}>🗑️ Удалить</button>
@@ -10408,53 +11536,45 @@ function App() {
                   </div>
                 </div>
                 <div className="wiki-article-content markdown-body" dangerouslySetInnerHTML={{ __html: renderMarkdown(wikiActiveArticle.content) }} />
-                {wikiFiles.length > 0 && (
-                  <div className="wiki-article-files">
-                    <h4>📎 Прикреплённые файлы</h4>
-                    {wikiFiles.map(f => (
-                      <div key={f.id} className="wiki-file-item">
-                        <a href={`${SOCKET_URL}/api/download/${f.file_path}`} target="_blank" rel="noopener noreferrer" className="wiki-file-link">{f.file_name}</a>
-                        <span className="wiki-file-size">({(f.file_size / 1024).toFixed(1)} KB)</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
               </div>
             ) : (
-              <div className="wiki-article-list">
-                <h3>{wikiActiveCategory ? wikiCategories.find(c => c.id === wikiActiveCategory)?.name : 'Все статьи'}</h3>
-                <input type="text" className="wiki-search-input" placeholder="🔍 Поиск по статьям..."
-                  value={wikiSearch} onChange={e => setWikiSearch(e.target.value)} />
-                {(() => {
-                  const q = wikiSearch.toLowerCase().trim();
-                  const categoryIds = wikiActiveCategory ? getCategoryIds(wikiActiveCategory) : null;
-                  const filtered = wikiArticles.filter(a =>
-                    (!categoryIds || categoryIds.includes(a.category_id)) &&
-                    (!q || a.title.toLowerCase().includes(q) || a.content.toLowerCase().includes(q))
-                  );
-                  return filtered.length === 0 ? (
-                    <div className="wiki-empty">{wikiSearch ? 'Ничего не найдено.' : ((isAdmin || canEditWiki) ? 'Нет статей. Нажмите "+ Статья" чтобы создать.' : 'Нет статей.')}</div>
-                  ) : (
-                    <div className="wiki-article-cards">
-                    {filtered.map(article => (
-                      <div key={article.id} className="wiki-article-card"
-                        onClick={() => wikiOpenArticle(article)}>
-                        <div className="wiki-article-card-title">
-                          {article.access_level === 'private' && '🔒 '}
-                          {article.access_level === 'selected' && '👥 '}
-                          {article.title}
-                        </div>
-                        <div className="wiki-article-card-meta">
-                          {article.creatorName} · {formatDate(article.updated_at)}
-                        </div>
-                    </div>
-                  ))}
-                  </div>
-                  );
-                })()}
+              <div className="wiki-empty" style={{flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
+                <p style={{color: 'var(--text-secondary, #999)', fontSize: 14}}>Выберите статью в дереве категорий</p>
               </div>
             )}
           </main>
+          {(wikiEditMode || (wikiActiveArticle && wikiFiles.some(f => !f.mime_type?.startsWith('image/')))) && (
+            <aside className="wiki-files-panel">
+              <h4 style={{margin: '0 0 8px', fontSize: 14, opacity: 0.8}}>📎 Прикреплённые файлы</h4>
+              {wikiEditMode && (
+                <label className="wiki-file-upload-btn" style={{marginBottom: 8, width: '100%', textAlign: 'center'}}>
+                  {wikiFileUploading ? '⏳ Загрузка...' : '📎 Прикрепить файл'}
+                  <input type="file" style={{ display: 'none' }} onChange={e => {
+                    const file = e.target.files[0];
+                    if (file && wikiActiveArticle) {
+                      wikiUploadFile(wikiActiveArticle.id, file);
+                    }
+                    e.target.value = '';
+                  }} disabled={wikiFileUploading} />
+                </label>
+              )}
+              {wikiFiles.filter(f => !f.mime_type?.startsWith('image/')).length > 0 && (
+                <div className="wiki-file-list">
+                  {wikiFiles.filter(f => !f.mime_type?.startsWith('image/')).map(f => (
+                    <div key={f.id} className="wiki-file-item">
+                      <a href={`${SOCKET_URL}/api/download/${f.file_path}`} target="_blank" rel="noopener noreferrer" className="wiki-file-link">{f.file_name}</a>
+                      <div style={{display: 'flex', alignItems: 'center', gap: 6, marginTop: 2}}>
+                        <span className="wiki-file-size">({(f.file_size / 1024).toFixed(1)} KB)</span>
+                        {wikiEditMode && isAdmin && (
+                          <button className="wiki-file-remove" onClick={() => wikiDeleteFile(wikiActiveArticle.id, f.id)} title="Удалить">✕</button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </aside>
+          )}
         </div>
       )}
 
@@ -10623,22 +11743,212 @@ function App() {
                   {/* Фон чата */}
                   <div className="settings-section">
                     <h3>Фон окна чата</h3>
-                    <p className="settings-description">Выберите фон для области сообщений</p>
+                    <p className="settings-description">Выберите фон для области сообщений — свои картинки сохраняются в библиотеку</p>
                     <div className="chat-bg-grid">
-                      {chatBackgrounds.map(bg => {
-                        const gradient = appTheme === 'light' ? bg.light : bg.dark;
+                        <button
+                          type="button"
+                          className="chat-bg-btn chat-bg-upload"
+                          onClick={() => chatBgFileRef.current?.click()}
+                          title="Загрузить свою картинку — добавится в библиотеку фонов"
+                        >
+                          <div className="chat-bg-preview chat-bg-upload-preview">
+                            <span className="chat-bg-upload-icon">＋</span>
+                          </div>
+                          <span className="chat-bg-name">Своя картинка</span>
+                        </button>
+                        {customBackgrounds.length > 0 && (
+                          <div className="chat-bg-custom-header">Мои фоны ({customBackgrounds.length})</div>
+                        )}
+                        {customBackgrounds.map(bg => (
+                          <button
+                            type="button"
+                            key={bg.id}
+                            className={`chat-bg-btn ${userUiSettings.chatBackgroundCustomId === bg.id ? 'active' : ''}`}
+                            onClick={() => selectCustomBackground(bg)}
+                          >
+                            <div
+                              className="chat-bg-preview"
+                              style={{ backgroundImage: `url("${bg.dataUrl}")`, backgroundSize: 'cover', backgroundPosition: 'center' }}
+                            >
+                              <span
+                                className="chat-bg-remove"
+                                title="Удалить из библиотеки"
+                                onClick={(e) => { e.stopPropagation(); removeCustomBackground(bg); }}
+                              >
+                                ✕
+                              </span>
+                            </div>
+                            <span className="chat-bg-name">Мой фон</span>
+                          </button>
+                        ))}
+                        {customBackgrounds.length > 0 && (
+                          <div className="chat-bg-custom-header">Стандартные</div>
+                        )}
+                        {chatBackgrounds.map(bg => {
+                          const gradient = appTheme === 'light' ? bg.light : bg.dark;
+                          return (
+                            <button
+                              type="button"
+                              key={bg.id}
+                              className={`chat-bg-btn ${userUiSettings.chatBackground === bg.id && !userUiSettings.chatBackgroundCustomId && !userUiSettings.chatBackgroundImage ? 'active' : ''}`}
+                              onClick={() => {
+                                setActiveCustomBgUrl(null);
+                                setUserUiSettings({...userUiSettings, chatBackground: bg.id, chatBackgroundImage: null, chatBackgroundCustomId: null});
+                              }}
+                            >
+                              <div className="chat-bg-preview" style={{ background: bg.id === 0 ? 'transparent' : gradient }} />
+                              <span className="chat-bg-name">{bg.name}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        ref={chatBgFileRef}
+                        style={{ display: 'none' }}
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) handleChatBgUpload(file);
+                          e.target.value = '';
+                        }}
+                      />
+                  </div>
+
+                  {/* Облачка сообщений — пресеты и цвета */}
+                  <div className="settings-section">
+                    <h3>Облачка сообщений</h3>
+                    <p className="settings-description">Настройте цвет и стиль пузырей сообщений под себя</p>
+                    <div className="text-size-graduation">
+                      {BUBBLE_PRESETS.map(p => {
+                        const active = p.own[0] === userUiSettings.bubbleOwnColor
+                          && p.own[1] === userUiSettings.bubbleOwnColor2
+                          && p.ownText === userUiSettings.bubbleOwnText
+                          && p.other === userUiSettings.bubbleOtherColor
+                          && p.otherText === userUiSettings.bubbleOtherText;
                         return (
                           <button
-                            key={bg.id}
-                            className={`chat-bg-btn ${userUiSettings.chatBackground === bg.id ? 'active' : ''}`}
-                            onClick={() => setUserUiSettings({...userUiSettings, chatBackground: bg.id})}
+                            key={p.id}
+                            className={`text-size-btn ${active ? 'active' : ''}`}
+                            onClick={() => setUserUiSettings(prev => ({ ...prev, bubbleOwnColor: p.own[0], bubbleOwnColor2: p.own[1], bubbleOwnText: p.ownText, bubbleOtherColor: p.other, bubbleOtherText: p.otherText }))}
                           >
-                            <div className="chat-bg-preview" style={{ background: bg.id === 0 ? 'transparent' : gradient }} />
-                            <span className="chat-bg-name">{bg.name}</span>
+                            <span className="bubble-preset-preview">
+                              <span className="bp-bubble bp-own" style={{ background: `linear-gradient(135deg, ${p.own[0]} 0%, ${p.own[1]} 100%)` }} />
+                              <span className="bp-bubble bp-other" style={{ background: p.other }} />
+                            </span>
+                            <span className="text-size-label">{p.name}</span>
                           </button>
                         );
                       })}
                     </div>
+                    <div className="color-picker-grid">
+                      {[
+                        { key: 'bubbleOwnColor', label: 'Свой фон' },
+                        { key: 'bubbleOwnColor2', label: 'Свой градиент' },
+                        { key: 'bubbleOwnText', label: 'Свой текст' },
+                        { key: 'bubbleOtherColor', label: 'Чужой фон' },
+                        { key: 'bubbleOtherText', label: 'Чужой текст' }
+                      ].map(({ key, label }) => (
+                        <label key={key} className="color-picker-group settings-color-picker">
+                          <input
+                            type="color"
+                            value={userUiSettings[key] || '#ffffff'}
+                            onChange={(e) => setUserUiSettings({ ...userUiSettings, [key]: e.target.value })}
+                          />
+                          <span>{label}</span>
+                        </label>
+                      ))}
+                    </div>
+                    <div className="bubble-live-preview">
+                      <div className="blp-row blp-other-row">
+                        <span className="blp-bubble" style={{ background: userUiSettings.bubbleOtherColor || '#ffffff', color: userUiSettings.bubbleOtherText || '#1a1a2e', borderRadius: `var(--bubble-radius) var(--bubble-radius) var(--bubble-radius-tail) var(--bubble-radius)` }}>
+                          Привет! Как дела?
+                        </span>
+                      </div>
+                      <div className="blp-row blp-own-row">
+                        <span className="blp-bubble" style={{ background: `linear-gradient(135deg, ${userUiSettings.bubbleOwnColor || '#667eea'} 0%, ${userUiSettings.bubbleOwnColor2 || '#764ba2'} 100%)`, color: userUiSettings.bubbleOwnText || '#ffffff', fontFamily: MESSAGE_FONTS[userUiSettings.messageFont] || MESSAGE_FONTS.inter, borderRadius: `var(--bubble-radius) var(--bubble-radius) var(--bubble-radius) var(--bubble-radius-tail)` }}>
+                          Отлично, спасибо! 😊 ✓✓
+                        </span>
+                      </div>
+                    </div>
+                    <button
+                      className="btn-secondary"
+                      onClick={() => setUserUiSettings(prev => ({ ...prev, bubbleOwnColor: '#667eea', bubbleOwnColor2: '#764ba2', bubbleOwnText: '#ffffff', bubbleOtherColor: '#ffffff', bubbleOtherText: '#1a1a2e', bubbleRadiusLevel: 2 }))}
+                    >
+                      Сбросить облачка
+                    </button>
+                  </div>
+
+                  {/* Скругление углов облачков */}
+                  <div className="settings-section">
+                    <h3>Скругление углов облачков</h3>
+                    <div className="text-size-graduation">
+                      {[
+                        { level: 0, label: 'Острые', r: '6px', t: '2px' },
+                        { level: 1, label: 'Средние', r: '12px', t: '3px' },
+                        { level: 2, label: 'Скруглённые', r: '18px', t: '4px' }
+                      ].map(opt => (
+                        <button
+                          key={opt.level}
+                          className={`text-size-btn ${(userUiSettings.bubbleRadiusLevel ?? 2) === opt.level ? 'active' : ''}`}
+                          onClick={() => setUserUiSettings({ ...userUiSettings, bubbleRadiusLevel: opt.level })}
+                        >
+                          <span className="radius-preview" style={{ borderRadius: `${opt.r} ${opt.r} ${opt.t} ${opt.r}` }} />
+                          <span className="text-size-label">{opt.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Шрифт сообщений */}
+                  <div className="settings-section">
+                    <h3>Шрифт сообщений</h3>
+                    <div className="text-size-graduation">
+                      {[
+                        { id: 'inter', label: 'Inter' },
+                        { id: 'system', label: 'Системный' },
+                        { id: 'georgia', label: 'Georgia' },
+                        { id: 'mono', label: 'Моношрифт' }
+                      ].map(f => (
+                        <button
+                          key={f.id}
+                          className={`text-size-btn ${(userUiSettings.messageFont || 'inter') === f.id ? 'active' : ''}`}
+                          onClick={() => setUserUiSettings({ ...userUiSettings, messageFont: f.id })}
+                        >
+                          <span className="text-size-preview" style={{ fontFamily: MESSAGE_FONTS[f.id] }}>Aa</span>
+                          <span className="text-size-label">{f.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Акцентный цвет интерфейса */}
+                  <div className="settings-section">
+                    <h3>Акцентный цвет интерфейса</h3>
+                    <p className="settings-description">Влияет на кнопки, активные чаты и выделения</p>
+                    <label className="color-picker-group settings-color-picker">
+                      <input
+                        type="color"
+                        value={userUiSettings.themeColor || '#667eea'}
+                        onChange={(e) => setUserUiSettings({ ...userUiSettings, themeColor: e.target.value })}
+                      />
+                      <span>{userUiSettings.themeColor}</span>
+                    </label>
+                  </div>
+
+                  {/* Проверка орфографии */}
+                  <div className="settings-section">
+                    <h3>Проверка орфографии</h3>
+                    <p className="settings-description">Подсказки правильного написания по правому клику на слове в поле ввода (Яндекс.Спеллер)</p>
+                    <label className="toggle-switch settings-toggle">
+                      <input
+                        type="checkbox"
+                        checked={userUiSettings.spellCheckEnabled ?? true}
+                        onChange={(e) => setUserUiSettings({ ...userUiSettings, spellCheckEnabled: e.target.checked })}
+                      />
+                      <span className="slider"></span>
+                      <span className="toggle-label">{(userUiSettings.spellCheckEnabled ?? true) ? 'Включена' : 'Выключена'}</span>
+                    </label>
                   </div>
 
                   {/* Автозапуск (только Electron) */}
@@ -11378,6 +12688,30 @@ function App() {
             </div>
 
             <div className="modal-footer">
+              {viewUserProfileData.id && viewUserProfileData.username !== currentUser?.username && (
+                <button
+                  className="create-btn"
+                  onClick={() => {
+                    // Создаём (или открываем) чат только по явному намерению написать
+                    const existingChat = chats.find(c =>
+                      c.type === 'direct' &&
+                      c.participantsDetails &&
+                      c.participantsDetails.some(p => p.id === viewUserProfileData.id)
+                    );
+                    if (existingChat) {
+                      handleSelectChat(existingChat);
+                    } else if (socket) {
+                      socket.emit('create_chat', {
+                        type: 'direct',
+                        participants: [viewUserProfileData.username]
+                      });
+                    }
+                    setViewingUserProfile(false);
+                  }}
+                >
+                  💬 Написать сообщение
+                </button>
+              )}
               <button className="create-btn" onClick={() => setViewingUserProfile(false)}>
                 Закрыть
               </button>
@@ -11407,6 +12741,21 @@ function App() {
 
             <form onSubmit={editingTask ? handleUpdateTask : handleCreateTask}>
               <div className="modal-body">
+                {(() => {
+                  const srcChat = taskSource?.chatId || editingTask?.source_chat_id;
+                  const srcMsg = taskSource?.messageId || editingTask?.source_message_id;
+                  if (!srcChat || !srcMsg) return null;
+                  return (
+                    <button
+                      type="button"
+                      className="task-jump-btn"
+                      onClick={() => jumpToMessage(srcChat, srcMsg)}
+                      title="Открыть чат и подсветить сообщение"
+                    >
+                      ↗ Перейти к исходному сообщению
+                    </button>
+                  );
+                })()}
                 <div className="form-group">
                   <label>Название *</label>
                   <input
@@ -11445,6 +12794,31 @@ function App() {
                     onChange={(e) => setTaskForm(prev => ({ ...prev, taskEndTime: e.target.value }))}
                   />
                 </div>
+
+                <div className="form-group">
+                  <label>Напоминание</label>
+                  <select
+                    value={taskForm.reminderType}
+                    onChange={(e) => setTaskForm(prev => ({ ...prev, reminderType: e.target.value }))}
+                  >
+                    <option value="none">Без напоминания</option>
+                    <option value="1h">За 1 час до начала</option>
+                    <option value="3h">За 3 часа до начала</option>
+                    <option value="6h">За 6 часов до начала</option>
+                    <option value="custom">В определенное время</option>
+                  </select>
+                </div>
+
+                {taskForm.reminderType === 'custom' && (
+                  <div className="form-group">
+                    <label>Время напоминания</label>
+                    <input
+                      type="time"
+                      value={taskForm.reminderCustomTime}
+                      onChange={(e) => setTaskForm(prev => ({ ...prev, reminderCustomTime: e.target.value }))}
+                    />
+                  </div>
+                )}
 
                 <div className="form-group">
                   <label>Цвет</label>
@@ -12017,7 +13391,7 @@ function App() {
                 ) : (
                   getChatMediaFiles().map(file => (
                     <div key={file.id} className="media-item">
-                      <img src={file.file.url} alt={file.file.filename} />
+                      <img src={normalizeFileUrl(file.file.url)} alt={file.file.filename} />
                       <div className="media-info">
                         <span className="media-date">
                           {new Date(file.timestamp).toLocaleDateString('ru-RU', {
@@ -12117,7 +13491,7 @@ function App() {
               <p className="confirm-message">
                 {messageToDelete
                   ? 'Вы уверены, что хотите удалить это сообщение?'
-                  : `Вы уверены, что хотите удалить чат "${activeChat?.name}"? Это действие нельзя отменить.`}
+                  : `Чат "${(chatToDelete || activeChat)?.name}" будет удалён только у вас — у собеседника чат и его история останутся без изменений.`}
               </p>
             </div>
 
@@ -12125,9 +13499,24 @@ function App() {
               <button className="cancel-btn" onClick={() => setShowDeleteConfirm(false)}>
                 Отмена
               </button>
-              <button className="delete-btn" onClick={messageToDelete ? confirmDeleteMessage : confirmDeleteChat}>
-                Удалить
-              </button>
+              {messageToDelete ? (
+                <button className="delete-btn" onClick={confirmDeleteMessage}>
+                  Удалить
+                </button>
+              ) : isAdmin ? (
+                <>
+                  <button className="cancel-btn" onClick={confirmDeleteChatForMe} title="Чат исчезнет только из вашего списка">
+                    Только у меня
+                  </button>
+                  <button className="delete-btn" onClick={confirmDeleteChat} title="Чат и вся история будут удалены у всех участников безвозвратно">
+                    Удалить у всех
+                  </button>
+                </>
+              ) : (
+                <button className="delete-btn" onClick={confirmDeleteChatForMe}>
+                  Удалить
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -12226,7 +13615,7 @@ function App() {
             <button className="image-preview-close" onClick={handleCloseImagePreview}>
               ✕
             </button>
-            <img src={previewImage.url} alt={previewImage.filename} />
+            <img src={normalizeFileUrl(previewImage.url)} alt={previewImage.filename} />
             <div className="image-preview-info">
               <span className="image-filename">{previewImage.filename}</span>
               <a href={`${SOCKET_URL}/api/download/${extractFileUuidFromUrl(previewImage.url)}`} className="image-download-btn" title={previewImage.filename}>
@@ -12550,6 +13939,93 @@ function App() {
         </div>
       )}
 
+      {/* Контекстное меню чата (в списке чатов) */}
+      {chatContextMenu.visible && chatContextMenu.chat && (
+        (() => {
+          const menuChat = chatContextMenu.chat;
+          const isDirect = menuChat.type === 'direct';
+          const otherUser = isDirect && menuChat.participantsDetails
+            ? menuChat.participantsDetails.find(p => p.username !== currentUser?.username)
+            : null;
+          return (
+        <div
+          className="chat-context-menu"
+          style={{ top: chatContextMenu.y, left: chatContextMenu.x }}
+          onClick={closeChatContextMenu}
+        >
+          <div className="context-menu-items">
+            {isDirect && otherUser && (
+              <>
+                <button
+                  className="context-menu-item"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    closeChatContextMenu();
+                    handleViewUserInfo(otherUser);
+                  }}
+                >
+                  👤 Информация о пользователе
+                </button>
+                <div className="context-menu-divider"></div>
+              </>
+            )}
+            <button
+              className="context-menu-item"
+              onClick={(e) => {
+                e.stopPropagation();
+                setChatContextMenu(prev => ({ ...prev, x: 0, y: 0, visible: false }));
+                toggleChatPin(menuChat);
+              }}
+            >
+              {menuChat.pinned ? '📌 Открепить чат' : '📌 Закрепить чат'}
+            </button>
+            <button
+              className="context-menu-item"
+              onClick={(e) => {
+                e.stopPropagation();
+                setChatContextMenu(prev => ({ ...prev, visible: false }));
+                toggleChatMute(menuChat);
+              }}
+            >
+              {menuChat.muted ? '🔔 Включить уведомления' : '🔕 Выключить уведомления'}
+            </button>
+            <button
+              className="context-menu-item"
+              onClick={(e) => {
+                e.stopPropagation();
+                setChatContextMenu(prev => ({ ...prev, visible: false }));
+                setChatUnread(menuChat, true);
+              }}
+            >
+              ◽ Пометить как непрочитанное
+            </button>
+            <div className="context-menu-divider"></div>
+            <button
+              className="context-menu-item"
+              onClick={(e) => {
+                e.stopPropagation();
+                clearChatHistory(menuChat);
+              }}
+            >
+              🗑️ Очистить историю
+            </button>
+            <button
+              className="context-menu-item context-menu-item-danger"
+              onClick={(e) => {
+                e.stopPropagation();
+                setChatContextMenu(prev => ({ ...prev, visible: false }));
+                closeChatContextMenu();
+                handleDeleteChat(menuChat);
+              }}
+            >
+              ⛔ Удалить чат
+            </button>
+          </div>
+        </div>
+          );
+        })()
+      )}
+
       {/* Контекстное меню сообщений */}
       {contextMenu.visible && (
         <div
@@ -12634,6 +14110,12 @@ function App() {
             <button className="context-menu-item" onClick={(e) => { e.stopPropagation(); handleForwardMessage({ id: contextMenu.messageId, text: contextMenu.messageText }); }}>
               ➤ Переслать
             </button>
+            <button className="context-menu-item" onClick={(e) => { e.stopPropagation(); createTaskFromMessage(); }} title="Создать задачу в календаре на основе этого сообщения">
+              📅 Создать задачу
+            </button>
+            <button className="context-menu-item" onClick={(e) => { e.stopPropagation(); enterSelectionMode(contextMenu.messageId); }} title="Выбрать несколько сообщений для пересылки">
+              ☑️ Выбрать сообщения
+            </button>
             {/* Закрепить/Открепить */}
             {(() => {
               const chatPinned = pinnedMessages[contextMenu.messageChatId] || [];
@@ -12681,6 +14163,27 @@ function App() {
           onClick={closeInputContextMenu}
         >
           <div className="context-menu-items">
+            {inputContextMenu.word && (inputContextMenu.checking || (inputContextMenu.suggestions || []).length > 0) && (
+              <>
+                {inputContextMenu.checking ? (
+                  <div className="context-menu-item spell-checking">🔍 Проверка…</div>
+                ) : (
+                  <>
+                    {(inputContextMenu.suggestions || []).map((s, i) => (
+                      <button
+                        key={`${s}-${i}`}
+                        className="context-menu-item spell-suggestion"
+                        onClick={(ev) => { ev.stopPropagation(); applySpellSuggestion(s); }}
+                        title="Заменить на правильное написание"
+                      >
+                        {s}
+                      </button>
+                    ))}
+                    <div className="context-menu-divider"></div>
+                  </>
+                )}
+              </>
+            )}
             <button className="context-menu-item" onClick={(e) => { e.stopPropagation(); handleCutText(); }}>
               ✂️ Вырезать
             </button>
@@ -13198,7 +14701,7 @@ function App() {
                   <div key={pinnedMsg.id} className="pinned-message-item">
                     <div className="pinned-message-header">
                       <img
-                        src={pinnedMsg.senderAvatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(pinnedMsg.senderName || 'U')}`}
+                        src={normalizeFileUrl(pinnedMsg.senderAvatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(pinnedMsg.senderName || 'U')}`)}
                         alt={pinnedMsg.senderName}
                         className="pinned-message-avatar"
                         onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || 'U')}`; }}
@@ -13230,6 +14733,9 @@ function App() {
           </div>
         </div>
       )}
+
+      {/* Конфетти на праздничные сообщения */}
+      {confettiKey > 0 && <ConfettiOverlay key={confettiKey} />}
     </div>
   );
 }
