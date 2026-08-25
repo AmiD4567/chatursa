@@ -883,19 +883,25 @@ try {
     upload, SERVER_URL, UPLOADS_PATH,
     encryptText, decryptText, isEncrypted,
     uuidv4, bcrypt, speakeasy, QRCode, webPush, admin, getMessaging,
+    VAPID_PUBLIC_KEY,
     checkAdmin, checkWikiEditAccess, checkArticleAccess, checkCategoryEditor,
     checkRateLimit, registerAttempts, loginAttempts, userTotalUploadSize, DEFAULT_UPLOAD_QUOTA,
     botRateLimit, wsRateMap, checkWsRateLimit, conversationStates, botAnalytics,
     getUserById, getUserByUsername, getChatById, getDirectChatBetweenUsers, getChatWithDetails,
     getUserChats, getChatMessages, getAllUsers, generateUserId, getClientIp, getClientHost,
     distributeChatMessage, sendPushNotification, sendFcmNotification, sendBotMessage,
-    getBotResponse, ensureBotChat, deliverBotMessage, getChatDisplayName
+    getBotResponse, ensureBotChat, deliverBotMessage, getChatDisplayName,
+    processConversationState, isDialogStartCommand, startConversation, clearConversation,
+    handleTodayCommand, handleContactsCommand
   };
-  // ── Socket-обработчики и фоновые задачи ──
-  require('./src/socket')(sharedDeps);
+  // ── Фоновые задачи (ДО сокетов: socket-деструктура читает deps сразу) ──
   const jobsApi = require('./src/jobs');
   jobsApi.setupJobs(sharedDeps);
   sharedDeps.scheduleTaskReminder = jobsApi.scheduleTaskReminder;
+  sharedDeps.pendingReminders = jobsApi.pendingReminders;
+
+  // ── Socket-обработчики ──
+  require('./src/socket')(sharedDeps);
 
   // Функции из jobs.js, нужные остальным частям server.js
   sendMeetingReminder = jobsApi.sendMeetingReminder;

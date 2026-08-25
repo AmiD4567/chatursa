@@ -4,7 +4,7 @@
  */
 
 module.exports = function register(app, deps) {
-  const { db, admin, checkAdmin } = deps;
+  const { db, admin, checkAdmin, botAnalytics } = deps;
 
 app.get('/api/bot/stats/:userId', (req, res) => {
   const { userId } = req.params;

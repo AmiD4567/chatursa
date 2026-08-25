@@ -369,4 +369,4 @@ function setupJobs(deps) {
   setTimeout(scheduleDailyThoughtChecker, 12000);
 }
 
-module.exports = { setupJobs, scheduleTaskReminder, restorePendingReminders, sendMeetingReminder };
+module.exports = { setupJobs, pendingReminders, scheduleTaskReminder, restorePendingReminders, sendMeetingReminder };

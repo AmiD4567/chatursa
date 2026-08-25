@@ -4,7 +4,7 @@
  */
 
 module.exports = function register(app, deps) {
-  const { db, io, onlineUsers, uuidv4, checkAdmin, getUserById, scheduleTaskReminder } = deps;
+  const { db, io, onlineUsers, uuidv4, checkAdmin, getUserById, scheduleTaskReminder, pendingReminders } = deps;
 
 app.get('/api/calendar/tasks', (req, res) => {
   const { userId, startDate, endDate } = req.query;

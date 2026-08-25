@@ -9,7 +9,9 @@ module.exports = function registerSocketHandlers(deps) {
           getChatWithDetails, getUserChats, getChatMessages, getAllUsers, generateUserId,
           distributeChatMessage, sendBotMessage, getBotResponse, ensureBotChat, getChatDisplayName,
           botRateLimit, wsRateMap, checkWsRateLimit,
-          userTotalUploadSize, DEFAULT_UPLOAD_QUOTA, conversationStates, botAnalytics } = deps;
+          userTotalUploadSize, DEFAULT_UPLOAD_QUOTA, conversationStates, botAnalytics,
+          processConversationState, isDialogStartCommand, startConversation,
+          clearConversation, handleTodayCommand, handleContactsCommand } = deps;
 
 
 
