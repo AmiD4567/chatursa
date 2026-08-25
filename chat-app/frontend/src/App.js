@@ -628,6 +628,9 @@ function App() {
   const [showImagePreview, setShowImagePreview] = useState(false);
   const [galleryImages, setGalleryImages] = useState([]);
   const [galleryIndex, setGalleryIndex] = useState(0);
+  // Рефы для фоновой догрузки полного списка (позиция сохраняется по url)
+  const galleryImagesRef = useRef([]);
+  const galleryIndexRef = useRef(0);
   const [showStatusPicker, setShowStatusPicker] = useState(false);
   const [readMessages, setReadMessages] = useState({}); // { messageId: [userIds] }
   // Глобальный Map: chatId -> Set(readerUserIds) для стабильных двойных галочек
@@ -7561,13 +7564,15 @@ return parts.length > 0 ? parts : text;
     return (bytes / Math.pow(1024, i)).toFixed(1) + ' ' + sizes[i];
   };
 
-  // Предпросмотр изображения: собираем все картинки активного чата для навигации
+  // Предпросмотр изображения: мгновенно из загруженных сообщений + фоновая
+  // догрузка ПОЛНОГО списка изображений чата (включая недогруженную историю)
   const handleImageClick = (imageUrl, filename) => {
     const list = messages
       .filter(m => m.file && m.file.mimetype && m.file.mimetype.startsWith('image/'))
       .map(m => {
         const u = normalizeFileUrl(m.file.url);
         return {
+          id: m.id,
           url: u,
           filename: m.file.filename,
           downloadHref: `${SOCKET_URL}/api/download/${extractFileUuidFromUrl(m.file.url)}`
@@ -7577,13 +7582,50 @@ return parts.length > 0 ? parts : text;
     if (idx < 0) idx = 0;
     setGalleryImages(list);
     setGalleryIndex(idx);
+    galleryImagesRef.current = list;
+    galleryIndexRef.current = idx;
     setShowImagePreview(true);
+
+    const chatId = activeChatIdRef.current;
+    if (!chatId) return;
+    fetch(`${SOCKET_URL}/api/messages/${chatId}/images?userId=${currentUser?.id}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (!data || !Array.isArray(data.images) || data.images.length === 0) return;
+        const full = data.images.map(im => ({
+          id: im.id,
+          url: normalizeFileUrl(im.url),
+          filename: im.filename,
+          downloadHref: `${SOCKET_URL}/api/download/${extractFileUuidFromUrl(im.url)}`
+        }));
+        setGalleryImages(prev => {
+          // Полный список + локальные элементы, которых там нет (крайний случай cleared-фильтра)
+          const merged = [...full];
+          for (const it of prev) {
+            if (!merged.some(x => x.id === it.id)) merged.push(it);
+          }
+          // Сохраняем позицию текущего изображения по url
+          const curUrl = galleryImagesRef.current[galleryIndexRef.current]?.url;
+          const ni = merged.findIndex(x => x.url === curUrl);
+          if (ni >= 0) {
+            galleryImagesRef.current = merged;
+            galleryIndexRef.current = ni;
+            setGalleryIndex(ni);
+          } else {
+            galleryImagesRef.current = merged;
+          }
+          return merged;
+        });
+      })
+      .catch(() => {});
   };
 
   const handleCloseImagePreview = () => {
     setShowImagePreview(false);
     setGalleryImages([]);
     setGalleryIndex(0);
+    galleryImagesRef.current = [];
+    galleryIndexRef.current = 0;
   };
 
   // ═══ Статус: черновик применяется только по «Сохранить» ═══

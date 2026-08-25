@@ -2,6 +2,7 @@
  * Сообщения: история, поиск, орфография, отправка, треды, пересылка. Извлечено из server.js без изменений логики.
  * Регистрация выполняется после initDatabase() — зависимости передаются через deps.
  */
+const https = require('https');
 
 module.exports = function register(app, deps) {
   const { db, emitToUser, encryptText, decryptText, uuidv4, checkAdmin, getChatById, getChatMessages, distributeChatMessage } = deps;
@@ -88,6 +89,52 @@ app.get('/api/messages/:chatId', (req, res) => {
   } catch (err) {
     console.error('Ошибка загрузки сообщений:', err);
     res.status(500).json({ error: 'Ошибка при загрузке сообщений' });
+  }
+});
+
+// Полный список изображений чата (для галереи — независимо от загруженной порции истории)
+app.get('/api/messages/:chatId/images', (req, res) => {
+  const { chatId } = req.params;
+  const { userId } = req.query;
+
+  if (!chatId || !userId) {
+    return res.status(400).json({ error: 'chatId и userId обязательны' });
+  }
+
+  try {
+    // Уважаем «Очистить историю для меня»: изображения ≤ cleared_at не показываем
+    const clearedRow = db.prepare('SELECT cleared_at FROM chat_user_settings WHERE user_id = ? AND chat_id = ?').get(userId, chatId);
+    const clearedAt = clearedRow ? clearedRow.cleared_at : null;
+
+    const rows = db.prepare(`
+      SELECT m.id, m.timestamp, m.file_data
+      FROM messages m
+      WHERE m.chat_id = ?
+        AND m.file_data IS NOT NULL
+        AND JSON_EXTRACT(m.file_data, '$.mimetype') LIKE 'image/%'
+        AND (? IS NULL OR m.timestamp > ?)
+      ORDER BY m.timestamp ASC
+      LIMIT 1000
+    `).all(chatId, clearedAt, clearedAt);
+
+    const images = [];
+    for (const row of rows) {
+      try {
+        const f = JSON.parse(row.file_data);
+        if (!f || !f.url) continue;
+        images.push({
+          id: row.id,
+          url: f.url,
+          filename: f.filename || 'image',
+          timestamp: row.timestamp
+        });
+      } catch { /* битый file_data пропускаем */ }
+    }
+
+    res.json({ success: true, images });
+  } catch (err) {
+    console.error('Ошибка получения изображений чата:', err);
+    res.status(500).json({ error: 'Ошибка получения изображений' });
   }
 });
 
