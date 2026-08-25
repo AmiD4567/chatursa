@@ -21,9 +21,10 @@ import java.util.concurrent.TimeUnit
 
 sealed class SocketEvent {
     data class Connected(val user: User, val chats: List<Chat>) : SocketEvent()
-    data class NewMessage(val message: Message) : SocketEvent()
+    data class NewMessage(val message: Message, val chat: Chat? = null) : SocketEvent()
     data class ChatHistory(val chatId: String, val messages: List<Message>, val chat: Chat? = null) : SocketEvent()
     data class ChatCreated(val chat: Chat) : SocketEvent()
+    data class ChatUpdated(val chat: Chat) : SocketEvent()
     data class UserStatusChanged(val userId: String, val status: String, val lastSeen: String? = null) : SocketEvent()
     data class UserTyping(val chatId: String, val userId: String, val userName: String) : SocketEvent()
     data class UsersList(val users: List<User>) : SocketEvent()
@@ -142,7 +143,14 @@ class SocketManager {
                     if (args.isNotEmpty()) {
                         val data = args[0] as JSONObject
                         val msgJson = if (data.has("message")) data.getJSONObject("message") else data
-                        _events.trySend(SocketEvent.NewMessage(parseMessage(msgJson)))
+                        // Чат может быть незнакомым (первое сообщение в direct-чате,
+                        // созданном другим пользователем) — передаём его для upsert
+                        val chatJson = if (data.has("chat") && !data.isNull("chat"))
+                            data.getJSONObject("chat") else null
+                        _events.trySend(SocketEvent.NewMessage(
+                            parseMessage(msgJson),
+                            chatJson?.let { parseChat(it, currentUsername) }
+                        ))
                     }
                 } catch (e: Exception) { Log.e(TAG, "new_message parse error", e) }
             }
@@ -172,6 +180,16 @@ class SocketManager {
                         _events.trySend(SocketEvent.ChatCreated(parseChat(chatJson, currentUsername)))
                     }
                 } catch (e: Exception) { Log.e(TAG, "chat_created parse error", e) }
+            }
+
+            socket?.on("chat_updated") { args ->
+                try {
+                    if (args.isNotEmpty()) {
+                        val data = args[0] as JSONObject
+                        val chatJson = if (data.has("chat")) data.getJSONObject("chat") else data
+                        _events.trySend(SocketEvent.ChatUpdated(parseChat(chatJson, currentUsername)))
+                    }
+                } catch (e: Exception) { Log.e(TAG, "chat_updated parse error", e) }
             }
 
             socket?.on("user_status_changed") { args ->

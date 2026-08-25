@@ -515,11 +515,15 @@ io.on('connection', (socket) => {
       chat = getChatById(chatId);
     }
 
-    // Отправляем информацию о чате всем участникам (все сессии)
+    // Рассылка события о новом чате
     const chatWithParticipants = getChatWithDetails(chat.id);
 
     if (chatWithParticipants.participantsDetails) {
       chatWithParticipants.participantsDetails.forEach((participant) => {
+        // Direct-чат: событие уходит только инициатору — иначе пустой чат мгновенно
+        // появляется в списке у получателя. Получатель узнает о чате с первым
+        // сообщением через chat_updated из distributeChatMessage.
+        if (type === 'direct' && participant.id !== onlineUser.id) return;
         emitToUser(participant.id, 'chat_created', { chat: chatWithParticipants });
       });
     }
@@ -689,8 +693,9 @@ io.on('connection', (socket) => {
 
 
   // Отправка сообщения
-  socket.on('send_message', (data) => {
+  socket.on('send_message', (data, callback) => {
     if (!checkWsRateLimit(socket.id)) {
+      if (typeof callback === 'function') callback({ ok: false, error: 'rate_limited' });
       socket.emit('error', { message: 'Слишком много запросов. Подождите.' });
       return;
     }
@@ -699,18 +704,21 @@ io.on('connection', (socket) => {
 
     if (!onlineUser) {
       console.error('[send_message] нет пользователя (onlineUser не найден), socket:', socket.id);
+      if (typeof callback === 'function') callback({ ok: false, error: 'no_session' });
       // Пытаемся восстановить из localStorage данных сокета
       return;
     }
 
     if (!chatId || typeof chatId !== 'string' || chatId.trim() === '') {
       console.error('[send_message] неверный chatId:', chatId, 'от', onlineUser.username);
+      if (typeof callback === 'function') callback({ ok: false, error: 'bad_chat' });
       return;
     }
 
     const chat = getChatById(chatId);
     if (!chat) {
       console.error('[send_message] чат не найден:', chatId, 'от', onlineUser.username);
+      if (typeof callback === 'function') callback({ ok: false, error: 'chat_not_found' });
       return;
     }
 
@@ -720,6 +728,7 @@ io.on('connection', (socket) => {
       const quota = DEFAULT_UPLOAD_QUOTA;
       if (currentTotal + Number(file.size) > quota) {
         console.warn(`[send_message] Квота превышена для ${onlineUser.username}: ${currentTotal}/${quota}`);
+        if (typeof callback === 'function') callback({ ok: false, error: 'quota_exceeded' });
         socket.emit('upload_error', { error: 'Превышена квота загрузок (500MB)', code: 'QUOTA_EXCEEDED' });
         return;
       }
@@ -791,6 +800,7 @@ io.on('connection', (socket) => {
 
       if (!messageRow) {
         console.error('[send_message] не удалось получить сообщение после вставки, messageId:', messageId);
+        if (typeof callback === 'function') callback({ ok: false, error: 'save_failed' });
         return;
       }
 
@@ -829,6 +839,9 @@ io.on('connection', (socket) => {
       // Отправляем сообщение всем в чате (включая отправителя):
       // unread_messages для непрочитанных, realtime-рассылка и push офлайн-участникам
       distributeChatMessage(chatId, formattedMessage, chat, { skipUserId: onlineUser.id });
+
+      // Подтверждаем доставку клиенту (после вставки в БД и рассылки)
+      if (typeof callback === 'function') callback({ ok: true, messageId });
 
       // @mentions: уведомляем упомянутых пользователей
       if (formattedMessage.text && !isE2EE) {

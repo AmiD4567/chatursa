@@ -107,11 +107,31 @@ class ChatListViewModel(application: Application) : AndroidViewModel(application
                         if (event.message.senderId != currentUser?.id) {
                             NotificationHelper.playNotificationSound(getApplication())
                         }
-                        updateChatWithNewMessage(event.message)
+                        updateChatWithNewMessage(event.message, event.chat)
                     }
                     is SocketEvent.ChatCreated -> {
                         val chats = (listOf(event.chat) + _uiState.value.chats).distinctBy { it.id }
                         _uiState.value = _uiState.value.copy(chats = chats, createdChatId = event.chat.id)
+                    }
+                    is SocketEvent.ChatUpdated -> {
+                        // Чат может быть незнаком: первое сообщение в direct-чате,
+                        // созданном другим пользователем, — добавляем его в список
+                        val exists = _uiState.value.chats.any { it.id == event.chat.id }
+                        val updatedChats = if (!exists) {
+                            (listOf(event.chat) + _uiState.value.chats).distinctBy { it.id }
+                                .sortedByDescending { it.lastMessage?.timestamp ?: "" }
+                        } else {
+                            _uiState.value.chats.map { chat ->
+                                if (chat.id == event.chat.id) {
+                                    chat.copy(
+                                        lastMessage = event.chat.lastMessage ?: chat.lastMessage,
+                                        lastActivity = event.chat.lastMessage?.timestamp ?: chat.lastActivity,
+                                        unreadCount = maxOf(chat.unreadCount, event.chat.unreadCount)
+                                    )
+                                } else chat
+                            }
+                        }
+                        _uiState.value = _uiState.value.copy(chats = updatedChats)
                     }
                     is SocketEvent.UserStatusChanged -> {
                         val updatedChats = _uiState.value.chats.map { chat ->
@@ -216,8 +236,18 @@ class ChatListViewModel(application: Application) : AndroidViewModel(application
         _uiState.value = _uiState.value.copy(pendingDeleteChat = null)
     }
 
-    private fun updateChatWithNewMessage(message: Message) {
+    private fun updateChatWithNewMessage(message: Message, incomingChat: Chat? = null) {
         val myId = _uiState.value.currentUser?.id
+        val exists = _uiState.value.chats.any { it.id == message.chatId }
+
+        // Незнакомый чат (первое сообщение в direct-чате от другого пользователя) — добавляем
+        if (!exists && incomingChat != null) {
+            val chats = (listOf(incomingChat.copy(lastMessage = message, lastActivity = message.timestamp)) +
+                _uiState.value.chats).distinctBy { it.id }
+            _uiState.value = _uiState.value.copy(chats = chats)
+            return
+        }
+
         val updatedChats = _uiState.value.chats.map { chat ->
             if (chat.id == message.chatId) {
                 chat.copy(
