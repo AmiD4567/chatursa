@@ -311,6 +311,11 @@
   box-shadow: var(--shadow-md);
 }
 
+/* Иконки внутри кнопок (звонки в профиле) */
+.create-btn svg {
+  display: block;
+}
+
 .create-btn:hover:not(:disabled) {
   transform: translateY(-2px);
   box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
