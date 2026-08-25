@@ -14,6 +14,7 @@ import DisconnectedOverlay from './DisconnectedOverlay';
 import InAppNotification from './InAppNotification';
 import useCall from './hooks/useCall';
 import CallOverlay from './CallOverlay';
+import ImageGalleryModal from './ImageGalleryModal';
 import ConfettiOverlay from './ConfettiOverlay';
 
 // Автоопределение адреса сервера.
@@ -96,10 +97,15 @@ function addCsrfHeader(init) {
 
 // Автоматически добавляем CSRF-токен во все мутирующие fetch-запросы
 const originalFetch = window.fetch;
-window.fetch = function(input, init = {}) {
+window.fetch = async function(input, init = {}) {
   const method = (init.method || 'GET').toUpperCase();
   const isMutating = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
 
+  // Если мутирующий запрос уходит раньше, чем получен токен при старте,
+  // дожидаемся его загрузки, иначе сервер вернёт 403
+  if (isMutating && !csrfToken) {
+    await fetchCsrfToken();
+  }
   if (isMutating && csrfToken) {
     init = addCsrfHeader(init);
   }
@@ -561,7 +567,8 @@ function App() {
   const [showAddMenu, setShowAddMenu] = useState(false);
   const addMenuRef = useRef(null);
   const [showImagePreview, setShowImagePreview] = useState(false);
-  const [previewImage, setPreviewImage] = useState(null);
+  const [galleryImages, setGalleryImages] = useState([]);
+  const [galleryIndex, setGalleryIndex] = useState(0);
   const [showStatusPicker, setShowStatusPicker] = useState(false);
   const [readMessages, setReadMessages] = useState({}); // { messageId: [userIds] }
   // Глобальный Map: chatId -> Set(readerUserIds) для стабильных двойных галочек
@@ -1946,7 +1953,20 @@ function App() {
       // Добавляем сообщение в список, если чат активен
       // Используем activeChatIdRef.current для актуального значения
       if (message.chatId === activeChatIdRef.current) {
-        setMessages(prev => [...prev, message]);
+        setMessages(prev => {
+          // Своё сообщение: сначала заменяем оптимистичный плейсхолдер (если есть)
+          if (isMyMessage) {
+            const idx = prev.findIndex(m => m._pending && m._localId && m.text === message.text && m.senderId === message.senderId);
+            if (idx !== -1) {
+              const copy = [...prev];
+              copy[idx] = message;
+              return copy;
+            }
+          }
+          // Защита от точного дубля по id
+          if (prev.some(m => m.id === message.id)) return prev;
+          return [...prev, message];
+        });
       }
     });
 
@@ -4442,36 +4462,85 @@ function App() {
     }));
   };
 
-  // Отправка сообщения с поддержкой офлайн-режима
-  const sendOrQueueMessage = (msgData) => {
-    if (socket && socket.connected) {
-      socket.emit('send_message', msgData);
-    } else {
-      // Офлайн: сохраняем в очередь отправки
-      const offlineMsg = {
-        ...msgData,
-        _offline: true,
-        _localId: Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
-      };
-      queueOutgoing(offlineMsg).catch(err => console.error('[Offline] queue error:', err));
-      console.log('[Offline] Сообщение сохранено в очередь:', offlineMsg._localId);
+  // Отправка сообщения с поддержкой офлайн-режима и подтверждением доставки.
+  // displayText — расшифрованный текст для оптимистичного отображения
+  // (в msgData.text для E2EE-чатов лежит шифротекст).
+  const sendOrQueueMessage = (msgData, displayText) => {
+    const localId = 'local-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const optimistic = {
+      ...msgData,
+      id: localId,
+      senderId: currentUserRef.current?.id,
+      senderName: currentUserRef.current?.username,
+      senderAvatar: currentUserRef.current?.avatar,
+      timestamp: new Date().toISOString(),
+      readBy: [currentUserRef.current?.username].filter(Boolean),
+      text: displayText !== undefined ? displayText : msgData.text,
+      _pending: true,
+      _localId: localId
+    };
+    // Оптимистичное отображение: сообщение сразу видно у отправителя
+    if (msgData.chatId === activeChatIdRef.current) {
+      setMessages(prev => [...prev, optimistic]);
     }
+
+    const queueIt = () => {
+      queueOutgoing({ ...msgData, _localId: localId }).catch(err => console.error('[Offline] queue error:', err));
+    };
+
+    if (!socket || !socket.connected) {
+      queueIt();
+      return;
+    }
+
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) { settled = true; queueIt(); }
+    }, 10000);
+    socket.emit('send_message', msgData, (resp) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (!resp || !resp.ok) {
+        console.warn('[Offline] Сервер отклонил сообщение, ставим в очередь:', resp && resp.error);
+        queueIt();
+      }
+    });
   };
 
-  // Отправка всех накопленных офлайн-сообщений
+  // Отправка всех накопленных офлайн-сообщений.
+  // Из очереди удаляем только после подтверждения сервера; при неудаче — стоп (порядок сохраняется).
+  const outboxFlushingRef = useRef(false);
   const flushOutbox = async () => {
     if (!socket || !socket.connected) return;
+    if (outboxFlushingRef.current) return;
+    outboxFlushingRef.current = true;
     try {
       const queue = await getOutbox();
       if (queue.length === 0) return;
       console.log(`[Offline] Отправка ${queue.length} накопленных сообщений...`);
       for (const msg of queue) {
-        socket.emit('send_message', msg);
+        if (!socket.connected) break;
+        const ok = await new Promise((resolve) => {
+          let settled = false;
+          const timer = setTimeout(() => {
+            if (!settled) { settled = true; resolve(false); }
+          }, 10000);
+          socket.emit('send_message', msg, (resp) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            resolve(!!(resp && resp.ok));
+          });
+        });
+        if (!ok) break;
         await removeFromOutbox(msg.id);
       }
       console.log('[Offline] Очередь отправлена');
     } catch (err) {
       console.error('[Offline] Ошибка отправки очереди:', err);
+    } finally {
+      outboxFlushingRef.current = false;
     }
   };
 
@@ -4518,7 +4587,7 @@ function App() {
             size: fileData.size,
             mimetype: fileData.mimetype
           }
-        });
+        }, messageText);
         setSelfDestructTimer(null);
       } catch (error) {
         console.error('Ошибка загрузки файла:', error);
@@ -4568,7 +4637,7 @@ function App() {
         ...(e2eePrepared.e2ee ? { e2ee: true, e2ee_nonce: e2eePrepared.e2ee_nonce, e2ee_ephemeral: e2eePrepared.e2ee_ephemeral } : {}),
         replyTo: replyToMessage ? { messageId: replyToMessage.id, text: replyToMessage.text, senderName: replyToMessage.senderName } : null,
         ...(expiresAt ? { expiresAt } : {})
-      });
+      }, messageText);
       setSelfDestructTimer(null);
       setReplyToMessage(null);
       setInputText('');
@@ -5552,7 +5621,7 @@ function App() {
   };
 
   const handleStickerSend = (stickerObj) => {
-    if (!socket || !activeChatId) return;
+    if (!activeChatId) return;
     const text = '\x00STICKER\x00' + stickerObj.file + '\x00STICKER\x00';
     sendOrQueueMessage({
       chatId: activeChatId,
@@ -7420,15 +7489,29 @@ function App() {
     return (bytes / Math.pow(1024, i)).toFixed(1) + ' ' + sizes[i];
   };
 
-  // Предпросмотр изображения
+  // Предпросмотр изображения: собираем все картинки активного чата для навигации
   const handleImageClick = (imageUrl, filename) => {
-    setPreviewImage({ url: imageUrl, filename });
+    const list = messages
+      .filter(m => m.file && m.file.mimetype && m.file.mimetype.startsWith('image/'))
+      .map(m => {
+        const u = normalizeFileUrl(m.file.url);
+        return {
+          url: u,
+          filename: m.file.filename,
+          downloadHref: `${SOCKET_URL}/api/download/${extractFileUuidFromUrl(m.file.url)}`
+        };
+      });
+    let idx = list.findIndex(i => i.url === imageUrl);
+    if (idx < 0) idx = 0;
+    setGalleryImages(list);
+    setGalleryIndex(idx);
     setShowImagePreview(true);
   };
 
   const handleCloseImagePreview = () => {
     setShowImagePreview(false);
-    setPreviewImage(null);
+    setGalleryImages([]);
+    setGalleryIndex(0);
   };
 
   // Закрытие по ESC и клику вне контекстного меню
@@ -7704,13 +7787,13 @@ function App() {
 
   // Обработка клика по кнопке бота
   const handleBotButtonClick = (action) => {
-    if (!socket || !activeChatId) return;
+    if (!activeChatId) return;
 
-    // Отправляем команду боту
-    socket.emit('send_message', {
+    // Отправляем команду боту (через надёжную отправку с офлайн-очередью)
+    sendOrQueueMessage({
       chatId: activeChatId,
       text: action
-    });
+    }, action);
 
     // Закрываем мобильное меню если открыто
     if (windowWidth <= 1600) {
@@ -13849,21 +13932,13 @@ function App() {
       )}
 
       {/* Модальное окно предпросмотра изображения */}
-      {showImagePreview && previewImage && (
-        <div className="modal-overlay image-preview-overlay" onClick={handleCloseImagePreview}>
-          <div className="image-preview-container" onClick={e => e.stopPropagation()}>
-            <button className="image-preview-close" onClick={handleCloseImagePreview}>
-              ✕
-            </button>
-            <img src={normalizeFileUrl(previewImage.url)} alt={previewImage.filename} />
-            <div className="image-preview-info">
-              <span className="image-filename">{previewImage.filename}</span>
-              <a href={`${SOCKET_URL}/api/download/${extractFileUuidFromUrl(previewImage.url)}`} className="image-download-btn" title={previewImage.filename}>
-                ⬇️ Скачать
-              </a>
-            </div>
-          </div>
-        </div>
+      {showImagePreview && galleryImages.length > 0 && (
+        <ImageGalleryModal
+          images={galleryImages}
+          index={galleryIndex}
+          onClose={handleCloseImagePreview}
+          onNavigate={(dir) => setGalleryIndex(i => (i + dir + galleryImages.length) % galleryImages.length)}
+        />
       )}
 
       {/* Модальное окно выбора статуса */}
