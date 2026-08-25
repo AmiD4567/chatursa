@@ -36,6 +36,65 @@ if (isElectron || isCapacitor || isDevServer) {
 }
 const STORAGE_KEY = 'chat_user_data';
 
+// ══════════ Статусы: кластерный рендер эмодзи в стиле Apple ══════════
+// Кластер = флаги (RI-пары), ZWJ-семейки, скин-тоны и VS16 не разрываются
+const STATUS_EMOJI_CLUSTER_RE =
+  /(?:\p{RI}\p{RI}|\p{Extended_Pictographic})(?:[\u{1F3FB}-\u{1F3FF}\uFE0F])?(?:\u200D(?:\p{RI}\p{RI}|\p{Extended_Pictographic})(?:[\u{1F3FB}-\u{1F3FF}\uFE0F])?)*/gu;
+
+function emojiUnifiedVariants(cluster) {
+  const cps = [...cluster];
+  const raw = cps.map(c => c.codePointAt(0).toString(16)).join('-');
+  // Классический вариант из emojiToUnified: без FE0F/20E3/скин-тонов,
+  // c -fe0f для одиночных из Misc Symbols/Dingbats
+  const filtered = cps.map(c => {
+    const code = c.codePointAt(0);
+    if ((code >= 0xFE00 && code <= 0xFE0F) || code === 0x20E3) return null;
+    if (code >= 0x1F3FB && code <= 0x1F3FF) return null;
+    return code.toString(16);
+  }).filter(Boolean);
+  let classic = filtered.join('-');
+  if (filtered.length === 1) {
+    const code = parseInt(filtered[0], 16);
+    if ((code >= 0x2600 && code <= 0x26FF) || (code >= 0x2700 && code <= 0x27BF)) classic += '-fe0f';
+  }
+  return [...new Set([raw, classic].filter(Boolean))];
+}
+
+function StatusEmojiImg({ cluster, size }) {
+  const [variant, setVariant] = React.useState(0);
+  const variants = emojiUnifiedVariants(cluster);
+  const dim = typeof size === 'number' ? `${size}px` : size;
+  if (!cluster || variant >= variants.length) {
+    return <span style={{ fontSize: dim }}>{cluster}</span>; // нативный глиф как последний фолбэк
+  }
+  return (
+    <img
+      src={`https://cdn.jsdelivr.net/npm/emoji-datasource-apple@15.0.1/img/apple/64/${variants[variant]}.png`}
+      alt={cluster}
+      onError={() => setVariant(v => v + 1)}
+      className="status-emoji-img"
+      style={{ width: dim, height: dim, verticalAlign: 'middle', display: 'inline-block', objectFit: 'contain' }}
+      loading="lazy"
+    />
+  );
+}
+
+// Рендер строки статуса: эмодзи — картинками Apple, текст — как текст
+const renderStatusText = (text, size = 14) => {
+  if (!text) return text;
+  const out = [];
+  let last = 0, k = 0, m;
+  STATUS_EMOJI_CLUSTER_RE.lastIndex = 0;
+  while ((m = STATUS_EMOJI_CLUSTER_RE.exec(text)) !== null) {
+    if (m.index > last) out.push(<span key={`t${k++}`}>{text.slice(last, m.index)}</span>);
+    out.push(<StatusEmojiImg key={`e${k++}`} cluster={m[0]} size={size} />);
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) out.push(<span key={`t${k++}`}>{text.slice(last)}</span>);
+  return out.length ? out : text;
+};
+
+
 // CSRF токен для защиты от межсайтовой подделки запросов
 let csrfToken = '';
 
@@ -5291,61 +5350,40 @@ function App() {
 
   // Функция для оборачивания эмодзи в тексте в изображения Apple
   const wrapEmojisInText = (text) => {
-    if (!text) return text;
-    
-    // Regex для поиска эмодзи в тексте
-    const emojiRegex = /\p{Extended_Pictographic}/gu;
-    
-    // Заменяем каждый эмодзи на изображение
-    const parts = [];
-    let lastIndex = 0;
-    let match;
-    
-    // Сбрасываем regex
-    emojiRegex.lastIndex = 0;
-    
-    while ((match = emojiRegex.exec(text)) !== null) {
-      // Добавляем текст до эмодзи
-      if (match.index > lastIndex) {
-        parts.push(text.slice(lastIndex, match.index));
-      }
-      
-      // Конвертируем эмодзи в URL изображения Apple
-      const emoji = match[0];
-      const unified = emojiToUnified(emoji);
-      const emojiUrl = `https://cdn.jsdelivr.net/npm/emoji-datasource-apple@15.0.1/img/apple/64/${unified}.png`;
-      
-      // Добавляем эмодзи как изображение
-      parts.push(
-        <img
-          key={match.index}
-          src={emojiUrl}
-          alt={emoji}
-          className="emoji"
-          style={{
-            width: 'var(--message-emoji-size, 20px)',
-            height: 'var(--message-emoji-size, 20px)',
-            verticalAlign: 'middle',
-            display: 'inline-block'
-          }}
-          onError={(e) => {
-            // Если изображение не загрузилось, показываем текстовый эмодзи
-            console.error('Failed to load emoji image:', emojiUrl);
-            e.target.style.display = 'none';
-            e.target.parentNode.insertBefore(document.createTextNode(emoji), e.target.nextSibling);
-          }}
-        />
-      );
-      
-      lastIndex = match.index + match[0].length;
+  if (!text) return text;
+
+  // Кластерный разбор: флаги/ZWJ-семейки/VS16 не разрываются
+  const parts = [];
+  let lastIndex = 0;
+  let match;
+  let k = 0;
+
+  STATUS_EMOJI_CLUSTER_RE.lastIndex = 0;
+
+  while ((match = STATUS_EMOJI_CLUSTER_RE.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(text.slice(lastIndex, match.index));
     }
-    
-    // Добавляем оставшийся текст
-    if (lastIndex < text.length) {
-      parts.push(text.slice(lastIndex));
-    }
-    
-    return parts.length > 0 ? parts : text;
+
+    // Эмодзи — картинкой Apple; при ошибке цепочка фолбэков в StatusEmojiImg
+    // завершается нативным символом
+    parts.push(
+      <StatusEmojiImg
+        key={`we${k++}`}
+        cluster={match[0]}
+        size="var(--message-emoji-size, 20px)"
+      />
+    );
+
+    lastIndex = match.index + match[0].length;
+  }
+
+  // Хвостовой обычный текст
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex));
+  }
+
+return parts.length > 0 ? parts : text;
   };
 
   const stripStickerMarkers = (text) => {
@@ -9652,12 +9690,7 @@ function App() {
                           return (
                             <div className="chat-status-row">
                               <span className="chat-status-text">
-                                {displayStatus.split('').map((char, idx) => {
-                                  if (/[\p{Emoji}]/u.test(char)) {
-                                    return renderEmoji(char);
-                                  }
-                                  return char;
-                                })}
+                                {renderStatusText(displayStatus, 14)}
                               </span>
                             </div>
                           );
@@ -9713,15 +9746,7 @@ function App() {
                     <span className={`status-indicator ${user.status}`}></span>
                     {user.status_text && (
                       <span className="user-status-badge">
-                        {(() => {
-                          const statusText = user.status_text;
-                          return statusText.split('').map((char, idx) => {
-                            if (/[\p{Emoji}]/u.test(char)) {
-                              return renderEmoji(char);
-                            }
-                            return char;
-                          });
-                        })()}
+                        {renderStatusText(user.status_text, 14)}
                       </span>
                     )}
                   </div>
@@ -9855,28 +9880,11 @@ function App() {
                           const isOnline = otherUser.status === 'online';
 
                           if (statusText) {
-                            // Проверяем, есть ли в статусе эмодзи
-                            const hasEmoji = /[\p{Emoji}]/u.test(statusText);
-
-                            if (hasEmoji) {
-                              return (
-                                <span className="user-status-text with-text">
-                                  {statusText.split('').map((char, idx) => {
-                                    if (/[\p{Emoji}]/u.test(char)) {
-                                      return renderEmoji(char, '', 16);
-                                    }
-                                    return char;
-                                  })}
-                                </span>
-                              );
-                            } else {
-                              // Просто текст без эмодзи
-                              return (
-                                <span className="user-status-text with-text">
-                                  {statusText}
-                                </span>
-                              );
-                            }
+                            return (
+                              <span className="user-status-text with-text">
+                                {renderStatusText(statusText, 16)}
+                              </span>
+                            );
                           } else {
                             // Показываем онлайн/офлайн с last_seen
                             const lastSeenText = isOnline ? 'Онлайн' : (otherUser.last_seen ? `Был(а) ${getLastSeenText(otherUser.last_seen)}` : 'Офлайн');
