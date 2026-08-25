@@ -97,33 +97,42 @@ export default function useCall({ socket, currentUser, onNotice }) {
   // ── публичные действия ──
 
   const startCall = useCallback(async (peerUser, type = 'audio') => {
-    if (!canCall) {
-      onNotice?.('Звонки доступны только по HTTPS (безопасный контекст)');
-      return;
-    }
-    if (!socket || !currentUser || call) return;
+    try {
+      if (!canCall) {
+        onNotice?.('Звонки доступны только по HTTPS (безопасный контекст)');
+        return;
+      }
+      if (!socket) { onNotice?.('Нет соединения с сервером'); return; }
+      if (!currentUser || !currentUser.id) { onNotice?.('Не выполнен вход — звонок недоступен'); return; }
+      if (call) { onNotice?.('Вы уже находитесь в звонке'); return; }
+      if (!peerUser || !peerUser.id) { onNotice?.('Не выбран собеседник для звонка'); return; }
 
-    typeRef.current = type;
-    peerRef.current = peerUser;
-    setCall({
-      phase: 'outgoing', callId: null,
-      peer: { id: peerUser.id, username: peerUser.username, avatar: peerUser.avatar },
-      type, micMuted: false, camOff: false, sharing: false, startedAt: null
-    });
-
-    socket.emit('call_invite', { targetUserId: peerUser.id, callType: type },
-      (res) => {
-        if (!res || !res.ok) {
-          const msg = res?.reason === 'peer_busy' ? 'У пользователя сейчас другой звонок'
-            : res?.reason === 'you_busy' ? 'Вы уже в звонке'
-            : 'Не удалось начать звонок';
-          onNotice?.(msg);
-          resetAll();
-          return;
-        }
-        callIdRef.current = res.callId;
-        setCall(prev => prev ? { ...prev, callId: res.callId } : prev);
+      typeRef.current = type;
+      peerRef.current = peerUser;
+      setCall({
+        phase: 'outgoing', callId: null,
+        peer: { id: peerUser.id, username: peerUser.username, avatar: peerUser.avatar },
+        type, micMuted: false, camOff: false, sharing: false, startedAt: null
       });
+
+      socket.emit('call_invite', { targetUserId: peerUser.id, callType: type },
+        (res) => {
+          if (!res || !res.ok) {
+            const msg = res?.reason === 'peer_busy' ? 'У пользователя сейчас другой звонок'
+              : res?.reason === 'you_busy' ? 'Вы уже находитесь в звонке'
+              : 'Не удалось начать звонок';
+            onNotice?.(msg);
+            resetAll();
+            return;
+          }
+          callIdRef.current = res.callId;
+          setCall(prev => prev ? { ...prev, callId: res.callId } : prev);
+        });
+    } catch (e) {
+      console.error('[call] startCall error:', e);
+      onNotice?.('Ошибка начала звонка: ' + e.message);
+      resetAll();
+    }
   }, [canCall, socket, currentUser, call, onNotice, resetAll]);
 
   const acceptIncoming = useCallback(async () => {
