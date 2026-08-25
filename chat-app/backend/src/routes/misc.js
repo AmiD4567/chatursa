@@ -4,6 +4,8 @@
  */
 const path = require('path');
 const fs = require('fs');
+const http = require('http');
+const https = require('https');
 const { compareVersions } = require('../utils');
 
 module.exports = function register(app, deps) {
@@ -206,6 +208,19 @@ setInterval(() => {
   }
 }, 10 * 60 * 1000);
 
+// ── Защита от мусорных «ссылок» (вставленные стектрейсы, ключ=значение и т.п.) ──
+// Хост обязан быть доменным именем с точкой и без исходников-расширений.
+const VALID_HOST_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
+const SOURCE_FILE_EXT_RE = /\.(kt|java|py|ts|tsx|jsx|cpp|h|hpp|cs|log|gradle)$/i;
+const NEGATIVE_CACHE_TTL = 10 * 60 * 1000; // неудачный URL не дёргаем 10 минут
+const warnedHosts = new Set();             // warn один раз на уникальный хост
+
+function isGarbageHost(hostname) {
+  const host = (hostname || '').toLowerCase();
+  if (host === 'localhost') return false;
+  return !VALID_HOST_RE.test(host) || SOURCE_FILE_EXT_RE.test(host);
+}
+
 app.get('/api/link-preview', async (req, res) => {
   const rawUrl = (req.query.url || '').trim();
 
@@ -226,11 +241,17 @@ app.get('/api/link-preview', async (req, res) => {
     return res.status(400).json({ error: 'Only http and https protocols allowed' });
   }
 
-  // Проверка кэша
+  // Мусорный хост — отдаём заглушку сразу: без DNS и без записи в лог
+  if (isGarbageHost(url.hostname)) {
+    return res.json({ success: false, title: url.hostname, url: rawUrl });
+  }
+
+  // Проверка кэша (успех — 1 час, неудача — 10 минут)
   const cacheKey = rawUrl.toLowerCase();
   if (linkPreviewCache.has(cacheKey)) {
     const cached = linkPreviewCache.get(cacheKey);
-    if (Date.now() - cached.ts < LINK_PREVIEW_CACHE_TTL) {
+    const ttl = cached.negative ? NEGATIVE_CACHE_TTL : LINK_PREVIEW_CACHE_TTL;
+    if (Date.now() - cached.ts < ttl) {
       return res.json(cached.data);
     }
     linkPreviewCache.delete(cacheKey);
@@ -251,11 +272,16 @@ app.get('/api/link-preview', async (req, res) => {
     linkPreviewCache.set(cacheKey, { ts: Date.now(), data: responseData });
     res.json(responseData);
   } catch (err) {
-    console.warn(`Link preview failed for ${rawUrl}:`, err.message);
-    // Return minimal preview from the URL itself
-    let domain = '';
-    try { domain = new URL(rawUrl).hostname; } catch {}
-    res.json({ success: false, title: domain || rawUrl, url: rawUrl });
+    // Негативный кэш: та же заглушка, что вернём сейчас
+    const fallbackData = { success: false, title: url.hostname || rawUrl, url: rawUrl };
+    linkPreviewCache.set(cacheKey, { ts: Date.now(), negative: true, data: fallbackData });
+
+    // Лог — один раз на уникальный хост за жизнь процесса
+    if (!warnedHosts.has(url.hostname)) {
+      warnedHosts.add(url.hostname);
+      console.warn(`Link preview failed for ${rawUrl}:`, err.message);
+    }
+    res.json(fallbackData);
   }
 });
 

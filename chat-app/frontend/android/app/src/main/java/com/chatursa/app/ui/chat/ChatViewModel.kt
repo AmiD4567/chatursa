@@ -73,10 +73,27 @@ class ChatViewModel(
     private val fileUploader = FileUploader()
 
     companion object {
-        private val URL_REGEX = Regex("https?://[\\w\\-._~:/?#\\[\\]@!$&'()*+,;=%]+")
+        // Домен обязателен сразу после схемы (отсекает вставленные стектрейсы вида
+        // https://act=... / https://ChatScreen.kt:715); порт и путь — опциональны.
+        private val URL_REGEX = Regex(
+            "https?://[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,24}(:\\d{1,5})?(/[^\\s]*)?"
+        )
+        // Ссылка обязана заканчиваться на известный TLD — отсекает
+        // java.lang.SecurityException, 16.invoke, ...DispatchedTaskKt.resume и пр.
+        private val KNOWN_TLD_RE = Regex(
+            "\\.(com|ru|su|org|net|io|dev|app|info|me|tv|co|ua|kz|by|de|uk|us|eu|fr|it|es|pl|cz" +
+            "|edu|gov|xyz|top|online|site|shop|store|tech|cloud|blog|news|wiki|video|media" +
+            "|life|club|pro|link|page|рф)([:/?#]|$)",
+            RegexOption.IGNORE_CASE
+        )
+        // Исходники из стектрейсов не считаем ссылками (ChatScreen.kt, Parcel.java, …)
+        private val SOURCE_FILE_RE = Regex("\\.(kt|java|py|ts|tsx|jsx|cpp|h|hpp|cs|log)([:/]|$)", RegexOption.IGNORE_CASE)
 
         fun getUrlsFromText(text: String): List<String> {
-            return URL_REGEX.findAll(text).map { it.value }.toList()
+            return URL_REGEX.findAll(text).map { it.value }
+                .filter { url -> KNOWN_TLD_RE.containsMatchIn(url) }
+                .filter { url -> !SOURCE_FILE_RE.containsMatchIn(url) }
+                .toList()
         }
     }
 
