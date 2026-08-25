@@ -1,6 +1,6 @@
 {
     "name": "chat-app",
-    "version": "1.0.188",
+    "version": "1.0.202",
     "description": "РљРѕСЂРїРѕСЂР°С‚РёРІРЅС‹Р№ РјРµСЃСЃРµРЅРґР¶РµСЂ",
     "main": "electron/main.js",
     "scripts": {
@@ -12,6 +12,7 @@
         "postinstall": "electron-builder install-app-deps",
         "publish-only": "electron-builder --win nsis --publish always",
         "release": "npm run build && electron-builder --win nsis --publish always",
+        "smoke": "node backend/smoke-test.js",
         "server": "cd backend && node server.js",
         "start": "concurrently \"npm run server\" \"npm run client\""
     },
@@ -95,7 +96,6 @@
         }
     },
     "dependencies": {
-        "auto-launch": "^5.0.6",
         "electron-updater": "^6.8.3",
         "mssql": "^12.7.0",
         "pg": "^8.22.0"
