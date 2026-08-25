@@ -7586,6 +7586,33 @@ return parts.length > 0 ? parts : text;
     setGalleryIndex(0);
   };
 
+  // ═══ Статус: черновик применяется только по «Сохранить» ═══
+  const handleSaveStatus = async () => {
+    if (!currentUserRef.current) { setShowStatusPicker(false); return; }
+    const newStatus = ((statusEmoji ? statusEmoji + ' ' : '') + (statusDescription || '')).trim();
+    setShowStatusPicker(false);
+    // Ничего не изменилось — не дёргаем сервер
+    if ((currentUserRef.current.status_text || '').trim() === newStatus) return;
+    try {
+      await fetch(`${SOCKET_URL}/api/profile`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: currentUserRef.current.id, statusText: newStatus })
+      });
+      setProfileData(prev => ({ ...prev, statusText: newStatus }));
+      setCurrentUser(prev => ({ ...prev, status_text: newStatus }));
+      // Сервер после PUT сам рассылает user_profile_updated всем клиентам
+    } catch (err) {
+      console.error('Ошибка сохранения статуса:', err);
+    }
+  };
+
+  const handleCancelStatus = () => {
+    // Черновик отбрасывается; при следующем открытии поля инициализируются
+    // заново из актуального статуса
+    setShowStatusPicker(false);
+  };
+
   // Закрытие по ESC и клику вне контекстного меню
   useEffect(() => {
     const handleEscKey = (e) => {
@@ -14054,16 +14081,9 @@ return parts.length > 0 ? parts : text;
                       key={preset.text}
                       className={`status-preset-btn ${statusDescription === preset.text && statusEmoji === preset.emoji ? 'active' : ''}`}
                       onClick={() => {
+                        // Черновик: применение только по «Сохранить»
                         setStatusEmoji(preset.emoji);
                         setStatusDescription(preset.text);
-                        const newStatus = `${preset.emoji} ${preset.text}`;
-                        setProfileData(prev => ({ ...prev, statusText: newStatus }));
-                        setCurrentUser(prev => ({ ...prev, status_text: newStatus }));
-                        fetch(`${SOCKET_URL}/api/profile`, {
-                          method: 'PUT',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ userId: currentUserRef.current?.id, statusText: newStatus })
-                        }).catch(err => console.error('Ошибка сохранения статуса:', err));
                       }}
                     >
                       <span className="status-preset-emoji">{renderEmoji(preset.emoji, '', 24)}</span>
@@ -14082,27 +14102,9 @@ return parts.length > 0 ? parts : text;
                       className="status-input-custom"
                       placeholder="Введите текст статуса..."
                       value={statusDescription}
-                      onChange={async (e) => {
-                        const value = e.target.value;
-                        setStatusDescription(value);
-                        const newStatus = (statusEmoji ? statusEmoji + ' ' : '') + value;
-                        setProfileData(prev => ({ ...prev, statusText: newStatus }));
-                        setCurrentUser(prev => {
-                          const updated = { ...prev, status_text: newStatus };
-                          return updated;
-                        });
-                        try {
-                          await fetch(`${SOCKET_URL}/api/profile`, {
-                            method: 'PUT',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                              userId: currentUser.id,
-                              statusText: newStatus
-                            })
-                          });
-                        } catch (err) {
-                          console.error('Ошибка сохранения статуса:', err);
-                        }
+                      onChange={(e) => {
+                        // Черновик: применение только по «Сохранить»
+                        setStatusDescription(e.target.value);
                       }}
                       maxLength={100}
                     />
@@ -14120,15 +14122,8 @@ return parts.length > 0 ? parts : text;
                         key={emoji}
                         className={`status-quick-emoji ${statusEmoji === emoji ? 'active' : ''}`}
                         onClick={() => {
+                          // Черновик: применение только по «Сохранить»
                           setStatusEmoji(emoji);
-                          const newStatus = emoji + (statusDescription ? ' ' + statusDescription : '');
-                          setProfileData(prev => ({ ...prev, statusText: newStatus }));
-                          setCurrentUser(prev => ({ ...prev, status_text: newStatus }));
-                          fetch(`${SOCKET_URL}/api/profile`, {
-                            method: 'PUT',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ userId: currentUserRef.current?.id, statusText: newStatus })
-                          }).catch(err => console.error('Ошибка сохранения статуса:', err));
                         }}
                       >
                         {renderEmoji(emoji, '', 22)}
@@ -14147,24 +14142,10 @@ return parts.length > 0 ? parts : text;
 
               <button
                 className={`status-clear-btn ${!statusEmoji && !statusDescription ? 'active' : ''}`}
-                onClick={async () => {
+                onClick={() => {
+                  // Черновик: применение только по «Сохранить»
                   setStatusEmoji('');
                   setStatusDescription('');
-                  const newStatus = '';
-                  setProfileData(prev => ({ ...prev, statusText: newStatus }));
-                  setCurrentUser(prev => ({ ...prev, status_text: newStatus }));
-                  try {
-                    await fetch(`${SOCKET_URL}/api/profile`, {
-                      method: 'PUT',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        userId: currentUserRef.current?.id,
-                        statusText: newStatus
-                      })
-                    });
-                  } catch (err) {
-                    console.error('Ошибка сохранения статуса:', err);
-                  }
                 }}
               >
                 {!statusEmoji && !statusDescription ? '✓ Статус не установлен' : '✕ Сбросить статус'}
@@ -14183,16 +14164,9 @@ return parts.length > 0 ? parts : text;
                           key={emoji}
                           className={`status-emoji-option ${statusEmoji === emoji ? 'active' : ''}`}
                           onClick={() => {
+                            // Черновик: применение только по «Сохранить»
                             setStatusEmoji(emoji);
-                            const newStatus = emoji + (statusDescription ? ' ' + statusDescription : '');
-                            setProfileData(prev => ({ ...prev, statusText: newStatus }));
-                            setCurrentUser(prev => ({ ...prev, status_text: newStatus }));
                             setShowStatusEmojiPicker(false);
-                            fetch(`${SOCKET_URL}/api/profile`, {
-                              method: 'PUT',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({ userId: currentUserRef.current?.id, statusText: newStatus })
-                            }).catch(err => console.error('Ошибка сохранения статуса:', err));
                           }}
                         >
                           {renderEmoji(emoji, '', 28)}
@@ -14205,8 +14179,11 @@ return parts.length > 0 ? parts : text;
             </div>
 
             <div className="modal-footer">
-              <button className="create-btn" onClick={() => setShowStatusPicker(false)}>
-                Готово
+              <button className="cancel-btn" onClick={handleCancelStatus}>
+                Отмена
+              </button>
+              <button className="create-btn" onClick={handleSaveStatus}>
+                Сохранить
               </button>
             </div>
           </div>
