@@ -886,6 +886,9 @@ function App() {
   const [isSavingUiSettings, setIsSavingUiSettings] = useState(false);
 
   const messagesEndRef = useRef(null);
+  // Привязка к низу: true пока пользователь у последнего сообщения
+  const followBottomRef = useRef(true);
+  const [showScrollDown, setShowScrollDown] = useState(false);
   const fileInputRef = useRef(null);
   const typingTimeoutRef = useRef(null);
   const notificationPermissionRef = useRef('default');
@@ -3836,6 +3839,9 @@ function App() {
   const handleSelectChat = async (chat) => {
     setActiveChatId(chat.id);
     activeChatIdRef.current = chat.id;
+    // Мгновенно очищаем окно: до прихода новой истории не показываем
+    // хвост предыдущего чата
+    setMessages([]);
     setActiveView('chats'); // Переключаемся на вид чатов
 
     // На мобильных — переключаемся на вид чата
@@ -3984,9 +3990,17 @@ function App() {
         setHistoryUi({ loadingMore: false, hasMore: !!res.hasMore });
 
         // Удерживаем позицию скролла: компенсируем добавленную высоту сверху
+        // Компенсация позиции: только если пользователь всё ещё в этом чате
+        // и контейнер не перемонтировался. Иначе — прыжок в чужую «середину».
         requestAnimationFrame(() => {
+          if (activeChatIdRef.current !== chatId) return;
           const c = messagesContainerRef.current;
-          if (c && container) c.scrollTop += c.scrollHeight - prevHeight;
+          if (!c || c !== container) return;
+          if (followBottomRef.current) {
+            c.scrollTop = c.scrollHeight - c.clientHeight;
+          } else {
+            c.scrollTop += c.scrollHeight - prevHeight;
+          }
         });
       } catch (err) {
         console.error('Ошибка догрузки истории:', err);
@@ -3999,9 +4013,29 @@ function App() {
   // Скролл ленты: у верхней границы догружаем историю
   const handleMessagesScroll = () => {
     const container = messagesContainerRef.current;
-    if (!container || container.scrollTop > 120) return;
+    if (!container) return;
+    const distFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    followBottomRef.current = distFromBottom <= 80;
+    setShowScrollDown(distFromBottom > 300);
+    if (container.scrollTop > 120) return;
     loadOlderMessages();
   };
+
+  // Медиа в истории получает размеры после автоскролла — при привязке к низу
+  // удерживаем окно на последнем сообщении (load не всплывает, ловим в capture)
+  useEffect(() => {
+    const onMediaLoad = (e) => {
+      const t = e.target;
+      if (!(t instanceof HTMLImageElement || t instanceof HTMLVideoElement)) return;
+      if (!t.closest('.messages-container-main')) return;
+      if (followBottomRef.current) {
+        const c = messagesContainerRef.current;
+        if (c) c.scrollTop = c.scrollHeight - c.clientHeight;
+      }
+    };
+    window.addEventListener('load', onMediaLoad, true);
+    return () => window.removeEventListener('load', onMediaLoad, true);
+  }, []);
 
   // Поиск по сообщениям и пользователям (во всех чатах)
   const handleSearchMessages = async () => {
@@ -10280,6 +10314,25 @@ return parts.length > 0 ? parts : text;
                   <span>Отпустите файл, чтобы прикрепить его к сообщению</span>
                 </div>
               </div>
+            )}
+
+            {/* Спиннер первой загрузки истории */}
+            {activeChatId && messages.length === 0 && (
+              <div className="history-loading history-first-load">⏳ Загружаем историю…</div>
+            )}
+
+            {/* Плавающая кнопка «Вниз» */}
+            {showScrollDown && (
+              <button
+                className="scroll-down-btn"
+                title="К последнему сообщению"
+                onClick={() => {
+                  followBottomRef.current = true;
+                  const c = messagesContainerRef.current;
+                  if (c) c.scrollTop = c.scrollHeight - c.clientHeight;
+                  setShowScrollDown(false);
+                }}
+              >↓</button>
             )}
             </div>
 
