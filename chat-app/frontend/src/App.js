@@ -72,7 +72,7 @@ function StatusEmojiImg({ cluster, size }) {
       src={`https://cdn.jsdelivr.net/npm/emoji-datasource-apple@15.0.1/img/apple/64/${variants[variant]}.png`}
       alt={cluster}
       onError={() => setVariant(v => v + 1)}
-      className="status-emoji-img"
+      className="status-emoji-img emoji"
       style={{ width: dim, height: dim, verticalAlign: 'middle', display: 'inline-block', objectFit: 'contain' }}
       loading="lazy"
     />
