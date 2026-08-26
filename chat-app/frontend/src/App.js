@@ -354,6 +354,11 @@ const CONFETTI_PHRASES = ['с днём рождения', 'день рожден
 const CONFETTI_WORDS = ['поздравляю', 'congratulations', 'ура'];
 const CONFETTI_EMOJIS = ['🎉', '🥳', '🎊'];
 
+// Диагностика скролла: включается localStorage.chatScrollDebug = '1'
+function sdbg(...a) {
+  try { if (localStorage.getItem('chatScrollDebug') === '1') console.log('[scroll]', ...a); } catch (e) {}
+}
+
 function shouldTriggerConfetti(text) {
   if (!text || typeof text !== 'string') return false;
   const lower = text.toLowerCase();
@@ -892,6 +897,10 @@ function App() {
   // Привязка к низу: true пока пользователь у последнего сообщения
   const followBottomRef = useRef(true);
   const [showScrollDown, setShowScrollDown] = useState(false);
+  // «Магнитный низ»: удержание на последнем сообщении во время первичной
+  // загрузки истории (поздние высоты картинок/видео/шрифтов)
+  const magnetTimerRef = useRef(null);
+  const magnetUntilRef = useRef(0);
   const fileInputRef = useRef(null);
   const typingTimeoutRef = useRef(null);
   const notificationPermissionRef = useRef('default');
@@ -1297,9 +1306,15 @@ function App() {
   useLayoutEffect(() => {
     if (!messagesEndRef.current || !activeChatId) return;
     const container = messagesEndRef.current.parentElement;
-    if (container) {
-      container.scrollTop = container.scrollHeight - container.clientHeight;
-    }
+    if (!container) return;
+    container.scrollTop = container.scrollHeight - container.clientHeight;
+    // Повторный пин следующим кадром: первый layout может не учесть
+    // размеры изображений/шрифтов этого же коммита
+    requestAnimationFrame(() => {
+      if (followBottomRef.current && messagesContainerRef.current === container) {
+        container.scrollTop = container.scrollHeight - container.clientHeight;
+      }
+    });
   }, [messages, activeChatId]);
 
   // Автоскролл при переходе на вкладку чатов из другой вкладки
@@ -3845,6 +3860,12 @@ function App() {
     // Мгновенно очищаем окно: до прихода новой истории не показываем
     // хвост предыдущего чата
     setMessages([]);
+    // Сбрасываем привязку к низу: протухший false из предыдущего чата
+    // блокировал re-pin при догрузке медиа → вид застывал в «середине»
+    followBottomRef.current = true;
+    setShowScrollDown(false);
+    sdbg('switch →', chat.id, '(magnet on)');
+    startMagnet();
     setActiveView('chats'); // Переключаемся на вид чатов
 
     // На мобильных — переключаемся на вид чата
@@ -4024,20 +4045,68 @@ function App() {
     loadOlderMessages();
   };
 
-  // Медиа в истории получает размеры после автоскролла — при привязке к низу
-  // удерживаем окно на последнем сообщении (load не всплывает, ловим в capture)
+  // ── Магнитный низ ──
+  const pinBottomNow = useCallback(() => {
+    followBottomRef.current = true;
+    const c = messagesContainerRef.current;
+    if (c) c.scrollTop = c.scrollHeight - c.clientHeight;
+  }, []);
+
+  const stopMagnet = useCallback(() => {
+    if (magnetTimerRef.current) {
+      clearInterval(magnetTimerRef.current);
+      magnetTimerRef.current = null;
+      sdbg('magnet OFF');
+    }
+  }, []);
+
+  const startMagnet = useCallback(() => {
+    stopMagnet();
+    magnetUntilRef.current = Date.now() + 10000;
+    sdbg('magnet ON (10s)');
+    magnetTimerRef.current = setInterval(pinBottomNow, 150);
+  }, [pinBottomNow, stopMagnet]);
+
+  // Снятие магнита первым пользовательским вводом в область переписки
   useEffect(() => {
+    const release = (e) => {
+      if (!magnetTimerRef.current) return;
+      const inChatArea = e.target instanceof Element && !!e.target.closest('.messages-container-main');
+      if (e.type === 'keydown' || inChatArea) {
+        sdbg('magnet released by user input:', e.type);
+        stopMagnet();
+      }
+    };
+    window.addEventListener('wheel', release, { passive: true });
+    window.addEventListener('touchmove', release, { passive: true });
+    window.addEventListener('mousedown', release);
+    window.addEventListener('keydown', release);
+    return () => {
+      window.removeEventListener('wheel', release, { passive: true });
+      window.removeEventListener('touchmove', release, { passive: true });
+      window.removeEventListener('mousedown', release);
+      window.removeEventListener('keydown', release);
+      stopMagnet();
+    };
+  }, [stopMagnet]);
+
+  // Медиа в истории получает размеры после автоскролла — при привязке к низу
+  // удерживаем окно на последнем сообщении. load не всплывает — capture-фаза.
+  // Видео меняет геометрию на loadedmetadata/loadeddata.
+  useEffect(() => {
+    const events = ['load', 'loadedmetadata', 'loadeddata'];
     const onMediaLoad = (e) => {
       const t = e.target;
       if (!(t instanceof HTMLImageElement || t instanceof HTMLVideoElement)) return;
       if (!t.closest('.messages-container-main')) return;
       if (followBottomRef.current) {
+        sdbg('media repin:', (t.src || '').split('/').pop());
         const c = messagesContainerRef.current;
         if (c) c.scrollTop = c.scrollHeight - c.clientHeight;
       }
     };
-    window.addEventListener('load', onMediaLoad, true);
-    return () => window.removeEventListener('load', onMediaLoad, true);
+    events.forEach(ev => window.addEventListener(ev, onMediaLoad, true));
+    return () => events.forEach(ev => window.removeEventListener(ev, onMediaLoad, true));
   }, []);
 
   // Поиск по сообщениям и пользователям (во всех чатах)
@@ -10397,6 +10466,7 @@ return parts.length > 0 ? parts : text;
                 title="К последнему сообщению"
                 onClick={() => {
                   followBottomRef.current = true;
+                  stopMagnet();
                   const c = messagesContainerRef.current;
                   if (c) c.scrollTop = c.scrollHeight - c.clientHeight;
                   setShowScrollDown(false);
