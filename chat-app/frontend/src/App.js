@@ -10406,15 +10406,6 @@ return parts.length > 0 ? parts : text;
                               preload="metadata"
                               playsInline
                             />
-                            <a
-                              href={`${SOCKET_URL}/api/download/${extractFileUuidFromUrl(message.file.url)}`}
-                              className="message-video-download"
-                              title={`Скачать ${message.file.filename}`}
-                              download
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              ⬇
-                            </a>
                           </div>
                         ) : (
                           <a href={`${SOCKET_URL}/api/download/${extractFileUuidFromUrl(message.file.url)}`} className="file-link-main" title={message.file.filename} download>
