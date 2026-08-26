@@ -1304,20 +1304,10 @@ function App() {
     }
   }, [activeView]);
 
-  // Автоскролл к последнему сообщению при каждом обновлении сообщений (без анимации)
-  useLayoutEffect(() => {
-    if (!messagesEndRef.current || !activeChatId) return;
-    const container = messagesEndRef.current.parentElement;
-    if (!container) return;
-    container.scrollTop = container.scrollHeight - container.clientHeight;
-    // Повторный пин следующим кадром: первый layout может не учесть
-    // размеры изображений/шрифтов этого же коммита
-    requestAnimationFrame(() => {
-      if (followBottomRef.current && messagesContainerRef.current === container) {
-        container.scrollTop = container.scrollHeight - container.clientHeight;
-      }
-    });
-  }, [messages, activeChatId]);
+  // Пин вниз теперь ТОЧЕЧНЫЙ (chat_history / fallback загрузки / new_message
+  // при followBottom). Безусловный пин на каждое изменение messages
+  // «магнитил» к низу при чтении старых сообщений и догрузке страниц.
+
 
   // Автоскролл при переходе на вкладку чатов из другой вкладки
   useEffect(() => {
@@ -1855,6 +1845,9 @@ function App() {
           }
         });
         setMessageReactions(reactionsData);
+
+        // Открытие чата всегда на последнем сообщении
+        pinToBottomFor(chatId);
       }
     });
 
@@ -2049,6 +2042,17 @@ function App() {
           if (prev.some(m => m.id === message.id)) return prev;
           return [...prev, message];
         });
+
+        // Мягкий пин вниз: только когда пользователь у последнего сообщения
+        // и это активный чат (чтение старых сообщений не прерываем)
+        if (followBottomRef.current && message.chatId === activeChatIdRef.current) {
+          requestAnimationFrame(() => {
+            const c = messagesContainerRef.current;
+            if (c && followBottomRef.current && activeChatIdRef.current === message.chatId) {
+              c.scrollTop = c.scrollHeight - c.clientHeight;
+            }
+          });
+        }
       }
     });
 
@@ -3848,6 +3852,18 @@ function App() {
   };
 
   // Скролл вниз к последнему сообщению
+  // Детерминированный пин к последнему сообщению конкретного чата
+  const pinToBottomFor = (chatId) => {
+    if (!chatId || activeChatIdRef.current !== chatId) return;
+    const apply = () => {
+      if (activeChatIdRef.current !== chatId) return;
+      const c = messagesContainerRef.current;
+      if (c) c.scrollTop = c.scrollHeight - c.clientHeight;
+    };
+    apply();
+    requestAnimationFrame(apply);
+  };
+
   const scrollToBottom = () => {
     if (!messagesEndRef.current) return;
     const container = messagesEndRef.current.parentElement;
@@ -3900,6 +3916,7 @@ function App() {
             const offlineMessages = await getMessages(chat.id);
             if (offlineMessages.length > 0) {
               setMessages(offlineMessages);
+                pinToBottomFor(chat.id);
             } else {
               setMessages([]);
             }
@@ -3938,12 +3955,14 @@ function App() {
               const data = await res.json();
               if (activeChatIdRef.current === chat.id) {
                 setMessages(data.messages || []);
+                pinToBottomFor(chat.id);
               }
             } else {
               // Fallback на IndexedDB если сервер ответил ошибкой
               const offlineMessages = await getMessages(chat.id);
               if (offlineMessages.length > 0 && activeChatIdRef.current === chat.id) {
                 setMessages(offlineMessages);
+                  pinToBottomFor(chat.id);
               }
             }
           } catch (err) {
