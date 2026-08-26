@@ -252,6 +252,9 @@ io.on('connection', (socket) => {
         userChats = getUserChats(user.id);
       }
 
+      // Диалог с ИИ-Агентом (создаётся при первом входе)
+      require('./bot/ai-agent').ensureAiChat(user.id);
+
       socket.emit('user_joined_success', {
         user: { id: user.id, username: user.username, avatar: user.avatar, userId: user.id },
         chats: userChats
@@ -371,6 +374,9 @@ io.on('connection', (socket) => {
     if (ensureBotChat(user.id)) {
       userChats = getUserChats(user.id);
     }
+
+    // Диалог с ИИ-Агентом (создаётся при первом входе)
+    require('./bot/ai-agent').ensureAiChat(user.id);
 
     // Отправляем пользователю его данные
     socket.emit('user_joined_success', {
@@ -714,6 +720,14 @@ io.on('connection', (socket) => {
     if (!chatId || typeof chatId !== 'string' || chatId.trim() === '') {
       console.error('[send_message] неверный chatId:', chatId, 'от', onlineUser.username);
       if (typeof callback === 'function') callback({ ok: false, error: 'bad_chat' });
+      return;
+    }
+
+    // ИИ-Агент: отдельный маршрут
+    if (chatId.startsWith('ai-chat-')) {
+      console.log('[ai-debug] ai-chat branch hit:', chatId);
+      require('./bot/ai-agent').handleUserMessage(socket, onlineUser, chatId,
+        typeof text === 'string' ? text : '', callback);
       return;
     }
 

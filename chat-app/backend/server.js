@@ -404,6 +404,7 @@ function getUserChats(userId) {
       AND (
         c.type != 'direct'
         OR c.id LIKE 'bot-chat-%'
+        OR c.id LIKE 'ai-chat-%'
         OR EXISTS (SELECT 1 FROM messages m WHERE m.chat_id = c.id)
       )
     ORDER BY (cs.pinned = 1) DESC, last_msg_time DESC, c.created_at DESC
@@ -851,6 +852,12 @@ try {
   initDatabase();
   db = getDb();
   getPollWithVotes = createGetPollWithVotes(db);
+
+  // ИИ-Агент (локальная модель через Ollama)
+  require('./src/bot/ai-agent').init({
+    db, io, uuidv4, encryptText, decryptText, deliverBotMessage,
+    emitToUser, SERVER_URL
+  });
 
   // Сохранение БД при фатальной ошибке (см. src/logger.js → uncaughtException)
   registerFatalSaveHook(() => {
