@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, ipcMain, Notification, nativeImage, dialog, globalShortcut, shell } = require('electron');
+const { app, BrowserWindow, Tray, Menu, ipcMain, Notification, nativeImage, dialog, globalShortcut, shell, session, clipboard } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -424,6 +424,18 @@ ipcMain.on('show-notification', async (event, data) => {
 
 ipcMain.handle('get-app-version', () => {
   return app.getVersion();
+});
+
+// Чтение текста из буфера обмена в main-процессе:
+// navigator.clipboard.readText() в рендерере требует разрешений и
+// secure context, здесь работает всегда
+ipcMain.handle('read-clipboard', () => {
+  try {
+    return clipboard.readText();
+  } catch (e) {
+    logError(`Ошибка чтения буфера обмена: ${e.message}`);
+    return '';
+  }
 });
 
 ipcMain.handle('get-user-data-path', () => {

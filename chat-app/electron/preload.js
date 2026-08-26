@@ -65,6 +65,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('open-chat-from-notification', handler);
   },
 
+  // Чтение текста из буфера обмена (main-процесс, без разрешений)
+  readClipboard: () => ipcRenderer.invoke('read-clipboard'),
+
   // Фокус окна приложения (из уведомления)
   focusWindow: () => ipcRenderer.send('focus-app-window'),
 
@@ -74,7 +77,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Статус видимости приложения (для корректного подсчёта непрочитанных)
   onAppVisibility: (callback) => {
-    ipcRenderer.on('app-visibility', (_, status) => callback(status));
+    ipcRenderer.on('app-visibility', (_, state) => callback(state));
   },
   getAppVisibilityStatus: () => ipcRenderer.send('get-app-visibility-status'),
 

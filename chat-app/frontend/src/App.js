@@ -905,6 +905,8 @@ function App() {
   const typingTimeoutRef = useRef(null);
   const notificationPermissionRef = useRef('default');
   const messageInputRef = useRef(null);
+  // Каретка поля ввода на момент открытия ПКМ-меню (для Вставить/Вырезать)
+  const savedInputRangeRef = useRef(null);
   const activeChatIdRef = useRef(null);
   const currentUserRef = useRef(null);
   const lastBirthdayCheckRef = useRef(null);
@@ -6134,6 +6136,13 @@ return parts.length > 0 ? parts : text;
   const handleInputContextMenu = (e) => {
     e.preventDefault();
 
+    // Сохраняем каретку/выделение ДО открытия меню: клик по пункту сместит фокус
+    savedInputRangeRef.current = null;
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0 && messageInputRef.current?.contains(sel.anchorNode)) {
+      savedInputRangeRef.current = sel.getRangeAt(0).cloneRange();
+    }
+
     // Определяем слово под курсором для подсказок орфографии
     let wordInfo = null;
     let suggestions = null; // null = не проверялось
@@ -6432,7 +6441,62 @@ return parts.length > 0 ? parts : text;
   };
 
   // Вырезание текста из поля ввода
+  // Восстановление каретки/выделения поля ввода после клика по меню
+  const restoreInputCaret = () => {
+    const input = messageInputRef.current;
+    if (!input) return false;
+    input.focus();
+    const sel = window.getSelection();
+    const saved = savedInputRangeRef.current;
+    if (saved && input.contains(saved.startContainer)) {
+      sel.removeAllRanges();
+      sel.addRange(saved.cloneRange());
+      return true;
+    }
+    // Каретка в конец, если сохранить не удалось
+    const range = document.createRange();
+    range.selectNodeContents(input);
+    range.collapse(false);
+    sel.removeAllRanges();
+    sel.addRange(range);
+    return true;
+  };
+
+  // Вставка текста в каретку contentEditable с сохранением переносов строк
+  const insertTextAtCaret = (text) => {
+    const input = messageInputRef.current;
+    if (!input) return;
+    restoreInputCaret();
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    range.deleteContents();
+
+    const lines = String(text).split('\n');
+    lines.forEach((line, i) => {
+      if (i > 0) {
+        const br = document.createElement('br');
+        range.insertNode(br);
+        range.setStartAfter(br);
+      }
+      if (line) {
+        const tn = document.createTextNode(line);
+        range.insertNode(tn);
+        range.setStartAfter(tn);
+      }
+      range.collapse(false);
+    });
+
+    sel.removeAllRanges();
+    sel.addRange(range);
+
+    // Синхронизация состояния с содержимым contentEditable
+    setInputText(input.innerText || '');
+  };
+
   const handleCutText = async () => {
+
+
     try {
       // Получаем выделенный текст
       const selection = window.getSelection();
@@ -6476,35 +6540,33 @@ return parts.length > 0 ? parts : text;
     closeInputContextMenu();
   };
 
-  // Вставка текста в поле ввода
+  // Вставка из буфера: Electron — через main-процесс (без разрешений),
+  // веб — navigator.clipboard (требует https); каретка сохраняется
   const handlePasteText = async () => {
     try {
-      const text = await navigator.clipboard.readText();
-      
-      // Вставляем текст в позицию курсора
-      const selection = window.getSelection();
-      if (!selection || selection.isCollapsed) return;
-
-      const range = selection.getRangeAt(0);
-      range.deleteContents();
-      const textNode = document.createTextNode(text);
-      range.insertNode(textNode);
-
-      // Перемещаем курсор после вставленного текста
-      range.setStartAfter(textNode);
-      range.collapse(true);
-      selection.removeAllRanges();
-      selection.addRange(range);
-
-      // Обновляем состояние inputText
-      if (messageInputRef.current) {
-        const newText = messageInputRef.current.textContent;
-        setInputText(newText);
+      let text = '';
+      if (window.electronAPI?.readClipboard) {
+        text = await window.electronAPI.readClipboard();
+      } else if (navigator.clipboard?.readText) {
+        try {
+          text = await navigator.clipboard.readText();
+        } catch (err) {
+          showInAppNotification('Вставка', 'Браузер запретил доступ к буферу обмена — используйте Ctrl+V', null, activeChatIdRef.current);
+          closeInputContextMenu();
+          return;
+        }
+      } else {
+        showInAppNotification('Вставка', 'Вставка недоступна в этом окружении', null, activeChatIdRef.current);
+        closeInputContextMenu();
+        return;
       }
 
+      if (!text) { closeInputContextMenu(); return; }
+      insertTextAtCaret(text);
       console.log('Текст вставлен');
     } catch (err) {
       console.warn('Не удалось вставить текст:', err);
+      showInAppNotification('Вставка', 'Не удалось вставить: ' + err.message, null, activeChatIdRef.current);
     }
     closeInputContextMenu();
   };

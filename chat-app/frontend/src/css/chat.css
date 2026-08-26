@@ -1626,23 +1626,24 @@
 .message-input-contenteditable {
   flex: 1;
   padding: 14px 20px;
-  border: 1px solid var(--page-card-border);
+  border: none;
   border-radius: var(--radius-xl);
   font-size: 15px;
   transition: all var(--transition-normal);
-  background: var(--page-card-bg);
+  background: transparent;
   min-height: 24px;
   max-height: 120px;
   overflow-y: auto;
   outline: none;
+  /* Переносы строк из вставленного текста отображаются */
+  white-space: pre-wrap;
   line-height: 1.5;
 }
 
 .message-input-contenteditable:focus {
   outline: none;
-  border-color: var(--primary-color);
-  background: var(--page-bg);
-  box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.1);
+  background: transparent;
+  box-shadow: none;
 }
 
 .message-input-contenteditable:empty:before {
