@@ -12,6 +12,7 @@ const CHAT_PREFIX = 'ai-chat-';
 
 const CFG = {
   enabled: process.env.AI_AGENT_ENABLED !== 'false',
+  maintenance: process.env.AI_AGENT_MAINTENANCE === 'true',
   ollamaUrl: process.env.OLLAMA_URL || 'http://127.0.0.1:11434',
   model: process.env.LLM_MODEL || 'qwen2.5:3b',
   name: process.env.AI_AGENT_NAME || 'ИИ-Агент',
@@ -19,6 +20,10 @@ const CFG = {
   contextMessages: parseInt(process.env.AI_CONTEXT_MESSAGES || '10', 10),
   timeoutMs: parseInt(process.env.AI_TIMEOUT_MS || '90000', 10)
 };
+
+const MAINTENANCE_REPLY =
+  '🚧 ИИ-Агент сейчас в разработке и скоро станет доступен. ' +
+  'Мы дорабатываем его возможности — следите за обновлениями!';
 
 let D = null;        // deps: db, io, uuidv4, encryptText, decryptText, deliverBotMessage
 let chain = Promise.resolve(); // семафор: одна генерация одновременно
@@ -110,6 +115,26 @@ async function handleUserMessage(socket, onlineUser, chatId, text, callback) {
   }
 
   ensureAiChat(userId);
+
+  // Режим обслуживания: отвечаем заглушкой вместо вызова Ollama
+  if (CFG.maintenance) {
+    const answerId = D.uuidv4();
+    const ts = new Date().toISOString();
+    D.db.run(`INSERT INTO messages (id, chat_id, sender_id, text, timestamp)
+              VALUES (?, ?, ?, ?, ?)`,
+      [answerId, chatId, AGENT_ID, D.encryptText(MAINTENANCE_REPLY), ts]);
+
+    if (typeof callback === 'function') callback({ ok: true });
+    D.deliverBotMessage(userId, {
+      id: answerId,
+      chatId,
+      senderId: AGENT_ID,
+      senderName: CFG.name,
+      senderAvatar: CFG.avatar,
+      text: MAINTENANCE_REPLY
+    });
+    return;
+  }
 
   // 1. Сохраняем сообщение пользователя (в общем зашифрованном формате)
   const userMsgId = D.uuidv4();

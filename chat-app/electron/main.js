@@ -250,7 +250,8 @@ function createWindow() {
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
-      contextIsolation: true
+      contextIsolation: true,
+      backgroundThrottling: false
     },
     show: false,
     icon: path.join(__dirname, 'icon.ico')
@@ -306,15 +307,21 @@ function createWindow() {
     mainWindow.loadURL(`file://${frontendBuildPath}/index.html`);
   }
 
-  // Отслеживание видимости окна (для уведомлений и непрочитанных)
-  const notifyVisibility = (visible) => {
-    mainWindow.webContents.send('app-visibility', visible);
+  // Отслеживание состояния окна (для уведомлений и непрочитанных)
+  const sendAppState = () => {
+    if (mainWindow.isDestroyed()) return;
+    mainWindow.webContents.send('app-visibility', {
+      visible: !mainWindow.isMinimized() && mainWindow.isVisible(),
+      focused: mainWindow.isFocused()
+    });
   };
 
-  mainWindow.on('minimize', () => notifyVisibility(false));
-  mainWindow.on('restore', () => notifyVisibility(true));
-  mainWindow.on('show', () => notifyVisibility(true));
-  mainWindow.on('hide', () => notifyVisibility(false));
+  mainWindow.on('minimize', sendAppState);
+  mainWindow.on('restore', sendAppState);
+  mainWindow.on('show', sendAppState);
+  mainWindow.on('hide', sendAppState);
+  mainWindow.on('focus', sendAppState);
+  mainWindow.on('blur', sendAppState);
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
@@ -382,7 +389,7 @@ async function fetchImageAsNativeImage(url) {
       return null;
     }
     // Удалённый URL — скачиваем через fetch
-    const response = await fetch(url, { signal: AbortSignal.timeout(3000) });
+    const response = await fetch(url, { signal: AbortSignal.timeout(1000) });
     if (!response.ok) return null;
     const buffer = Buffer.from(await response.arrayBuffer());
     return nativeImage.createFromBuffer(buffer).resize({ width: 64, height: 64 });
@@ -476,8 +483,11 @@ ipcMain.on('set-badge-icon', (event, dataUrl) => {
 });
 
 ipcMain.on('get-app-visibility-status', () => {
-  if (mainWindow) {
-    mainWindow.webContents.send('app-visibility', !mainWindow.isMinimized() && mainWindow.isVisible());
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('app-visibility', {
+      visible: !mainWindow.isMinimized() && mainWindow.isVisible(),
+      focused: mainWindow.isFocused()
+    });
   }
 });
 
@@ -499,37 +509,11 @@ ipcMain.handle('is-file-downloaded', async (event, url) => {
 });
 
 ipcMain.handle('get-auto-launch', () => {
-  const AutoLaunch = (() => {
-    try {
-      return require('auto-launch');
-    } catch {
-      return null;
-    }
-  })();
-
-  if (!AutoLaunch) return false;
-
-  const autoLauncher = new AutoLaunch({ name: 'ChatApp' });
-  return autoLauncher.isEnabled();
+  return app.getLoginItemSettings().openAtLogin;
 });
 
-ipcMain.handle('set-auto-launch', async (event, enabled) => {
-  const AutoLaunch = (() => {
-    try {
-      return require('auto-launch');
-    } catch {
-      return null;
-    }
-  })();
-
-  if (!AutoLaunch) return false;
-
-  const autoLauncher = new AutoLaunch({ name: 'ChatApp' });
-  if (enabled) {
-    await autoLauncher.enable();
-  } else {
-    await autoLauncher.disable();
-  }
+ipcMain.handle('set-auto-launch', (event, enabled) => {
+  app.setLoginItemSettings({ openAtLogin: enabled });
   return true;
 });
 
@@ -539,6 +523,46 @@ app.on('ready', () => {
   initPaths();
   createWindow();
   startBackend();
+
+  // Доверяем сертификату нашего сервера (mkcert), чтобы аватары, файлы и звонки
+  // работали по https без установки CA на машинах пользователей.
+  // Список доверенных хостов берём из CHAT_APP_SERVER_URL в backend/.env (+ localhost).
+  try {
+    const pinnedHosts = new Set(['localhost', '127.0.0.1']);
+    try {
+      const envPath = path.join(backendPath, '.env');
+      if (fs.existsSync(envPath)) {
+        const m = fs.readFileSync(envPath, 'utf8')
+          .split(/\r?\n/)
+          .find(l => l.startsWith('CHAT_APP_SERVER_URL='));
+        if (m) {
+          const host = new URL(m.slice('CHAT_APP_SERVER_URL='.length).trim()).hostname;
+          if (host) pinnedHosts.add(host);
+        }
+      }
+    } catch (e) {
+      logError(`Не удалось прочитать CHAT_APP_SERVER_URL из .env: ${e.message}`);
+    }
+    session.defaultSession.setCertificateVerifyProc((request, callback) => {
+      if (pinnedHosts.has(request.hostname)) {
+        callback(0);
+      } else {
+        callback(request.errorCode);
+      }
+    });
+  } catch (e) {
+    logError(`Ошибка настройки доверия сертификату: ${e.message}`);
+  }
+
+  // Включение автозапуска при первом запуске
+  if (!isDev) {
+    const initFlag = path.join(app.getPath('userData'), 'auto-start-initialized');
+    if (!fs.existsSync(initFlag)) {
+      app.setLoginItemSettings({ openAtLogin: true });
+      fs.writeFileSync(initFlag, '');
+      logToFile('Автозапуск включён по умолчанию (первый запуск)');
+    }
+  }
 
   // Авто-проверка обновлений при старте (как в бекапе)
   if (!isDev) {

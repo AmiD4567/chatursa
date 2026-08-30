@@ -8,7 +8,9 @@
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.65);
+  background: rgba(10, 10, 18, 0.45);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   display: flex;
   justify-content: center;
   align-items: center;
@@ -1545,21 +1547,21 @@
 .status-presets-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 8px;
+  gap: 6px;
 }
 
 .status-preset-btn {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
-  padding: 12px 8px;
+  gap: 4px;
+  padding: 6px 4px;
   border: 1px solid var(--page-card-border);
   background: var(--page-card-bg);
-  border-radius: 12px;
+  border-radius: 10px;
   cursor: pointer;
   transition: all 0.2s;
-  min-height: 70px;
+  min-height: 54px;
 }
 
 .status-preset-btn:hover {
@@ -1579,19 +1581,19 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 24px;
+  height: 24px;
 }
 
 .status-preset-text {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 500;
   color: var(--text-secondary);
   text-align: center;
-  line-height: 1.2;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  line-height: 1.1;
+  white-space: normal;
+  overflow: visible;
+  word-break: break-word;
   max-width: 100%;
 }
 
@@ -1914,7 +1916,8 @@
 }
 
 /* Контекстное меню сообщений (правый клик) */
-.message-context-menu {
+.message-context-menu,
+.chat-context-menu {
   position: fixed;
   background: rgba(30, 30, 50, 0.425);
   backdrop-filter: blur(20px);
@@ -2200,6 +2203,23 @@
 
 .input-context-menu .context-menu-item {
   padding: 8px 12px;
+}
+
+/* Подсказки орфографии в контекстном меню поля ввода */
+.context-menu-item.spell-suggestion {
+  color: var(--primary-color, #667eea);
+  font-weight: 600;
+}
+
+.context-menu-item.spell-suggestion:hover {
+  background: rgba(102, 126, 234, 0.12);
+  color: var(--primary-color, #667eea);
+}
+
+.context-menu-item.spell-checking {
+  color: var(--text-muted, #999);
+  cursor: default;
+  font-style: italic;
 }
 
 /* Модальное окно редактирования сообщения */
@@ -2668,7 +2688,10 @@
   flex: 1;
   display: flex;
   flex-direction: column;
-  background: var(--page-bg);
+  background: rgba(15, 15, 26, 0.42);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(102, 126, 234, 0.15);
   color: var(--page-text-primary);
   border-radius: 16px;
   margin: 16px;
@@ -2678,7 +2701,10 @@
 }
 
 .full-page-header {
-  background: var(--page-header-bg);
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.55) 0%, rgba(118, 75, 162, 0.55) 100%);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   padding: 16px 24px;
   color: var(--page-header-text);
   flex-shrink: 0;
@@ -2723,6 +2749,8 @@
   padding: 16px;
   overflow-y: auto;
   background: var(--page-content-bg);
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 /* Управление телефонной книгой */
@@ -3979,6 +4007,28 @@
   font-weight: 600;
 }
 
+.admin-full-page .version-badge {
+  padding: 3px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.admin-full-page .version-badge.ok {
+  background: rgba(40, 167, 69, 0.12);
+  color: #28a745;
+}
+
+.admin-full-page .version-badge.outdated {
+  background: rgba(243, 156, 18, 0.12);
+  color: #e67e22;
+}
+
+.admin-full-page .version-cell {
+  white-space: nowrap;
+}
+
 .admin-full-page .action-buttons {
   display: flex;
   gap: 6px;
@@ -4148,7 +4198,6 @@
 .admin-full-page .admin-sessions-list,
 .admin-full-page .admin-files-list,
 .admin-full-page .admin-security-logs,
-.admin-full-page .admin-ui-settings,
 .admin-full-page .admin-2fa-settings {
   background: var(--page-card-bg);
   border-radius: 12px;
@@ -4159,64 +4208,10 @@
 .admin-full-page .admin-sessions-list h4,
 .admin-full-page .admin-files-list h4,
 .admin-full-page .admin-security-logs h4,
-.admin-full-page .admin-ui-settings h4,
 .admin-full-page .admin-2fa-settings h4 {
   color: var(--page-text-primary);
   font-size: 16px;
   margin-bottom: 16px;
-}
-
-.admin-full-page .settings-form {
-  max-width: 500px;
-}
-
-.admin-full-page .form-group {
-  margin-bottom: 16px;
-}
-
-.admin-full-page .form-group label {
-  display: block;
-  margin-bottom: 6px;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--page-text-primary);
-}
-
-.admin-full-page .form-group input[type="text"] {
-  width: 100%;
-  padding: 10px 14px;
-  border-radius: 8px;
-  border: 1px solid var(--page-card-border);
-  background: var(--input-bg);
-  color: var(--page-text-primary);
-  font-size: 14px;
-}
-
-.admin-full-page .form-group input[type="text"]:focus {
-  outline: none;
-  border-color: #667eea;
-}
-
-.admin-full-page .color-picker-group {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.admin-full-page .color-picker-group input[type="color"] {
-  width: 48px;
-  height: 48px;
-  border: 2px solid var(--page-card-border);
-  border-radius: 8px;
-  padding: 2px;
-  cursor: pointer;
-  background: var(--input-bg);
-}
-
-.admin-full-page .color-picker-group span {
-  font-size: 14px;
-  color: var(--page-text-secondary);
-  font-family: monospace;
 }
 
 .admin-full-page .create-btn {
@@ -5176,6 +5171,7 @@
 @media (max-width: 768px) {
   .app-container {
     flex-direction: column;
+    transition: bottom 0.18s ease;
   }
 
   .sidebar-buttons {
@@ -5370,6 +5366,77 @@
     font-size: 13px;
     white-space: nowrap;
   }
+
+  /* ===== Однопанельный режим: список чатов ИЛИ чат ===== */
+  .sidebar.hidden-mobile {
+    display: none;
+  }
+
+  .chat-main {
+    display: none;
+  }
+
+  .chat-main.visible-mobile {
+    display: flex;
+  }
+
+  /* Кнопка «назад» к списку чатов */
+  .back-to-chats-list {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    flex-shrink: 0;
+    margin-right: 4px;
+    border: none;
+    border-radius: 50%;
+    background: rgba(102, 126, 234, 0.12);
+    color: var(--text-primary);
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+
+  .back-to-chats-list:active {
+    background: rgba(102, 126, 234, 0.25);
+  }
+
+  /* Надписи в нижней панели скрываем — остаются только иконки */
+  .nav-sidebar-btn .nav-btn-label {
+    display: none;
+  }
+
+  /* Панель кнопок — горизонтальная прокрутка при большом числе пунктов */
+  .buttons-column {
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .buttons-column::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Безопасные зоны iOS (вырез / Home-индикатор) */
+  .section-header,
+  .chat-header-main,
+  .full-page-header,
+  .modal-header {
+    padding-top: calc(env(safe-area-inset-top) + 16px);
+  }
+
+  .chat-view-container {
+    --chat-header-height: calc(72px + env(safe-area-inset-top));
+  }
+
+  .message-form-main {
+    padding-bottom: calc(env(safe-area-inset-bottom) + 16px);
+  }
+
+  .sidebar-buttons {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
 }
 
 @media (max-width: 480px) {
@@ -5395,12 +5462,16 @@
     min-height: 56px;
   }
 
+  .chat-view-container {
+    --chat-header-height: calc(56px + env(safe-area-inset-top));
+  }
+
   .message-form-main {
     padding: 10px 12px;
   }
 
   .messages-container-main {
-    padding: 12px;
+    padding: calc(var(--chat-header-height, 56px) + 12px) 12px 160px;
   }
 
   .chat-view-container {
@@ -5469,6 +5540,10 @@
     min-height: 48px;
   }
 
+  .chat-view-container {
+    --chat-header-height: calc(48px + env(safe-area-inset-top));
+  }
+
   .chat-header-main .chat-name {
     font-size: 15px;
   }
@@ -5479,7 +5554,7 @@
   }
 
   .messages-container-main {
-    padding: 8px;
+    padding: calc(var(--chat-header-height, 48px) + 12px) 10px 160px;
   }
 
   .message-bubble {
@@ -6332,6 +6407,74 @@
 .manage-participant-remove:hover {
   background: #ffe6e6;
 }
+
+.manage-participant-badge.owner {
+  color: #fff;
+  background: #f59e0b;
+  padding: 1px 8px;
+  border-radius: 10px;
+}
+.manage-participant-badge.admin {
+  color: #fff;
+  background: #6366f1;
+  padding: 1px 8px;
+  border-radius: 10px;
+}
+.manage-participant-actions {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  margin-left: auto;
+}
+.manage-participant-btn {
+  background: #eef2ff;
+  border: 1px solid #c7d2fe;
+  color: #4338ca;
+  border-radius: 6px;
+  padding: 2px 6px;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.manage-participant-btn:hover {
+  background: #e0e7ff;
+}
+
+.group-info-modal { max-width: 420px; }
+.group-info-body { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 8px 4px 4px; }
+.group-info-avatar-wrap { position: relative; }
+.group-info-avatar { width: 96px; height: 96px; border-radius: 50%; object-fit: cover; cursor: pointer; background: #eee; }
+.group-info-avatar-empty { width: 96px; height: 96px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: #eef2ff; cursor: pointer; font-size: 40px; }
+.group-info-avatar-edit { position: absolute; right: -4px; bottom: -4px; width: 32px; height: 32px; border-radius: 50%; border: none; background: #667eea; color: #fff; cursor: pointer; font-size: 14px; }
+.group-info-name { font-size: 18px; font-weight: 700; text-align: center; }
+.group-info-desc { font-size: 13px; color: #666; text-align: center; max-width: 320px; white-space: pre-wrap; word-break: break-word; }
+.group-info-meta { font-size: 13px; color: #888; }
+.group-info-announcement { width: 100%; margin-top: 6px; padding: 10px 12px; background: rgba(102,126,234,0.06); border-radius: 10px; }
+.group-info-section-label { font-size: 13px; font-weight: 600; color: #555; margin-bottom: 6px; }
+.group-info-announcement-text { font-size: 13px; color: #333; white-space: pre-wrap; word-break: break-word; }
+.group-info-announcement-empty { font-size: 13px; color: #999; font-style: italic; }
+.group-info-link-btn { background: #f1f3f9; border: 1px solid #e0e0e0; border-radius: 8px; padding: 8px 12px; cursor: pointer; font-size: 14px; width: 100%; margin-top: 4px; }
+.group-info-link-btn:hover { background: #e7ebf5; }
+.group-info-actions { width: 100%; display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+[data-theme="dark"] .group-info-desc { color: #aaa; }
+[data-theme="dark"] .group-info-section-label { color: #bbb; }
+[data-theme="dark"] .group-info-announcement-text { color: #ddd; }
+[data-theme="dark"] .group-info-link-btn { background: #2a2a3a; border-color: #3a3a4a; color: #eee; }
+.modal-label {
+  font-size: 13px;
+  color: #555;
+  font-weight: 600;
+}
+.modal-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: #333;
+  cursor: pointer;
+}
+[data-theme="dark"] .modal-label { color: #bbb; }
+[data-theme="dark"] .modal-checkbox-label { color: #ddd; }
 
 .modal-input {
   width: 100%;

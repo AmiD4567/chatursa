@@ -1,5 +1,5 @@
 const DB_NAME = 'chat-ursa-offline';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 function openDB() {
   return new Promise((resolve, reject) => {
@@ -21,10 +21,51 @@ function openDB() {
       if (!db.objectStoreNames.contains('metadata')) {
         db.createObjectStore('metadata', { keyPath: 'key' });
       }
+      if (!db.objectStoreNames.contains('custom_backgrounds')) {
+        db.createObjectStore('custom_backgrounds', { keyPath: 'id' });
+      }
     };
     req.onsuccess = (e) => resolve(e.target.result);
     req.onerror = (e) => reject(e.target.error);
   });
+}
+
+// ─── Библиотека пользовательских фонов чата ───
+
+export async function saveCustomBg(dataUrl) {
+  const db = await openDB();
+  const id = `bg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction('custom_backgrounds', 'readwrite');
+    tx.objectStore('custom_backgrounds').put({ id, dataUrl, createdAt: Date.now() });
+    tx.oncomplete = resolve;
+    tx.onerror = (e) => reject(e.target.error);
+  });
+  db.close();
+  return id;
+}
+
+export async function getAllCustomBgs() {
+  const db = await openDB();
+  const rows = await new Promise((resolve, reject) => {
+    const req = db.transaction('custom_backgrounds', 'readonly')
+      .objectStore('custom_backgrounds').getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = (e) => reject(e.target.error);
+  });
+  db.close();
+  return rows.sort((a, b) => a.createdAt - b.createdAt);
+}
+
+export async function deleteCustomBg(id) {
+  const db = await openDB();
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction('custom_backgrounds', 'readwrite');
+    tx.objectStore('custom_backgrounds').delete(id);
+    tx.oncomplete = resolve;
+    tx.onerror = (e) => reject(e.target.error);
+  });
+  db.close();
 }
 
 export async function saveMessages(chatId, messages) {
@@ -97,11 +138,7 @@ export async function getChats() {
     req.onerror = (e) => reject(e.target.error);
   });
   db.close();
-  return chats.sort((a, b) => {
-    const ta = a.lastMessage?.timestamp || a.created_at || '';
-    const tb = b.lastMessage?.timestamp || b.created_at || '';
-    return tb.localeCompare(ta);
-  });
+  return chats.sort(compareChatsDesc);
 }
 
 export async function queueOutgoing(msg) {
@@ -172,4 +209,41 @@ export async function getMetadata(key) {
   });
   db.close();
   return value;
+}
+
+// Числовой «вес» времени чата для сортировки списка.
+// Важно: бэкенд присылает created_at (snake_case), а фронт раньше читал
+// createdAt (camelCase) — из-за этого время часто было undefined, компаратор
+// возвращал NaN и новый чат оставался внизу списка. Здесь мы проверяем все
+// возможные поля и трактуем отсутствующий/невалидный timestamp как самый свежий
+// (Infinity), чтобы чат без сообщений/времени попадал наверх, а не вниз.
+export function chatSortTime(chat) {
+  const candidates = [
+    chat?.lastMessage?.timestamp,
+    chat?.lastActivity,
+    chat?.created_at,
+    chat?.createdAt,
+    chat?.timestamp,
+  ];
+  for (const t of candidates) {
+    if (t == null) continue;
+    const n = Date.parse(t);
+    if (!Number.isNaN(n)) return n;
+  }
+  return Infinity;
+}
+
+// Сортировка чатов по убыванию времени (самые свежие — сверху).
+// prevCandidates используется, чтобы не менять порядок при равных временах.
+export function compareChatsDesc(a, b) {
+  const ta = chatSortTime(a);
+  const tb = chatSortTime(b);
+  if (tb !== ta) return tb - ta;
+  return 0;
+}
+
+// То же, но закреплённые (pinned) чаты всегда выше остальных.
+export function compareChatsPinnedFirst(a, b) {
+  if (!!a.pinned !== !!b.pinned) return !!a.pinned ? -1 : 1;
+  return compareChatsDesc(a, b);
 }

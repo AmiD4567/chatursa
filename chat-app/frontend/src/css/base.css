@@ -53,6 +53,15 @@
   --message-text-own: #ffffff;
   --message-text-other: #1a1a2e;
 
+  /* Кастомизация облачков сообщений (управляется из настроек оформления) */
+  --bubble-own-bg: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  --bubble-own-text: #ffffff;
+  --bubble-other-bg: #ffffff;
+  --bubble-other-text: #1a1a2e;
+  --bubble-radius: 18px;
+  --bubble-radius-tail: 4px;
+  --message-font: 'Inter', sans-serif;
+
   /* Границы и тени */
   --border-color: rgba(255, 255, 255, 0.1);
   --border-glass: rgba(102, 126, 234, 0.2);
@@ -102,9 +111,14 @@
   box-sizing: border-box;
 }
 
+html {
+  height: 100%;
+  overflow: hidden;
+}
+
 body {
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  background: var(--primary-gradient);
+  background: var(--bg-primary, #0f0f1a);
   min-height: 100dvh;
   min-height: 100vh;
   overflow: hidden;

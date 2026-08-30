@@ -4,7 +4,7 @@
  */
 
 module.exports = function register(app, deps) {
-  const { db, uuidv4 } = deps;
+  const { db, uuidv4, VAPID_PUBLIC_KEY } = deps;
 
 app.get('/api/push/vapid-key', (req, res) => {
   res.json({ publicKey: VAPID_PUBLIC_KEY });

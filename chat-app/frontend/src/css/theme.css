@@ -420,20 +420,22 @@
 }
 
 [data-theme="light"] .users-section {
-  background: var(--sidebar-bg);
-  border-left: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.45);
+  border-left: 1px solid rgba(0, 0, 0, 0.06);
 }
 
 [data-theme="light"] .section-header {
-  background: linear-gradient(135deg, rgba(102, 126, 234, 0.08) 0%, rgba(118, 75, 162, 0.08) 100%);
-  border-bottom: 1px solid var(--border-color);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.6) 0%, rgba(255, 255, 255, 0.55) 100%);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
   color: var(--text-color);
 }
 
 [data-theme="light"] .users-section {
-  background: var(--sidebar-bg);
-  border-left: 1px solid var(--border-color);
-  border-top: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.45);
+  border-left: 1px solid rgba(0, 0, 0, 0.06);
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
 }
 
 [data-theme="light"] .users-section::-webkit-scrollbar-thumb {
@@ -507,12 +509,18 @@
   height: 128px !important;
   font-size: 128px !important;
   filter: drop-shadow(0 4px 20px rgba(0, 0, 0, 0.4));
-  animation: stickerMessagePulse 2s ease-in-out infinite;
 }
 
-@keyframes stickerMessagePulse {
-  0%, 100% { transform: scale(1); filter: drop-shadow(0 4px 20px rgba(0, 0, 0, 0.4)); }
-  50% { transform: scale(1.05); filter: drop-shadow(0 8px 32px rgba(0, 0, 0, 0.5)); }
+
+
+/* Крупный одиночный эмодзи в сообщении («джамбо», как в Telegram) */
+.message-text-main .emoji-big {
+  filter: drop-shadow(0 2px 10px rgba(0, 0, 0, 0.25));
+  transition: transform var(--transition-fast);
+}
+
+.message-text-main .emoji-big:hover {
+  transform: scale(1.08);
 }
 
 /* Стикеры в превью последних сообщений */
@@ -522,10 +530,7 @@
   font-size: 40px !important;
 }
 
-/* Анимации для стикеров в сообщениях (включены по умолчанию) */
-.sticker-inline[data-sticker="true"] {
-  animation: stickerMessagePulse 3s ease-in-out infinite;
-}
+
 
 /* ============================================
    ПРЕВЬЮ ССЫЛОК — как в WhatsApp / Telegram
@@ -538,6 +543,8 @@
   border-bottom: 1px solid rgba(91, 162, 208, 0.3);
   transition: all var(--transition-fast);
   cursor: pointer;
+  word-break: break-all;
+  overflow-wrap: break-word;
 }
 
 [data-theme="light"] .message-link-inline {

@@ -30,6 +30,15 @@ function checkAdmin(userId, db) {
   }
 }
 
+function checkUserKpiAccess(userId, db) {
+  try {
+    const row = db.prepare('SELECT is_admin, can_view_kpi FROM users WHERE id = ?').get(userId);
+    return row ? (row.is_admin === 1 || row.can_view_kpi === 1) : false;
+  } catch (e) {
+    return false;
+  }
+}
+
 function registerKpiRoutes(app, db) {
   db.run(`CREATE TABLE IF NOT EXISTS kpi_definitions (
     id TEXT PRIMARY KEY,
@@ -50,6 +59,7 @@ function registerKpiRoutes(app, db) {
   )`);
 
   const validIds = KPI_DEFINITIONS.map(k => k.id);
+  db.prepare(`DELETE FROM kpi_values WHERE kpi_id NOT IN (${validIds.map(() => '?').join(',')})`).run(...validIds);
   db.prepare(`DELETE FROM kpi_definitions WHERE id NOT IN (${validIds.map(() => '?').join(',')})`).run(...validIds);
   const upsertDef = db.prepare('INSERT OR IGNORE INTO kpi_definitions (id, group_name, name, unit) VALUES (?, ?, ?, ?)');
   for (const k of KPI_DEFINITIONS) {
@@ -59,6 +69,7 @@ function registerKpiRoutes(app, db) {
   app.get('/api/kpi', (req, res) => {
     const userId = req.headers['x-user-id'];
     if (!userId) return res.status(401).json({ error: 'Не авторизован' });
+    if (!checkUserKpiAccess(userId, db)) return res.status(403).json({ error: 'Нет доступа к показателям' });
     try {
       const defs = db.prepare('SELECT * FROM kpi_definitions ORDER BY id').all();
       const today = new Date().toISOString().split('T')[0];
@@ -115,9 +126,9 @@ function registerKpiRoutes(app, db) {
         VALUES (?, ?, ?, ?, ?, datetime('now', 'localtime'))`);
       const txn = db.transaction(() => {
         upsert.run('frs_cash', data.yesterdayCash, null, today, userId);
-        upsert.run('frs_card', 0, null, today, userId);
-        upsert.run('frs_transfer', data.yesterdayCard, null, today, userId);
-        upsert.run('frs_other', data.yesterdayOther || 0, null, today, userId);
+        upsert.run('frs_card', data.yesterdayCard, null, today, userId);
+        upsert.run('frs_transfer', data.yesterdayTransfer, null, today, userId);
+        upsert.run('frs_other', data.yesterdayOther, null, today, userId);
         upsert.run('sales_today', data.todayTotal, null, today, userId);
         upsert.run('sales_yesterday', data.yesterdayTotal, null, today, userId);
         upsert.run('sales_month', data.monthTotal, null, today, userId);

@@ -25,7 +25,8 @@ data class Chat(
     val participantNames: Map<String, String> = emptyMap(),
     val lastActivity: String? = null,
     val isOnline: Boolean = false,
-    val createdBy: String? = null
+    val createdBy: String? = null,
+    val lastSeen: String? = null
 )
 
 data class Message(

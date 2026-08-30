@@ -44,24 +44,12 @@ if ('serviceWorker' in navigator && !window.electronAPI) {
       reg.addEventListener('updatefound', () => {
         const newWorker = reg.installing;
         newWorker.addEventListener('statechange', () => {
-          if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-            console.log('[SW] Доступно обновление');
-            if (window.confirm('Доступна новая версия приложения. Обновить?')) {
-              newWorker.postMessage({ type: 'skip-waiting' });
-              window.location.reload();
-            }
+          if (newWorker.state === 'installed') {
+            console.log('[SW] Доступно обновление, применится при следующем запуске');
           }
         });
       });
     }).catch((err) => console.error('[SW] Ошибка регистрации:', err));
-  });
-
-  let refreshing = false;
-  navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (!refreshing) {
-      refreshing = true;
-      window.location.reload();
-    }
   });
 }
 

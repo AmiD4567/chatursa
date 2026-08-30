@@ -175,6 +175,14 @@ function initBotEngine({ db, io, uuidv4, encryptText }) {
         // Колонка button_data может не существовать в старых схемах
       }
 
+      // Отмечаем сообщение как непрочитанное для получателя (личный чат с ботом)
+      if (chatId.startsWith('bot-chat-')) {
+        try {
+          const targetUserId = chatId.slice('bot-chat-'.length);
+          db.run(`INSERT OR IGNORE INTO unread_messages (user_id, message_id, chat_id) VALUES (?, ?, ?)`, [targetUserId, messageId, chatId]);
+        } catch (e) {}
+      }
+
       io.to(chatId).emit('new_message', {
         message: {
           id: messageId,

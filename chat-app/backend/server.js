@@ -330,7 +330,7 @@ function getChatWithDetails(chatId, userId = null) {
 
   // Получаем участников с полными данными
   const participantsRows = db.prepare(`
-    SELECT u.id, u.username, u.avatar, u.status, u.status_text, u.last_seen
+    SELECT u.id, u.username, u.avatar, u.status, u.status_text, u.last_seen, cp.role
     FROM users u
     JOIN chat_participants cp ON u.id = cp.user_id
     WHERE cp.chat_id = ?
@@ -341,7 +341,8 @@ function getChatWithDetails(chatId, userId = null) {
     avatar: String(row.avatar || ''),
     status: String(row.status || 'offline'),
     status_text: row.status_text || '',
-    last_seen: row.last_seen || null
+    last_seen: row.last_seen || null,
+    role: String(row.role || 'member')
   }));
 
   // Получаем непрочитанные
@@ -378,6 +379,9 @@ function getChatWithDetails(chatId, userId = null) {
     name: String(chat.name || ''),
     avatar: chat.avatar || '',
     created_by: chat.created_by || null,
+    description: chat.description || '',
+    restricted: chat.restricted || 0,
+    announcement: chat.announcement || '',
     participants: participants.map(p => p.username),
     participantsDetails: participants,
     unreadCount,
@@ -413,7 +417,7 @@ function getUserChats(userId) {
   return chats.map(chat => {
     // Получаем участников с полными данными
     const participants = db.prepare(`
-      SELECT u.id, u.username, u.avatar, u.status, u.status_text, u.full_name, u.birth_date, u.last_seen
+      SELECT u.id, u.username, u.avatar, u.status, u.status_text, u.full_name, u.birth_date, u.last_seen, cp.role
       FROM users u
       JOIN chat_participants cp ON u.id = cp.user_id
       WHERE cp.chat_id = ?
@@ -446,7 +450,7 @@ function getUserChats(userId) {
       ...chat,
       id: String(chat.id),
       participants: participants.map(p => p.username),
-      participantsDetails: participants,
+      participantsDetails: participants.map(p => ({ ...p, role: String(p.role || 'member') })),
       unreadCount: chat.unreadCount || 0,
       pinned: !!chat.pinned,
       muted: !!chat.muted,
@@ -761,6 +765,20 @@ function distributeChatMessage(chatId, formattedMessage, chat = null, opts = {})
     .join(',');
   if (unreadValues) {
     db.run(`INSERT OR IGNORE INTO unread_messages (user_id, message_id, chat_id) VALUES ${unreadValues}`);
+  }
+
+  // Обогащаем chatData participantsDetails для новых прямых чатов (получатель получает первое сообщение)
+  if (chatData.type === 'direct' && !chatData.participantsDetails) {
+    const fullRows = db.prepare(`
+      SELECT u.id, u.username, u.avatar, u.status, u.status_text, u.last_seen
+      FROM users u JOIN chat_participants cp ON u.id = cp.user_id
+      WHERE cp.chat_id = ?
+    `).all(chatId);
+    chatData.participantsDetails = fullRows.map(r => ({
+      id: r.id, username: r.username, avatar: r.avatar || '', status: r.status || 'offline',
+      status_text: r.status_text || '', last_seen: r.last_seen || null
+    }));
+    chatData.participants = fullRows.map(r => r.username);
   }
 
   // Отправляем сообщение всем в чате (включая отправителя)

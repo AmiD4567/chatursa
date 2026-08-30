@@ -7,6 +7,7 @@
   flex-direction: column;
   justify-content: center;
   align-items: center;
+  min-height: 100dvh;
   min-height: 100vh;
   padding: 20px;
   animation: fadeIn 0.5s ease;
@@ -409,6 +410,15 @@
   font-size: 14px;
   border: 1px solid rgba(255, 100, 100, 0.4);
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+.login-box .auth-retry-btn {
+  background: rgba(255, 255, 255, 0.12);
+  box-shadow: none;
+}
+
+.login-box .auth-retry-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.2);
 }
 
 .login-box .auth-btn {

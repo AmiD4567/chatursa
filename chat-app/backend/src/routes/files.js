@@ -130,7 +130,7 @@ app.post('/api/upload-general-chat-avatar', upload.single('avatar'), (req, res) 
   }
 });
 
-// API для загрузки аватара группового чата (любой участник)
+// API для загрузки аватара группового чата (только владелец или админ)
 app.post('/api/upload-group-chat-avatar', upload.single('avatar'), (req, res) => {
   const { chatId, userId } = req.body;
 
@@ -138,15 +138,29 @@ app.post('/api/upload-group-chat-avatar', upload.single('avatar'), (req, res) =>
     return res.status(400).json({ error: 'chatId, userId и файл обязательны' });
   }
 
-  const isParticipant = db.prepare('SELECT 1 FROM chat_participants WHERE chat_id = ? AND user_id = ?').get(chatId, userId);
-  if (!isParticipant) {
+  const participant = db.prepare('SELECT role FROM chat_participants WHERE chat_id = ? AND user_id = ?').get(chatId, userId);
+  if (!participant) {
     fs.unlink(req.file.path, () => {});
     return res.status(403).json({ error: 'Вы не являетесь участником чата' });
+  }
+  if (participant.role !== 'creator' && participant.role !== 'admin') {
+    fs.unlink(req.file.path, () => {});
+    return res.status(403).json({ error: 'Менять аватар группы может только владелец или администратор' });
+  }
+
+  if (!req.file.mimetype || !req.file.mimetype.startsWith('image/')) {
+    fs.unlink(req.file.path, () => {});
+    return res.status(400).json({ error: 'Можно загружать только изображения' });
   }
 
   const avatarUrl = `${SERVER_URL}/uploads/${req.file.filename}`;
 
   try {
+    const current = db.prepare('SELECT avatar FROM chats WHERE id = ?').get(chatId);
+    if (current && current.avatar && current.avatar.startsWith(`${SERVER_URL}/uploads/`)) {
+      const oldPath = path.join(UPLOADS_PATH, path.basename(current.avatar));
+      fs.unlink(oldPath, () => {});
+    }
     db.run('UPDATE chats SET avatar = ? WHERE id = ?', [avatarUrl, chatId]);
     const chat = getChatWithDetails(chatId);
     io.emit('chat_avatar_updated', { chatId, avatar: avatarUrl, chat });

@@ -1,4 +1,5 @@
 import React from 'react';
+import { compareChatsDesc } from './db';
 
 const ChatList = ({
   searchResults,
@@ -89,11 +90,7 @@ const ChatList = ({
           </div>
         ) : (
           <div className="chats-list">
-            {chats.sort((a, b) => {
-              const aTime = a.lastMessage?.timestamp || a.createdAt;
-              const bTime = b.lastMessage?.timestamp || b.createdAt;
-              return new Date(bTime) - new Date(aTime);
-            }).map(chat => {
+            {chats.sort(compareChatsDesc).map(chat => {
               const otherUserId = chat.type === 'direct' && chat.participantsDetails
                 ? chat.participantsDetails.find(p => p.username !== currentUser?.username)?.id
                 : null;

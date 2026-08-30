@@ -9,15 +9,11 @@ function AdminPanel({
   activeSessions,
   uploadedFiles,
   securityLogs,
-  uiSettings,
-  isSavingUiSettings,
-  setUiSettings,
   onOpenChats,
   onAdminTabChange,
   onOpenSessions,
   onOpenFileManager,
   onOpenSecurityLogs,
-  onOpenUiSettings,
   onToggleMeetingRoomRights,
   onToggleAdminRights,
   onOpenResetPassword,
@@ -25,7 +21,6 @@ function AdminPanel({
   onOpenCreateUser,
   onTerminateSession,
   onDeleteFile,
-  onSaveUiSettings,
 }) {
   return (
     <main className="full-page-view">
@@ -75,12 +70,6 @@ function AdminPanel({
             onClick={() => onAdminTabChange('2fa')}
           >
             🔐 2FA
-          </button>
-          <button
-            className={`admin-tab ${activeAdminTab === 'settings' ? 'active' : ''}`}
-            onClick={() => { onAdminTabChange('settings'); onOpenUiSettings(); }}
-          >
-            🎨 Настройки
           </button>
         </div>
 
@@ -447,60 +436,6 @@ function AdminPanel({
               </div>
             )}
 
-            {activeAdminTab === 'settings' && (
-              <div className="admin-ui-settings">
-                <h4>🎨 Настройки интерфейса</h4>
-                <div className="settings-form">
-                  <div className="form-group">
-                    <label>Название сайта</label>
-                    <input
-                      type="text"
-                      value={uiSettings.siteName}
-                      onChange={(e) => setUiSettings({...uiSettings, siteName: e.target.value})}
-                      placeholder="Чат"
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label>URL логотипа</label>
-                    <input
-                      type="text"
-                      value={uiSettings.logoUrl}
-                      onChange={(e) => setUiSettings({...uiSettings, logoUrl: e.target.value})}
-                      placeholder="https://example.com/logo.png"
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label>Основной цвет</label>
-                    <div className="color-picker-group">
-                      <input
-                        type="color"
-                        value={uiSettings.primaryColor}
-                        onChange={(e) => setUiSettings({...uiSettings, primaryColor: e.target.value})}
-                      />
-                      <span>{uiSettings.primaryColor}</span>
-                    </div>
-                  </div>
-                  <div className="form-group">
-                    <label>Вторичный цвет</label>
-                    <div className="color-picker-group">
-                      <input
-                        type="color"
-                        value={uiSettings.secondaryColor}
-                        onChange={(e) => setUiSettings({...uiSettings, secondaryColor: e.target.value})}
-                      />
-                      <span>{uiSettings.secondaryColor}</span>
-                    </div>
-                  </div>
-                  <button
-                    className="btn-primary"
-                    onClick={onSaveUiSettings}
-                    disabled={isSavingUiSettings}
-                  >
-                    {isSavingUiSettings ? 'Сохранение...' : 'Сохранить настройки'}
-                  </button>
-                </div>
-              </div>
-            )}
           </div>
         </div>
     </main>

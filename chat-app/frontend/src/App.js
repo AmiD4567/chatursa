@@ -6,7 +6,7 @@ import { SAFE_EMOJIS } from './safe-emojis';
 import { splitTextByUrls, detectUrls } from './urlUtils';
 import { useReactionParticles } from './ReactionParticlesManager';
 import emojiData from './emojiData.json';
-import { saveMessages, getMessages, saveChats, getChats, queueOutgoing, getOutbox, removeFromOutbox, saveCustomBg, getAllCustomBgs, deleteCustomBg } from './db';
+import { saveMessages, getMessages, saveChats, getChats, queueOutgoing, getOutbox, removeFromOutbox, saveCustomBg, getAllCustomBgs, deleteCustomBg, compareChatsPinnedFirst } from './db';
 import { initE2EEForUser, ensureSharedKey, encryptMessage, decryptMessage, getCachedSharedKey, setE2EEApiBase, getCachedGroupKey, cacheGroupKey, decryptGroupKey, generateGroupKey, encryptGroupKeyForMember, getPeerPublicKey } from './crypto';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
@@ -657,6 +657,22 @@ function App() {
   const [showManageParticipants, setShowManageParticipants] = useState(false);
   const [showAddParticipant, setShowAddParticipant] = useState(false);
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
+  const [showGroupSettings, setShowGroupSettings] = useState(false);
+  const [groupSettingsName, setGroupSettingsName] = useState('');
+  const [groupSettingsDescription, setGroupSettingsDescription] = useState('');
+  const [groupSettingsRestricted, setGroupSettingsRestricted] = useState(false);
+  const [showGroupInfo, setShowGroupInfo] = useState(false);
+  const [groupAvatarError, setGroupAvatarError] = useState(false);
+  const [showAnnouncementEditor, setShowAnnouncementEditor] = useState(false);
+  const [announcementDraft, setAnnouncementDraft] = useState('');
+
+  const getMyGroupRole = () => {
+    if (activeChat?.type !== 'group') return null;
+    const me = activeChat.participantsDetails?.find(p => p.id === currentUser?.id);
+    if (me?.role) return me.role;
+    return activeChat.created_by === currentUser?.id ? 'creator' : 'member';
+  };
+  const isGroupWriteBlocked = () => activeChat?.type === 'group' && activeChat.restricted === 1 && !['creator', 'admin'].includes(getMyGroupRole());
   const [participantSearch, setParticipantSearch] = useState('');
   const [statusEmoji, setStatusEmoji] = useState('');
   const [statusDescription, setStatusDescription] = useState('');
@@ -709,6 +725,7 @@ function App() {
   // Конфетти на праздничные сообщения (анти-дребезг через lastConfettiRef)
   const [confettiKey, setConfettiKey] = useState(0);
   const lastConfettiRef = useRef(0);
+  const confettiShownRef = useRef(new Set());
 
   // Режим выбора сообщений для мульти-пересылки
   const [selectionMode, setSelectionMode] = useState(false);
@@ -812,29 +829,25 @@ function App() {
     return saved || 'light';
   });
 
-  // 20 фонов чата (dark/light)
+  // 16 фонов чата (картинки)
   const chatBackgrounds = [
-    { id: 0, name: 'Нет', dark: 'none', light: 'none' },
-    { id: 1, name: 'Закат', dark: 'linear-gradient(135deg, #1a0a00 0%, #3d1a00 50%, #1a0a00 100%)', light: 'linear-gradient(135deg, #fff5eb 0%, #ffe0b2 50%, #fff5eb 100%)' },
-    { id: 2, name: 'Океан', dark: 'linear-gradient(135deg, #001220 0%, #003355 50%, #001220 100%)', light: 'linear-gradient(135deg, #e3f2fd 0%, #bbdefb 50%, #e3f2fd 100%)' },
-    { id: 3, name: 'Лес', dark: 'linear-gradient(135deg, #001a00 0%, #003d00 50%, #001a00 100%)', light: 'linear-gradient(135deg, #e8f5e9 0%, #c8e6c9 50%, #e8f5e9 100%)' },
-    { id: 4, name: 'Лаванда', dark: 'linear-gradient(135deg, #1a0033 0%, #4a0072 50%, #1a0033 100%)', light: 'linear-gradient(135deg, #f3e5f5 0%, #e1bee7 50%, #f3e5f5 100%)' },
-    { id: 5, name: 'Неон', dark: 'linear-gradient(135deg, #0a0020 0%, #2a0050 50%, #0a0020 100%)', light: 'linear-gradient(135deg, #e8eaf6 0%, #c5cae9 50%, #e8eaf6 100%)' },
-    { id: 6, name: 'Песок', dark: 'linear-gradient(135deg, #1a1400 0%, #3d3000 50%, #1a1400 100%)', light: 'linear-gradient(135deg, #fff8e1 0%, #ffecb3 50%, #fff8e1 100%)' },
-    { id: 7, name: 'Вишня', dark: 'linear-gradient(135deg, #1a0005 0%, #4d0010 50%, #1a0005 100%)', light: 'linear-gradient(135deg, #fce4ec 0%, #f8bbd0 50%, #fce4ec 100%)' },
-    { id: 8, name: 'Мятный', dark: 'linear-gradient(135deg, #001a14 0%, #003d30 50%, #001a14 100%)', light: 'linear-gradient(135deg, #e0f2f1 0%, #b2dfdb 50%, #e0f2f1 100%)' },
-    { id: 9, name: 'Космос', dark: 'linear-gradient(135deg, #000018 0%, #00003d 50%, #000018 100%)', light: 'linear-gradient(135deg, #e3e8f5 0%, #c0c8e8 50%, #e3e8f5 100%)' },
-    { id: 10, name: 'Осень', dark: 'linear-gradient(135deg, #1a0a00 0%, #4a2000 50%, #1a0a00 100%)', light: 'linear-gradient(135deg, #fff3e0 0%, #ffe0b2 50%, #fff3e0 100%)' },
-    { id: 11, name: 'Арктика', dark: 'linear-gradient(135deg, #000d1a 0%, #002040 50%, #000d1a 100%)', light: 'linear-gradient(135deg, #e0f7fa 0%, #b2ebf2 50%, #e0f7fa 100%)' },
-    { id: 12, name: 'Тропики', dark: 'linear-gradient(135deg, #001a10 0%, #003d28 50%, #001a10 100%)', light: 'linear-gradient(135deg, #e0f2e0 0%, #b2dfb2 50%, #e0f2e0 100%)' },
-    { id: 13, name: 'Фиалка', dark: 'linear-gradient(135deg, #0e001a 0%, #2a004d 50%, #0e001a 100%)', light: 'linear-gradient(135deg, #ede7f6 0%, #d1c4e9 50%, #ede7f6 100%)' },
-    { id: 14, name: 'Янтарь', dark: 'linear-gradient(135deg, #1a1000 0%, #4a2d00 50%, #1a1000 100%)', light: 'linear-gradient(135deg, #fff8e1 0%, #ffe082 50%, #fff8e1 100%)' },
-    { id: 15, name: 'Синева', dark: 'linear-gradient(135deg, #000d1a 0%, #003366 50%, #000d1a 100%)', light: 'linear-gradient(135deg, #e3f2fd 0%, #90caf9 50%, #e3f2fd 100%)' },
-    { id: 16, name: 'Шоколад', dark: 'linear-gradient(135deg, #140a05 0%, #3d1f0a 50%, #140a05 100%)', light: 'linear-gradient(135deg, #efebe9 0%, #d7ccc8 50%, #efebe9 100%)' },
-    { id: 17, name: 'Заря', dark: 'linear-gradient(135deg, #1a0010 0%, #4d0030 50%, #1a0010 100%)', light: 'linear-gradient(135deg, #fce4ec 0%, #f48fb1 50%, #fce4ec 100%)' },
-    { id: 18, name: 'Изумруд', dark: 'linear-gradient(135deg, #001a0a 0%, #004d20 50%, #001a0a 100%)', light: 'linear-gradient(135deg, #e0f2e0 0%, #a5d6a7 50%, #e0f2e0 100%)' },
-    { id: 19, name: 'Туман', dark: 'linear-gradient(135deg, #0d0d0d 0%, #2d2d2d 50%, #0d0d0d 100%)', light: 'linear-gradient(135deg, #f5f5f5 0%, #e0e0e0 50%, #f5f5f5 100%)' },
-    { id: 20, name: 'Пламя', dark: 'linear-gradient(135deg, #1a0500 0%, #4d1500 50%, #1a0500 100%)', light: 'linear-gradient(135deg, #fbe9e7 0%, #ffab91 50%, #fbe9e7 100%)' },
+    { id: 0, name: 'Нет', image: null },
+    { id: 1, name: 'Зимняя сказка', image: '/backgrounds/winter-wonderland.jpg' },
+    { id: 2, name: 'Горы', image: '/backgrounds/mountains-pink.jpg' },
+    { id: 3, name: 'Зимняя аллея', image: '/backgrounds/winter-alley.jpg' },
+    { id: 4, name: 'Йосемити', image: '/backgrounds/yosemite.jpg' },
+    { id: 5, name: 'Космонавт', image: '/backgrounds/astronaut.jpg' },
+    { id: 6, name: 'Авокадо', image: '/backgrounds/avocado.jpg' },
+    { id: 7, name: 'Кофе у моря', image: '/backgrounds/coffee-beach.jpg' },
+    { id: 8, name: 'Волны', image: '/backgrounds/waves.jpg' },
+    { id: 9, name: 'Краски', image: '/backgrounds/paint.jpg' },
+    { id: 10, name: 'Осенние листья', image: '/backgrounds/autumn-leaves.jpg' },
+    { id: 11, name: 'Океан', image: '/backgrounds/ocean.jpg' },
+    { id: 12, name: 'Закат у моря', image: '/backgrounds/sunset-sea.jpg' },
+    { id: 13, name: 'Осенний лес', image: '/backgrounds/autumn-forest.jpg' },
+    { id: 14, name: 'Рождество', image: '/backgrounds/christmas.jpg' },
+    { id: 15, name: 'Лаванда', image: '/backgrounds/lavender.jpg' },
+    { id: 16, name: 'Сакура', image: '/backgrounds/sakura.jpg' },
   ];
 
   // Автозапуск (только Electron)
@@ -883,16 +896,6 @@ function App() {
   const [securityLogs, setSecurityLogs] = useState([]);
   const [showSecurityLogsModal, setShowSecurityLogsModal] = useState(false);
   
-  // Настройки интерфейса
-  const [uiSettings, setUiSettings] = useState({
-    siteName: 'Чат',
-    logoUrl: '',
-    primaryColor: '#667eea',
-    secondaryColor: '#764ba2'
-  });
-  const [showUiSettingsModal, setShowUiSettingsModal] = useState(false);
-  const [isSavingUiSettings, setIsSavingUiSettings] = useState(false);
-
   const messagesEndRef = useRef(null);
   // Привязка к низу: true пока пользователь у последнего сообщения
   const followBottomRef = useRef(true);
@@ -922,6 +925,34 @@ function App() {
 
   // Вычисляем активный чат по ID
   const activeChat = chats.find(c => c.id === activeChatId) || null;
+
+  useEffect(() => { setGroupAvatarError(false); }, [activeChat?.id, activeChat?.avatar]);
+
+  // Конфетти при открытии чата, если среди недавних входящих есть праздничное сообщение
+  useEffect(() => {
+    if (!activeChatId) return;
+    const myId = currentUserRef.current?.id;
+    const t = setTimeout(() => {
+      const recent = messages.slice(-30);
+      const now = Date.now();
+      for (const m of recent) {
+        if (m.senderId === myId) continue;
+        // только недавние (≤24ч), чтобы не спамить старыми сообщениями
+        const ts = m.timestamp ? new Date(m.timestamp).getTime() : 0;
+        if (ts && now - ts > 24 * 3600 * 1000) continue;
+        if (confettiShownRef.current.has(m.id)) continue;
+        if (shouldTriggerConfetti(stripStickerMarkers(m.text || ''))) {
+          if (now - lastConfettiRef.current > 5000) {
+            lastConfettiRef.current = now;
+            setConfettiKey(k => k + 1);
+          }
+          confettiShownRef.current.add(m.id);
+          break;
+        }
+      }
+    }, 350);
+    return () => clearTimeout(t);
+  }, [activeChatId, messages]);
 
   // Получаем правильное имя для чата (для личных чатов - имя собеседника)
   const getChatDisplayName = (chat) => {
@@ -1184,13 +1215,12 @@ function App() {
       return;
     }
     const bg = chatBackgrounds.find(b => b.id === (userUiSettings.chatBackground || 0));
-    if (bg && bg.id !== 0) {
-      const gradient = appTheme === 'light' ? bg.light : bg.dark;
-      document.documentElement.style.setProperty('--chat-bg-image', gradient);
+    if (bg && bg.id !== 0 && bg.image) {
+      document.documentElement.style.setProperty('--chat-bg-image', `url("${bg.image}")`);
     } else {
       document.documentElement.style.removeProperty('--chat-bg-image');
     }
-  }, [userUiSettings.chatBackground, userUiSettings.chatBackgroundImage, activeCustomBgUrl, appTheme]);
+  }, [userUiSettings.chatBackground, userUiSettings.chatBackgroundImage, activeCustomBgUrl]);
 
   // Загрузка состояния автозапуска (только Electron)
   useEffect(() => {
@@ -1874,22 +1904,27 @@ function App() {
       // Сохраняем в IndexedDB для офлайн-доступа
       saveMessages(message.chatId, [message]).catch(err => console.error('[Offline] save msg error:', err));
 
-      // Конфетти на праздничные слова/эмодзи (свои и чужие сообщения, кроме замьюченных чатов)
+      // Используем currentUserRef.current и activeChatIdRef.current для актуальных значений
+      const myId = currentUserRef.current?.id;
+      const isMyMessage = isOwnMessage || message.senderId === myId;
+      const isChatActive = message.chatId === activeChatIdRef.current;
+
+      // Конфетти ТОЛЬКО когда пользователь реально читает сообщение:
+      // - своё сообщение видно сразу при отправке;
+      // - чужое — только если чат открыт, приложение видно и в фокусе.
       try {
-        if (shouldTriggerConfetti(stripStickerMarkers(message.text || ''))) {
+        const readNow = isMyMessage ||
+          (isChatActive && isAppVisibleRef.current && isWindowFocusedRef.current);
+        if (readNow && shouldTriggerConfetti(stripStickerMarkers(message.text || ''))) {
           const isMuted = !!chatsRef.current.find(c => c.id === message.chatId)?.muted;
           const now = Date.now();
           if (!isMuted && now - lastConfettiRef.current > 5000) {
             lastConfettiRef.current = now;
             setConfettiKey(k => k + 1);
+            confettiShownRef.current.add(message.id);
           }
         }
       } catch (e) { /* эффект необязателен */ }
-
-      // Используем currentUserRef.current и activeChatIdRef.current для актуальных значений
-      const myId = currentUserRef.current?.id;
-      const isMyMessage = isOwnMessage || message.senderId === myId;
-      const isChatActive = message.chatId === activeChatIdRef.current;
 
       // Показываем уведомление если:
       // 1. Сообщение не от нас
@@ -1998,12 +2033,7 @@ function App() {
             }
             return c;
           });
-          return updated.sort((a, b) => {
-            if (!!a.pinned !== !!b.pinned) return !!a.pinned ? -1 : 1;
-            const aTime = a.lastMessage?.timestamp || a.createdAt;
-            const bTime = b.lastMessage?.timestamp || b.createdAt;
-            return new Date(bTime) - new Date(aTime);
-          });
+          return updated.sort(compareChatsPinnedFirst);
         } else {
           // Чат не существует - добавляем его (например, при пересылке в новый чат)
           console.log('Новый чат не найден в списке, добавляем:', chat);
@@ -2012,16 +2042,12 @@ function App() {
             unreadCount: isMyMessage ? 0 : 1,
             lastMessage: {
               text: stripStickerMarkers(message.text) || (message.file ? '📎 Файл' : ''),
-              timestamp: message.timestamp,
+              timestamp: message.timestamp || new Date().toISOString(),
               senderName: message.senderName,
               senderId: message.senderId
             }
           };
-          return [...prev, newChat].sort((a, b) => {
-            const aTime = a.lastMessage?.timestamp || a.createdAt;
-            const bTime = b.lastMessage?.timestamp || b.createdAt;
-            return new Date(bTime) - new Date(aTime);
-          });
+          return [...prev, newChat].sort(compareChatsPinnedFirst);
         }
       });
 
@@ -2059,7 +2085,7 @@ function App() {
     newSocket.on('chat_created', ({ chat }) => {
       setChats(prev => {
         if (prev.find(c => c.id === chat.id)) return prev;
-        const newChats = [...prev, chat];
+        const newChats = [...prev, chat].sort(compareChatsPinnedFirst);
         saveChats(newChats).catch(() => {});
         return newChats;
       });
@@ -2091,6 +2117,9 @@ function App() {
           console.log('chat_updated: новый чат не найден, добавляем:', chat);
           result = [...prev, { ...chat, unreadCount: 0 }];
         }
+        // Всегда пересортировываем, чтобы новый/обновлённый чат встал наверх
+        // (раньше здесь не было sort — чат просто дописывался в конец списка).
+        result = result.sort(compareChatsPinnedFirst);
         saveChats(result).catch(() => {});
         return result;
       });
@@ -2322,26 +2351,44 @@ function App() {
     });
 
     // Обработка событий группы
-    newSocket.on('participant_left', ({ chatId, userId }) => {
-      setChats(prev => prev.map(chat => {
-        if (chat.id !== chatId || !chat.participantsDetails) return chat;
-        return {
-          ...chat,
-          participantsDetails: chat.participantsDetails.filter(p => p.id !== userId),
-          participants: chat.participantsDetails.filter(p => p.id !== userId).map(p => p.username)
-        };
-      }));
-      setUsers(prev => prev.filter(u => u.id !== userId));
+    const updateGroupChat = (chat) => {
+      if (!chat) return;
+      setChats(prev => prev.map(c => c.id === chat.id ? chat : c));
+    };
+
+    newSocket.on('participant_left', ({ chatId, chat }) => {
+      updateGroupChat(chat);
     });
 
-    newSocket.on('participant_added', ({ chatId, userId }) => {
-      // Обновим чаты принудительно (перезагрузка списка произойдёт при следующем входе)
-      setChats(prev => prev.map(chat => {
-        if (chat.id === chatId) {
-          return { ...chat, _refresh: Date.now() };
-        }
-        return chat;
-      }));
+    newSocket.on('participant_added', ({ chatId, chat }) => {
+      updateGroupChat(chat);
+    });
+
+    newSocket.on('participant_role_changed', ({ chatId, chat }) => {
+      updateGroupChat(chat);
+    });
+
+    newSocket.on('ownership_transferred', ({ chatId, chat }) => {
+      updateGroupChat(chat);
+    });
+
+    newSocket.on('group_settings_updated', ({ chatId, chat }) => {
+      updateGroupChat(chat);
+    });
+
+    newSocket.on('group_event', (ev) => {
+      if (!ev || ev.chatId !== activeChatIdRef.current) return;
+      setMessages(prev => [...prev, {
+        id: ev.messageId,
+        chatId: ev.chatId,
+        senderId: ev.actorId,
+        senderName: ev.actorName,
+        text: ev.text,
+        timestamp: ev.timestamp,
+        isSystem: true,
+        systemActor: ev.actorName,
+        systemText: ev.text
+      }]);
     });
 
     newSocket.on('removed_from_chat', ({ chatId }) => {
@@ -3418,54 +3465,6 @@ function App() {
   const handleOpenSecurityLogs = () => {
     loadSecurityLogs();
     setShowSecurityLogsModal(true);
-  };
-
-  // Загрузка настроек интерфейса
-  const loadUiSettings = async () => {
-    try {
-      const response = await fetch(`${SOCKET_URL}/api/admin/ui-settings`);
-      if (response.ok) {
-        const data = await response.json();
-        if (data.settings) {
-          setUiSettings(data.settings);
-        }
-      }
-    } catch (err) {
-      console.error('Ошибка загрузки настроек:', err);
-    }
-  };
-
-  const handleSaveUiSettings = async () => {
-    setIsSavingUiSettings(true);
-    
-    try {
-      const response = await fetch(`${SOCKET_URL}/api/admin/ui-settings`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(uiSettings)
-      });
-      
-      if (response.ok) {
-        alert('Настройки сохранены');
-        setShowUiSettingsModal(false);
-        // Применяем настройки
-        document.documentElement.style.setProperty('--primary-color', uiSettings.primaryColor);
-        document.documentElement.style.setProperty('--secondary-color', uiSettings.secondaryColor);
-        document.title = uiSettings.siteName;
-      } else {
-        alert('Ошибка сохранения настроек');
-      }
-    } catch (err) {
-      console.error('Ошибка сохранения настроек:', err);
-      alert('Ошибка соединения с сервером');
-    } finally {
-      setIsSavingUiSettings(false);
-    }
-  };
-
-  const handleOpenUiSettings = () => {
-    loadUiSettings();
-    setShowUiSettingsModal(true);
   };
 
   const handleOpenPhonebook = () => {
@@ -4742,6 +4741,10 @@ function App() {
   };
 
   const handleSendMessage = async (e) => {
+    if (isGroupWriteBlocked()) {
+      e?.preventDefault?.();
+      return;
+    }
     e.preventDefault();
     if (!socket || (!hasInputContent() && !selectedFile) || !activeChatId) return;
 
@@ -5893,28 +5896,63 @@ return parts.length > 0 ? parts : text;
     }
   };
 
-  // Загрузка аватара группового чата (любой участник)
+  // Кроп изображения в квадрат (cover) через canvas
+  const cropImageToSquare = (file, size) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const side = Math.min(img.width, img.height);
+        const sx = (img.width - side) / 2;
+        const sy = (img.height - side) / 2;
+        ctx.drawImage(img, sx, sy, side, side, 0, 0, size, size);
+        resolve(canvas.toDataURL('image/png'));
+      };
+      img.onerror = reject;
+      img.src = reader.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+
+  // Преобразование data-URL в Blob (без fetch, который нестабилен для data: URL)
+  const dataURLtoBlob = (dataURL) => {
+    const [meta, b64] = dataURL.split(',');
+    const mime = (meta.match(/:(.*?);/) || [])[1] || 'image/png';
+    const bin = atob(b64);
+    const arr = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    return new Blob([arr], { type: mime });
+  };
+
+  // Загрузка/смена аватара группового чата (только админ/владелец; кроп на клиенте)
   const handleUploadGroupChatAvatar = async (e, chatId) => {
-    const file = e.target.files[0];
+    const file = e.target.files && e.target.files[0];
     if (!file || !currentUser) return;
-
-    const formData = new FormData();
-    formData.append('avatar', file);
-    formData.append('chatId', chatId);
-    formData.append('userId', currentUser.id);
-
     try {
+      const dataUrl = await cropImageToSquare(file, 512);
+      const blob = dataURLtoBlob(dataUrl);
+      const formData = new FormData();
+      formData.append('avatar', blob, file.name || 'avatar.png');
+      formData.append('chatId', chatId);
+      formData.append('userId', currentUser.id);
       const response = await fetch(`${SOCKET_URL}/api/upload-group-chat-avatar`, {
         method: 'POST',
         body: formData
       });
       if (!response.ok) {
-        const err = await response.json();
+        const err = await response.json().catch(() => ({}));
         alert('Ошибка: ' + (err.error || 'Не удалось загрузить аватар'));
       }
     } catch (err) {
       console.error('Ошибка загрузки аватара группы:', err);
-      alert('Ошибка соединения с сервером');
+      alert('Ошибка загрузки аватара: ' + (err?.message || 'файл не является изображением'));
+    } finally {
+      if (e.target) e.target.value = '';
     }
   };
 
@@ -7663,6 +7701,165 @@ return parts.length > 0 ? parts : text;
     }
   };
 
+  // Назначить участника администратором (только владелец)
+  const handleAddAdmin = async (targetUserId) => {
+    if (!activeChat || !currentUser) return;
+    try {
+      const resp = await fetch(`${SOCKET_URL}/api/chats/${activeChat.id}/admins`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requesterId: currentUser.id, targetUserId })
+      });
+      const data = await resp.json();
+      if (resp.ok) {
+        setChats(prev => prev.map(c => c.id === activeChat.id ? data.chat : c));
+      } else {
+        alert(data.error || 'Ошибка назначения админа');
+      }
+    } catch (err) {
+      console.error('Ошибка назначения админа:', err);
+    }
+  };
+
+  // Снять полномочия администратора (только владелец)
+  const handleRemoveAdmin = async (targetUserId) => {
+    if (!activeChat || !currentUser) return;
+    try {
+      const resp = await fetch(`${SOCKET_URL}/api/chats/${activeChat.id}/admins/${targetUserId}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requesterId: currentUser.id })
+      });
+      const data = await resp.json();
+      if (resp.ok) {
+        setChats(prev => prev.map(c => c.id === activeChat.id ? data.chat : c));
+      } else {
+        alert(data.error || 'Ошибка снятия админа');
+      }
+    } catch (err) {
+      console.error('Ошибка снятия админа:', err);
+    }
+  };
+
+  // Передача владения группой (только владелец)
+  const handleTransferOwnership = async (targetUserId) => {
+    if (!activeChat || !currentUser) return;
+    try {
+      const resp = await fetch(`${SOCKET_URL}/api/chats/${activeChat.id}/transfer`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requesterId: currentUser.id, targetUserId })
+      });
+      const data = await resp.json();
+      if (resp.ok) {
+        setChats(prev => prev.map(c => c.id === activeChat.id ? data.chat : c));
+        setShowManageParticipants(false);
+        setShowAddParticipant(false);
+      } else {
+        alert(data.error || 'Ошибка передачи владения');
+      }
+    } catch (err) {
+      console.error('Ошибка передачи владения:', err);
+    }
+  };
+
+  // Открыть модалку настроек группы
+  const handleOpenGroupSettings = () => {
+    if (!activeChat) return;
+    setGroupSettingsName(activeChat.name || '');
+    setGroupSettingsDescription(activeChat.description || '');
+    setGroupSettingsRestricted(!!activeChat.restricted);
+    setShowGroupSettings(true);
+    setShowChatMenu(false);
+  };
+
+  // Сохранить настройки группы (название, описание, режим)
+  const handleSaveGroupSettings = async () => {
+    if (!activeChat || !currentUser) return;
+    try {
+      const name = groupSettingsName.trim();
+      if (name && name !== activeChat.name) {
+        await fetch(`${SOCKET_URL}/api/chats/${activeChat.id}`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ requesterId: currentUser.id, name })
+        });
+      }
+      await fetch(`${SOCKET_URL}/api/chats/${activeChat.id}/description`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requesterId: currentUser.id, description: groupSettingsDescription })
+      });
+      if (!!groupSettingsRestricted !== !!activeChat.restricted) {
+        await fetch(`${SOCKET_URL}/api/chats/${activeChat.id}/restricted`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ requesterId: currentUser.id, restricted: groupSettingsRestricted })
+        });
+      }
+      setShowGroupSettings(false);
+    } catch (err) {
+      console.error('Ошибка сохранения настроек:', err);
+      alert('Ошибка сохранения настроек группы');
+    }
+  };
+
+  // Удаление группы (только владелец)
+  const handleDeleteGroup = async () => {
+    if (!activeChat || !currentUser) return;
+    if (!window.confirm('Удалить группу? Чат исчезнет у всех участников безвозвратно.')) return;
+    try {
+      const resp = await fetch(`${SOCKET_URL}/api/chats/${activeChat.id}?userId=${currentUser.id}`, { method: 'DELETE' });
+      if (resp.ok) {
+        setChats(prev => prev.filter(c => c.id !== activeChat.id));
+        setActiveChatId(null);
+        setMessages([]);
+      } else {
+        const data = await resp.json();
+        alert(data.error || 'Ошибка удаления группы');
+      }
+    } catch (err) {
+      console.error('Ошибка удаления группы:', err);
+    }
+  };
+
+  // Сохранить объявление группы (владелец/админ)
+  const handleSaveAnnouncement = async () => {
+    if (!activeChat || !currentUser) return;
+    try {
+      const resp = await fetch(`${SOCKET_URL}/api/chats/${activeChat.id}/announcement`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requesterId: currentUser.id, announcement: announcementDraft })
+      });
+      const data = await resp.json();
+      if (resp.ok) {
+        setChats(prev => prev.map(c => c.id === activeChat.id ? data.chat : c));
+      } else {
+        alert(data.error || 'Ошибка сохранения объявления');
+      }
+    } catch (err) {
+      console.error('Ошибка объявления:', err);
+    }
+    setShowAnnouncementEditor(false);
+  };
+
+  // Удалить объявление группы
+  const handleClearAnnouncement = async () => {
+    if (!activeChat || !currentUser) return;
+    try {
+      const resp = await fetch(`${SOCKET_URL}/api/chats/${activeChat.id}/announcement`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requesterId: currentUser.id, announcement: '' })
+      });
+      const data = await resp.json();
+      if (resp.ok) {
+        setChats(prev => prev.map(c => c.id === activeChat.id ? data.chat : c));
+      }
+    } catch (err) {
+      console.error('Ошибка удаления объявления:', err);
+    }
+    setShowAnnouncementEditor(false);
+  };
+
   const handleMessageMenuClick = (e, message) => {
     e.stopPropagation();
     const rect = e.currentTarget.getBoundingClientRect();
@@ -9002,12 +9199,6 @@ return parts.length > 0 ? parts : text;
                 🛡️ Безопасность
               </button>
               <button
-                className={`admin-tab ${activeAdminTab === 'settings' ? 'active' : ''}`}
-                onClick={() => { setActiveAdminTab('settings'); handleOpenUiSettings(); }}
-              >
-                🎨 Настройки
-              </button>
-              <button
                 className={`admin-tab ${activeAdminTab === 'bot' ? 'active' : ''}`}
                 onClick={() => { setActiveAdminTab('bot'); loadBotAnalytics(); loadBotSettings(); }}
               >
@@ -9343,61 +9534,6 @@ return parts.length > 0 ? parts : text;
                         )}
                       </tbody>
                     </table>
-                  </div>
-                )}
-
-                {activeAdminTab === 'settings' && (
-                  <div className="admin-ui-settings">
-                    <h4>🎨 Настройки интерфейса</h4>
-                    <div className="settings-form">
-                      <div className="form-group">
-                        <label>Название сайта</label>
-                        <input
-                          type="text"
-                          value={uiSettings.siteName}
-                          onChange={(e) => setUiSettings({...uiSettings, siteName: e.target.value})}
-                          placeholder="Чат"
-                        />
-                      </div>
-                      <div className="form-group">
-                        <label>URL логотипа</label>
-                        <input
-                          type="text"
-                          value={uiSettings.logoUrl}
-                          onChange={(e) => setUiSettings({...uiSettings, logoUrl: e.target.value})}
-                          placeholder="https://example.com/logo.png"
-                        />
-                      </div>
-                      <div className="form-group">
-                        <label>Основной цвет</label>
-                        <div className="color-picker-group">
-                          <input
-                            type="color"
-                            value={uiSettings.primaryColor}
-                            onChange={(e) => setUiSettings({...uiSettings, primaryColor: e.target.value})}
-                          />
-                          <span>{uiSettings.primaryColor}</span>
-                        </div>
-                      </div>
-                      <div className="form-group">
-                        <label>Вторичный цвет</label>
-                        <div className="color-picker-group">
-                          <input
-                            type="color"
-                            value={uiSettings.secondaryColor}
-                            onChange={(e) => setUiSettings({...uiSettings, secondaryColor: e.target.value})}
-                          />
-                          <span>{uiSettings.secondaryColor}</span>
-                        </div>
-                      </div>
-                      <button
-                        className="btn-primary"
-                        onClick={handleSaveUiSettings}
-                        disabled={isSavingUiSettings}
-                      >
-                        {isSavingUiSettings ? 'Сохранение...' : 'Сохранить настройки'}
-                      </button>
-                    </div>
                   </div>
                 )}
 
@@ -9848,12 +9984,7 @@ return parts.length > 0 ? parts : text;
             </div>
           ) : (
             <div className="chats-list">
-              {chats.sort((a, b) => {
-                if (!!a.pinned !== !!b.pinned) return !!a.pinned ? -1 : 1;
-                const aTime = a.lastMessage?.timestamp || a.createdAt;
-                const bTime = b.lastMessage?.timestamp || b.createdAt;
-                return new Date(bTime) - new Date(aTime);
-              }).map(chat => {
+              {chats.sort(compareChatsPinnedFirst).map(chat => {
               // Находим ID пользователя для личных чатов
               const otherUserId = chat.type === 'direct' && chat.participantsDetails
                 ? chat.participantsDetails.find(p => p.username !== currentUser?.username)?.id
@@ -10085,9 +10216,9 @@ return parts.length > 0 ? parts : text;
                 ) : activeChat.type === 'group' ? (
                   <div style={{ cursor: 'pointer' }} title="Просмотр аватара">
                     {activeChat.avatar ? (
-                      <img src={activeChat.avatar} alt={activeChat.name} className="chat-header-avatar" onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || 'U')}`; }} onClick={() => setPreviewAvatar({ src: activeChat.avatar, chatId: activeChat.id })} />
+                      <img src={activeChat.avatar} alt={activeChat.name} className="chat-header-avatar" onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || 'U')}`; }} onClick={() => setShowGroupInfo(true)} />
                     ) : (
-                      <span className="chat-icon-large" onClick={() => document.getElementById(`group-avatar-${activeChat.id}`).click()}>{getChatIcon(activeChat)}</span>
+                      <span className="chat-icon-large" onClick={() => setShowGroupInfo(true)}>{getChatIcon(activeChat)}</span>
                     )}
                     <input id={`group-avatar-${activeChat.id}`} type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => handleUploadGroupChatAvatar(e, activeChat.id)} />
                   </div>
@@ -10284,6 +10415,18 @@ return parts.length > 0 ? parts : text;
                   )}
                 </>
               )}
+              {activeChat?.type === 'group' && activeChat.announcement && (
+                <div className={`group-announcement-bar${['creator', 'admin'].includes(getMyGroupRole()) ? ' editable' : ''}`}>
+                  <span className="group-announcement-icon">📌</span>
+                  <span className="group-announcement-text">{activeChat.announcement}</span>
+                  {['creator', 'admin'].includes(getMyGroupRole()) && (
+                    <>
+                      <button className="group-announcement-edit" onClick={() => { setAnnouncementDraft(activeChat.announcement); setShowAnnouncementEditor(true); }} title="Изменить">✏️</button>
+                      <button className="group-announcement-remove" onClick={handleClearAnnouncement} title="Удалить">✕</button>
+                    </>
+                  )}
+                </div>
+              )}
               {messages.filter(m => m.id).map((message, index) => {
                 // Определяем, является ли сообщение частью группы (предыдущее от того же пользователя)
                 const prevMessage = index > 0 ? messages[index - 1] : null;
@@ -10303,6 +10446,16 @@ return parts.length > 0 ? parts : text;
                 const currentDate = new Date(message.timestamp).toDateString();
                 const prevDate = prevMessage ? new Date(prevMessage.timestamp).toDateString() : null;
                 const showDateSeparator = !prevDate || currentDate !== prevDate;
+
+                if (message.is_system || message.isSystem) {
+                  const sysActor = message.systemActor || message.senderName || message.sender_name || '';
+                  const sysText = message.systemText || message.text || '';
+                  return (
+                    <div key={message.id} className="message-system">
+                      <span className="message-system-text">{sysActor ? `${sysActor} ` : ''}{sysText}</span>
+                    </div>
+                  );
+                }
 
                 return (
                   <>
@@ -10624,6 +10777,11 @@ return parts.length > 0 ? parts : text;
                 </div>
               )}
               <form className="message-form-main" style={{ position: 'relative' }} onSubmit={handleSendMessage}>
+              {isGroupWriteBlocked() && (
+                <div className="group-write-blocked">
+                  🔒 Только администраторы могут писать в этой группе
+                </div>
+              )}
               {/* Inline picker смайлов */}
               <EmojiInlinePicker
                 show={showEmojiPicker}
@@ -10684,8 +10842,8 @@ return parts.length > 0 ? parts : text;
               </div>
               <div
                 ref={messageInputRef}
-                className={`message-input-contenteditable ${isEditMode ? 'edit-mode-active' : ''}`}
-                contentEditable
+                className={`message-input-contenteditable ${isEditMode ? 'edit-mode-active' : ''}${isGroupWriteBlocked() ? ' input-blocked' : ''}`}
+                contentEditable={!isGroupWriteBlocked()}
                 suppressContentEditableWarning
                 data-placeholder="Введите сообщение..."
                 onContextMenu={handleInputContextMenu}
@@ -10757,7 +10915,7 @@ return parts.length > 0 ? parts : text;
                   </svg>
                 </button>
                 )}
-                <button type="submit" disabled={isUploading || (!hasInputContent() && !selectedFile)}>
+                <button type="submit" disabled={isUploading || isGroupWriteBlocked() || (!hasInputContent() && !selectedFile)}>
                   {isUploading ? '⏳' : '➤'}
                 </button>
               </div>
@@ -10812,16 +10970,30 @@ return parts.length > 0 ? parts : text;
                 )}
                 {activeChat?.type === 'group' && (
                   <>
-                    {activeChat.created_by === currentUser?.id && (
+                    {['creator', 'admin'].includes(getMyGroupRole()) && (
                       <div className="chat-menu-item" onClick={handleManageParticipants}>
                         <span className="menu-icon"><span className="emoji-animated">👥</span></span>
                         <span>Управление участниками</span>
                       </div>
                     )}
-                    <div className="chat-menu-item" onClick={handleLeaveGroup}>
-                      <span className="menu-icon"><span className="emoji-animated">🚪</span></span>
-                      <span>Выйти из группы</span>
-                    </div>
+                    {['creator', 'admin'].includes(getMyGroupRole()) && (
+                      <div className="chat-menu-item" onClick={handleOpenGroupSettings}>
+                        <span className="menu-icon"><span className="emoji-animated">⚙️</span></span>
+                        <span>Настройки группы</span>
+                      </div>
+                    )}
+                    {getMyGroupRole() === 'creator' && (
+                      <div className="chat-menu-item danger" onClick={handleDeleteGroup}>
+                        <span className="menu-icon"><span className="emoji-animated">🗑️</span></span>
+                        <span>Удалить группу</span>
+                      </div>
+                    )}
+                    {getMyGroupRole() !== 'creator' && (
+                      <div className="chat-menu-item" onClick={handleLeaveGroup}>
+                        <span className="menu-icon"><span className="emoji-animated">🚪</span></span>
+                        <span>Выйти из группы</span>
+                      </div>
+                    )}
                   </>
                 )}
                 <div className="chat-menu-divider"></div>
@@ -12369,7 +12541,6 @@ return parts.length > 0 ? parts : text;
                           <div className="chat-bg-custom-header">Стандартные</div>
                         )}
                         {chatBackgrounds.map(bg => {
-                          const gradient = appTheme === 'light' ? bg.light : bg.dark;
                           return (
                             <button
                               type="button"
@@ -12380,7 +12551,7 @@ return parts.length > 0 ? parts : text;
                                 setUserUiSettings({...userUiSettings, chatBackground: bg.id, chatBackgroundImage: null, chatBackgroundCustomId: null});
                               }}
                             >
-                              <div className="chat-bg-preview" style={{ background: bg.id === 0 ? 'transparent' : gradient }} />
+                              <div className="chat-bg-preview" style={bg.id === 0 ? { background: 'transparent' } : { backgroundImage: `url("${bg.image}")`, backgroundSize: 'cover', backgroundPosition: 'center' }} />
                               <span className="chat-bg-name">{bg.name}</span>
                             </button>
                           );
@@ -14170,16 +14341,27 @@ return parts.length > 0 ? parts : text;
                   <img src={p.avatar || `https://ui-avatars.com/api/?name=${p.username}`} alt={p.username} className="manage-participant-avatar" />
                   <div className="manage-participant-info">
                     <span className="manage-participant-name">{p.username}</span>
-                    {activeChat.created_by === p.id && <span className="manage-participant-badge">Создатель</span>}
+                    {p.role === 'creator' && <span className="manage-participant-badge owner">Владелец</span>}
+                    {p.role === 'admin' && <span className="manage-participant-badge admin">Админ</span>}
                   </div>
-                  {activeChat.created_by === currentUser?.id && p.id !== currentUser?.id && (
-                    <button className="manage-participant-remove" onClick={() => handleRemoveParticipant(p.id)} title="Удалить из группы">✕</button>
-                  )}
+                  <div className="manage-participant-actions">
+                    {getMyGroupRole() === 'creator' && p.role !== 'creator' && p.id !== currentUser?.id && (
+                      p.role === 'admin'
+                        ? <button className="manage-participant-btn" onClick={() => handleRemoveAdmin(p.id)} title="Снять администратора">⬇</button>
+                        : <button className="manage-participant-btn" onClick={() => handleAddAdmin(p.id)} title="Назначить администратором">⬆</button>
+                    )}
+                    {getMyGroupRole() === 'creator' && p.role !== 'creator' && p.id !== currentUser?.id && (
+                      <button className="manage-participant-btn" onClick={() => { if (window.confirm(`Передать владение группой пользователю ${p.username}?`)) handleTransferOwnership(p.id); }} title="Передать владение">👑</button>
+                    )}
+                    {['creator', 'admin'].includes(getMyGroupRole()) && p.role !== 'creator' && p.id !== currentUser?.id && (
+                      <button className="manage-participant-remove" onClick={() => handleRemoveParticipant(p.id)} title="Удалить из группы">✕</button>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
             <div className="modal-footer" style={{ flexDirection: 'column', gap: 8 }}>
-              {activeChat?.created_by === currentUser?.id && !showAddParticipant && (
+              {['creator', 'admin'].includes(getMyGroupRole()) && !showAddParticipant && (
                 <button className="create-btn" style={{ width: '100%' }} onClick={() => setShowAddParticipant(true)}>
                   + Добавить участника
                 </button>
@@ -14221,6 +14403,119 @@ return parts.length > 0 ? parts : text;
         </div>
       )}
 
+      {/* Модальное окно настроек группы */}
+      {showGroupSettings && (
+        <div className="modal-overlay" onClick={() => setShowGroupSettings(false)}>
+          <div className="modal-content" style={{ maxWidth: 440 }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>⚙️ Настройки группы</h3>
+              <button onClick={() => setShowGroupSettings(false)}>✕</button>
+            </div>
+            <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <label className="modal-label">Название группы</label>
+              <input className="modal-input" value={groupSettingsName} onChange={e => setGroupSettingsName(e.target.value)} maxLength={100} placeholder="Название группы" />
+              <label className="modal-label">Описание</label>
+              <textarea className="modal-input" value={groupSettingsDescription} onChange={e => setGroupSettingsDescription(e.target.value)} maxLength={500} rows={3} placeholder="Описание группы" />
+              <label className="modal-checkbox-label">
+                <input type="checkbox" checked={groupSettingsRestricted} onChange={e => setGroupSettingsRestricted(e.target.checked)} />
+                Только администраторы могут писать
+              </label>
+            </div>
+            <div className="modal-footer">
+              <button className="cancel-btn" onClick={() => setShowGroupSettings(false)}>Отмена</button>
+              <button className="create-btn" onClick={handleSaveGroupSettings}>Сохранить</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Карточка группы (Информация о группе) */}
+      {showGroupInfo && activeChat?.type === 'group' && (
+        <div className="modal-overlay" onClick={() => setShowGroupInfo(false)}>
+          <div className="modal-content group-info-modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>👥 {activeChat.name}</h3>
+              <button onClick={() => setShowGroupInfo(false)}>✕</button>
+            </div>
+            <div className="modal-body group-info-body">
+              <div className="group-info-avatar-wrap">
+              {activeChat.avatar && !groupAvatarError ? (
+                <img
+                  src={activeChat.avatar}
+                  className="group-info-avatar"
+                  onError={() => setGroupAvatarError(true)}
+                  onClick={() => ['creator', 'admin'].includes(getMyGroupRole())
+                    ? document.getElementById(`group-avatar-${activeChat.id}`).click()
+                    : setPreviewAvatar({ src: activeChat.avatar, chatId: activeChat.id })}
+                />
+                ) : (
+                  <div
+                    className="group-info-avatar group-info-avatar-empty"
+                    onClick={() => ['creator', 'admin'].includes(getMyGroupRole()) ? document.getElementById(`group-avatar-${activeChat.id}`).click() : null}
+                  >
+                    {getChatIcon(activeChat)}
+                  </div>
+                )}
+                {['creator', 'admin'].includes(getMyGroupRole()) && (
+                  <button className="group-info-avatar-edit" onClick={() => document.getElementById(`group-avatar-${activeChat.id}`).click()} title="Сменить аватар">✏️</button>
+                )}
+              </div>
+              <div className="group-info-name">{activeChat.name}</div>
+              {activeChat.description && <div className="group-info-desc">{activeChat.description}</div>}
+              <div className="group-info-meta">Участников: {activeChat.participantsDetails?.length || 0}</div>
+
+              <div className="group-info-announcement">
+                <div className="group-info-section-label">📌 Объявление</div>
+                {activeChat.announcement ? (
+                  <div className="group-info-announcement-text">{activeChat.announcement}</div>
+                ) : (
+                  <div className="group-info-announcement-empty">нет</div>
+                )}
+                {['creator', 'admin'].includes(getMyGroupRole()) && (
+                  <button className="group-info-link-btn" onClick={() => { setAnnouncementDraft(activeChat.announcement || ''); setShowAnnouncementEditor(true); }}>
+                    ✏️ Изменить / добавить
+                  </button>
+                )}
+              </div>
+
+              <div className="group-info-actions">
+                <button className="group-info-link-btn" onClick={() => { setShowGroupInfo(false); setShowManageParticipants(true); }}>👥 Участники</button>
+                {['creator', 'admin'].includes(getMyGroupRole()) && (
+                  <button className="group-info-link-btn" onClick={() => { setShowGroupInfo(false); handleOpenGroupSettings(); }}>⚙️ Настройки</button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Редактор объявления группы */}
+      {showAnnouncementEditor && (
+        <div className="modal-overlay" onClick={() => setShowAnnouncementEditor(false)}>
+          <div className="modal-content" style={{ maxWidth: 440 }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>📌 Объявление группы</h3>
+              <button onClick={() => setShowAnnouncementEditor(false)}>✕</button>
+            </div>
+            <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <textarea
+                className="modal-input"
+                value={announcementDraft}
+                onChange={e => setAnnouncementDraft(e.target.value)}
+                maxLength={1000}
+                rows={4}
+                placeholder="Текст объявления для всех участников..."
+              />
+            </div>
+            <div className="modal-footer">
+              <button className="cancel-btn" onClick={() => setShowAnnouncementEditor(false)}>Отмена</button>
+              {activeChat?.announcement && <button className="delete-btn" onClick={handleClearAnnouncement}>Удалить</button>}
+              <button className="create-btn" onClick={handleSaveAnnouncement}>Сохранить</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Модальное окно предпросмотра изображения */}
       {showImagePreview && galleryImages.length > 0 && (
         <ImageGalleryModal
@@ -14252,14 +14547,18 @@ return parts.length > 0 ? parts : text;
                 <div className="status-section-label">Быстрые статусы</div>
                 <div className="status-presets-grid">
                   {[
-                    { emoji: '💼', text: 'На работе' },
-                    { emoji: '🏠', text: 'В отпуске' },
-                    { emoji: '📞', text: 'Недоступен' },
-                    { emoji: '🤒', text: 'Болею' },
-                    { emoji: '🍴', text: 'Обед' },
-                    { emoji: '🚗', text: 'В пути' },
-                    { emoji: '💤', text: 'Отдыхаю' },
-                    { emoji: '🎯', text: 'Занят' },
+                    { emoji: '📅', text: 'Опять на совещании' },
+                    { emoji: '🔥', text: 'Дедлайн на носу' },
+                    { emoji: '🤯', text: 'Перегружен задачами' },
+                    { emoji: '🧠', text: 'В глубокой фокус-работе' },
+                    { emoji: '🐢', text: 'Работаю в фоновом режиме' },
+                    { emoji: '🦄', text: 'В режиме единорога' },
+                    { emoji: '🥱', text: 'Послеобеденный режим' },
+                    { emoji: '🧟', text: 'В режиме выживания' },
+                    { emoji: '🤫', text: 'Шшш, работаю' },
+                    { emoji: '💡', text: 'Идея витает, не мешать' },
+                    { emoji: '🐝', text: 'Жужжу делами' },
+                    { emoji: '🔮', text: 'Гадаю на планах' },
                   ].map(preset => (
                     <button
                       key={preset.text}

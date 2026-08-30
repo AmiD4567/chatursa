@@ -1,5 +1,6 @@
 const Database = require('better-sqlite3');
 const path = require('path');
+const { KPI_PAYMENT_TYPES } = require('./kpi-config');
 
 const DB_PMNT = '\\\\m149\\C$\\api\\api_data_cheque_pmnts.sqlite';
 const DB_NOM = '\\\\m149\\C$\\api\\nom.sqlite';
@@ -127,6 +128,22 @@ async function queryMonthlyPayments(monthStartDate, endDate) {
   return rows;
 }
 
+function aggregateByType(rows) {
+  const result = { cash: 0, card: 0, transfer: 0, other: 0 };
+  if (!Array.isArray(rows)) return result;
+  const cashSet = new Set(KPI_PAYMENT_TYPES.cash);
+  const cardSet = new Set(KPI_PAYMENT_TYPES.card);
+  const transferSet = new Set(KPI_PAYMENT_TYPES.transfer);
+  for (const r of rows) {
+    const val = r.total || 0;
+    if (cashSet.has(r.type)) result.cash += val;
+    else if (cardSet.has(r.type)) result.card += val;
+    else if (transferSet.has(r.type)) result.transfer += val;
+    else result.other += val;
+  }
+  return result;
+}
+
 async function refreshKpiFromSource() {
   await refreshCache();
 
@@ -137,46 +154,29 @@ async function refreshKpiFromSource() {
   const yesterdayPayments = await queryDailyPayments(yesterday);
   const monthPayments = await queryMonthlyPayments(monthStartStr(), today);
 
-  const data = {};
+  const todayAgg = aggregateByType(todayPayments);
+  const yesterdayAgg = aggregateByType(yesterdayPayments);
+  const monthAgg = aggregateByType(monthPayments);
 
-  data.todayTotal = 0;
-  data.todayCash = 0;
-  data.todayCard = 0;
-  data.todayOther = 0;
-  if (Array.isArray(todayPayments)) {
-    todayPayments.forEach(r => {
-      if (r.type === 'Cash') data.todayCash = r.total;
-      else if (r.type === 'Card') data.todayCard = r.total;
-      else data.todayOther = (data.todayOther || 0) + (r.total || 0);
-    });
-    data.todayTotal = (data.todayCash || 0) + (data.todayCard || 0) + (data.todayOther || 0);
-  }
+  const data = {
+    todayTotal: todayAgg.cash + todayAgg.card + todayAgg.transfer + todayAgg.other,
+    todayCash: todayAgg.cash,
+    todayCard: todayAgg.card,
+    todayTransfer: todayAgg.transfer,
+    todayOther: todayAgg.other,
 
-  data.yesterdayTotal = 0;
-  data.yesterdayCash = 0;
-  data.yesterdayCard = 0;
-  data.yesterdayOther = 0;
-  if (Array.isArray(yesterdayPayments)) {
-    yesterdayPayments.forEach(r => {
-      if (r.type === 'Cash') data.yesterdayCash = r.total;
-      else if (r.type === 'Card') data.yesterdayCard = r.total;
-      else data.yesterdayOther = (data.yesterdayOther || 0) + (r.total || 0);
-    });
-    data.yesterdayTotal = (data.yesterdayCash || 0) + (data.yesterdayCard || 0) + (data.yesterdayOther || 0);
-  }
+    yesterdayTotal: yesterdayAgg.cash + yesterdayAgg.card + yesterdayAgg.transfer + yesterdayAgg.other,
+    yesterdayCash: yesterdayAgg.cash,
+    yesterdayCard: yesterdayAgg.card,
+    yesterdayTransfer: yesterdayAgg.transfer,
+    yesterdayOther: yesterdayAgg.other,
 
-  data.monthTotal = 0;
-  data.monthCash = 0;
-  data.monthCard = 0;
-  data.monthOther = 0;
-  if (Array.isArray(monthPayments)) {
-    monthPayments.forEach(r => {
-      if (r.type === 'Cash') data.monthCash = r.total;
-      else if (r.type === 'Card') data.monthCard = r.total;
-      else data.monthOther = (data.monthOther || 0) + (r.total || 0);
-    });
-    data.monthTotal = (data.monthCash || 0) + (data.monthCard || 0) + (data.monthOther || 0);
-  }
+    monthTotal: monthAgg.cash + monthAgg.card + monthAgg.transfer + monthAgg.other,
+    monthCash: monthAgg.cash,
+    monthCard: monthAgg.card,
+    monthTransfer: monthAgg.transfer,
+    monthOther: monthAgg.other,
+  };
 
   return data;
 }

@@ -539,53 +539,6 @@ app.get('/api/admin/security-logs', (req, res) => {
   }
 });
 
-// API для получения настроек интерфейса
-app.get('/api/admin/ui-settings', (req, res) => {
-  try {
-    const settingsRows = db.prepare('SELECT key, value FROM ui_settings').all();
-    const settingsObj = {};
-    settingsRows.forEach(row => {
-      settingsObj[row.key] = row.value;
-    });
-
-    res.json({ 
-      settings: {
-        siteName: settingsObj.siteName || 'Чат',
-        logoUrl: settingsObj.logoUrl || '',
-        primaryColor: settingsObj.primaryColor || '#667eea',
-        secondaryColor: settingsObj.secondaryColor || '#764ba2'
-      }
-    });
-  } catch (err) {
-    console.error('Ошибка получения настроек:', err);
-    res.status(500).json({ error: 'Ошибка при получении настроек' });
-  }
-});
-
-// API для сохранения настроек интерфейса
-app.put('/api/admin/ui-settings', (req, res) => {
-  const { siteName, logoUrl, primaryColor, secondaryColor } = req.body;
-
-  try {
-    const settings = [
-      { key: 'siteName', value: siteName },
-      { key: 'logoUrl', value: logoUrl },
-      { key: 'primaryColor', value: primaryColor },
-      { key: 'secondaryColor', value: secondaryColor }
-    ];
-
-    settings.forEach(({ key, value }) => {
-      db.run(`INSERT OR REPLACE INTO ui_settings (key, value) VALUES (?, ?)`, [key, value]);
-    });
-
-
-    res.json({ success: true });
-  } catch (err) {
-    console.error('Ошибка сохранения настроек:', err);
-    res.status(500).json({ error: 'Ошибка при сохранении настроек' });
-  }
-});
-
 // ============================================
 // API для удаления сообщений администратором
 // ============================================

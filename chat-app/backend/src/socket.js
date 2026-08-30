@@ -510,12 +510,12 @@ io.on('connection', (socket) => {
         VALUES (?, 'group', ?, ?)
       `, [chatId, name || 'Групповой чат', onlineUser.id]);
 
-      db.run('INSERT INTO chat_participants (chat_id, user_id) VALUES (?, ?)', [chatId, onlineUser.id]);
+      db.run('INSERT INTO chat_participants (chat_id, user_id, role) VALUES (?, ?, ?)', [chatId, onlineUser.id, 'creator']);
 
       participants.forEach((pUsername) => {
         const pUser = getUserByUsername(pUsername);
         if (pUser) {
-          db.run('INSERT INTO chat_participants (chat_id, user_id) VALUES (?, ?)', [chatId, pUser.id]);
+          db.run('INSERT INTO chat_participants (chat_id, user_id, role) VALUES (?, ?, ?)', [chatId, pUser.id, 'member']);
         }
       });
 

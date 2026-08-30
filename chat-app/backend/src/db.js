@@ -238,11 +238,6 @@ function initDatabase() {
       timestamp TEXT DEFAULT CURRENT_TIMESTAMP
     );
 
-    CREATE TABLE IF NOT EXISTS ui_settings (
-      key TEXT PRIMARY KEY,
-      value TEXT
-    );
-
     CREATE TABLE IF NOT EXISTS push_subscriptions (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
@@ -473,6 +468,7 @@ function initDatabase() {
     { table: 'calendar_tasks', column: 'task_end_time', type: 'TEXT' },
     { table: 'calendar_tasks', column: 'reminder_time', type: 'TEXT' },
     { table: 'chats', column: 'avatar', type: 'TEXT' },
+    { table: 'chats', column: 'announcement', type: 'TEXT' },
     { table: 'user_sessions', column: 'last_seen', type: 'TEXT DEFAULT CURRENT_TIMESTAMP' },
     { table: 'messages', column: 'poll_id', type: 'TEXT' },
     { table: 'polls', column: 'is_anonymous', type: 'INTEGER DEFAULT 0' },
@@ -495,7 +491,11 @@ function initDatabase() {
     { table: 'users', column: 'app_version', type: 'TEXT DEFAULT \'\'' },
     { table: 'chat_user_settings', column: 'deleted_at', type: 'TEXT' },
     { table: 'calendar_tasks', column: 'source_chat_id', type: 'TEXT' },
-    { table: 'calendar_tasks', column: 'source_message_id', type: 'TEXT' }
+    { table: 'calendar_tasks', column: 'source_message_id', type: 'TEXT' },
+    { table: 'chat_participants', column: 'role', type: "TEXT NOT NULL DEFAULT 'member'" },
+    { table: 'chats', column: 'description', type: 'TEXT' },
+    { table: 'chats', column: 'restricted', type: 'INTEGER DEFAULT 0' },
+    { table: 'messages', column: 'is_system', type: 'INTEGER DEFAULT 0' }
   ];
 
   migrations.forEach(({ table, column, type }) => {
@@ -505,6 +505,23 @@ function initDatabase() {
       // Колонка уже существует
     }
   });
+
+  // Миграция данных: назначаем роль 'creator' создателям существующих групп
+  try {
+    db.exec(`
+      UPDATE chat_participants
+      SET role = 'creator'
+      WHERE EXISTS (
+        SELECT 1 FROM chats c
+        WHERE c.id = chat_participants.chat_id
+          AND c.type = 'group'
+          AND c.created_by = chat_participants.user_id
+      )
+    `);
+    console.log('Миграция ролей групп выполнена');
+  } catch (e) {
+    // игнорируем
+  }
 
   // Проверка и создание общего чата
   const generalChat = db.prepare("SELECT id FROM chats WHERE id = ?").get('general');
