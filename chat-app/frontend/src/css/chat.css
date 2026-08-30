@@ -766,7 +766,10 @@
   left: 0;
   right: 0;
   bottom: 0;
-  background: var(--chat-bg-image, none) center / cover no-repeat;
+  background-image: var(--chat-bg-image, none);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
   pointer-events: none;
   z-index: 0;
 }
