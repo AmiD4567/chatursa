@@ -1211,18 +1211,25 @@ function App() {
       document.head.appendChild(styleEl);
     }
     // Приоритет: активный фон из библиотеки → легаси-картинка из настроек → пресет
+    // Фон применяем и к .app-container, и к .chat-main::after — чтобы он просвечивал
+    // сквозь полупрозрачные «стеклянные» панели (сайдбар, шапки, поле ввода), как было раньше.
+    const applyBg = (bgValue) => {
+      styleEl.textContent =
+        `.app-container { background: url("${bgValue}") center / cover no-repeat !important; }` +
+        `.chat-main::after { background: url("${bgValue}") center / cover no-repeat !important; }`;
+    };
     if (activeCustomBgUrl) {
-      styleEl.textContent = `.chat-main::after { background: url("${activeCustomBgUrl}") center / cover no-repeat !important; }`;
+      applyBg(activeCustomBgUrl);
       return;
     }
     const custom = userUiSettings.chatBackgroundImage || null;
     if (custom) {
-      styleEl.textContent = `.chat-main::after { background: url("${custom}") center / cover no-repeat !important; }`;
+      applyBg(custom);
       return;
     }
     const bg = chatBackgrounds.find(b => b.id === (userUiSettings.chatBackground || 0));
     if (bg && bg.id !== 0 && bg.image) {
-      styleEl.textContent = `.chat-main::after { background: url("${bg.image}") center / cover no-repeat !important; }`;
+      applyBg(bg.image);
     } else {
       styleEl.textContent = '';
     }
@@ -1286,7 +1293,13 @@ function App() {
         } catch (e) { activeId = null; }
         if (activeId && !cancelled) {
           const found = bgs.find(b => b.id === activeId);
-          setActiveCustomBgUrl(found ? found.dataUrl : null);
+          if (found) {
+            setActiveCustomBgUrl(found.dataUrl);
+          }
+          // Не сбрасываем activeCustomBgUrl в null при отсутствии найденного фона —
+          // это вызывает лишний run useEffect, который стирает выбранный стандартный фон.
+          // Если chatBackgroundCustomId нет (или фон удалён), настройки уже говорят,
+          // что кастомный фон не активен — preset применяется через chatBackground.
         } else if (!cancelled) {
           setActiveCustomBgUrl(null);
         }

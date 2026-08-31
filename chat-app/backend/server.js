@@ -1086,11 +1086,11 @@ try {
     }
   }
 
-  // Проверка релизов: через 30с после старта сервера и далее раз в час
-  setTimeout(() => {
-    announceNewRelease();
-    setInterval(announceNewRelease, 60 * 60 * 1000);
-  }, 30 * 1000);
+  // Проверка релизов: отключено — бот «Помощник» больше не сообщает о новых версиях
+  // setTimeout(() => {
+  //   announceNewRelease();
+  //   setInterval(announceNewRelease, 60 * 60 * 1000);
+  // }, 30 * 1000);
 
   // Загружаем квоты загрузок из БД
   try {

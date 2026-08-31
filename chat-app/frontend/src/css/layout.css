@@ -391,7 +391,7 @@
   bottom: var(--app-keyboard-inset, 0px);
   width: 100%;
   height: auto;
-  background-color: var(--page-bg);
+  background-color: transparent;
   background-image: var(--chat-bg-image, radial-gradient(circle at 18% 15%, rgba(102, 126, 234, 0.22) 0%, transparent 52%), radial-gradient(circle at 88% 90%, rgba(118, 75, 162, 0.18) 0%, transparent 55%));
   overflow: hidden;
 }
