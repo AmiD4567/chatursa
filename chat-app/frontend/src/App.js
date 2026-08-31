@@ -1204,23 +1204,27 @@ function App() {
 
   // Применение фона чата при изменении настроек или темы
   useEffect(() => {
-    const chatMain = document.querySelector('.chat-main');
-    if (!chatMain) return;
+    let styleEl = document.getElementById('dynamic-chat-bg');
+    if (!styleEl) {
+      styleEl = document.createElement('style');
+      styleEl.id = 'dynamic-chat-bg';
+      document.head.appendChild(styleEl);
+    }
     // Приоритет: активный фон из библиотеки → легаси-картинка из настроек → пресет
     if (activeCustomBgUrl) {
-      chatMain.style.backgroundImage = `url("${activeCustomBgUrl}")`;
+      styleEl.textContent = `.chat-main::after { background: url("${activeCustomBgUrl}") center / cover no-repeat !important; }`;
       return;
     }
     const custom = userUiSettings.chatBackgroundImage || null;
     if (custom) {
-      chatMain.style.backgroundImage = `url("${custom}")`;
+      styleEl.textContent = `.chat-main::after { background: url("${custom}") center / cover no-repeat !important; }`;
       return;
     }
     const bg = chatBackgrounds.find(b => b.id === (userUiSettings.chatBackground || 0));
     if (bg && bg.id !== 0 && bg.image) {
-      chatMain.style.backgroundImage = `url("${bg.image}")`;
+      styleEl.textContent = `.chat-main::after { background: url("${bg.image}") center / cover no-repeat !important; }`;
     } else {
-      chatMain.style.backgroundImage = '';
+      styleEl.textContent = '';
     }
   }, [userUiSettings.chatBackground, userUiSettings.chatBackgroundImage, activeCustomBgUrl]);
 
