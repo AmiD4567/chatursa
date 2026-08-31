@@ -753,25 +753,12 @@
   flex: 1;
   display: flex;
   flex-direction: column;
-  background: var(--chat-bg, #0f0f1a);
-  position: relative;
-  transition: margin-right 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-/* Фоновый рисунок чата поверх основного цвета */
-.chat-main::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background-image: var(--chat-bg-image, none);
+  background-color: var(--chat-bg, #0f0f1a);
   background-size: cover;
   background-position: center;
   background-repeat: no-repeat;
-  pointer-events: none;
-  z-index: 0;
+  position: relative;
+  transition: margin-right 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 /* Когда панель смайлов открыта - сдвигаем чат влево */

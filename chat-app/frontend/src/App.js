@@ -1204,21 +1204,23 @@ function App() {
 
   // Применение фона чата при изменении настроек или темы
   useEffect(() => {
+    const chatMain = document.querySelector('.chat-main');
+    if (!chatMain) return;
     // Приоритет: активный фон из библиотеки → легаси-картинка из настроек → пресет
     if (activeCustomBgUrl) {
-      document.documentElement.style.setProperty('--chat-bg-image', `url("${activeCustomBgUrl}")`);
+      chatMain.style.backgroundImage = `url("${activeCustomBgUrl}")`;
       return;
     }
     const custom = userUiSettings.chatBackgroundImage || null;
     if (custom) {
-      document.documentElement.style.setProperty('--chat-bg-image', `url("${custom}")`);
+      chatMain.style.backgroundImage = `url("${custom}")`;
       return;
     }
     const bg = chatBackgrounds.find(b => b.id === (userUiSettings.chatBackground || 0));
     if (bg && bg.id !== 0 && bg.image) {
-      document.documentElement.style.setProperty('--chat-bg-image', `url("${bg.image}")`);
+      chatMain.style.backgroundImage = `url("${bg.image}")`;
     } else {
-      document.documentElement.style.removeProperty('--chat-bg-image');
+      chatMain.style.backgroundImage = '';
     }
   }, [userUiSettings.chatBackground, userUiSettings.chatBackgroundImage, activeCustomBgUrl]);
 
