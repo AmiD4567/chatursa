@@ -2988,7 +2988,8 @@ function App() {
         if (loginResponse.ok) {
           socket.emit('join', {
             username: loginData.user.username,
-            userId: loginData.user.id
+            userId: loginData.user.id,
+            appVersion: clientVersionRef.current
           });
           setUsername('');
           setEmail('');

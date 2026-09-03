@@ -339,6 +339,15 @@ io.on('connection', (socket) => {
       });
       userActivity.set(user.id, Date.now());
 
+      // Регистрируем сокет в userSocketMap (userId -> Set<socketId>),
+      // иначе emitToUser не сможет доставлять события (chat_created, new_message,
+      // call_incoming и т.д.) — они просто терялись для fresh-зарегистрированных
+      // пользователей до перезапуска приложения. См. user_joined-хендлер.
+      if (!userSocketMap.has(user.id)) {
+        userSocketMap.set(user.id, new Set());
+      }
+      userSocketMap.get(user.id).add(socket.id);
+
       // Сохраняем версию клиента
       if (appVersion) {
         db.run('UPDATE users SET app_version = ? WHERE id = ?', [String(appVersion).slice(0, 50), user.id]);
