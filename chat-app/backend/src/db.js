@@ -387,7 +387,8 @@ function initDatabase() {
     INSERT OR IGNORE INTO bot_settings (setting_key, setting_value) VALUES ('poll_creation_enabled', '1');
     INSERT OR IGNORE INTO bot_settings (setting_key, setting_value) VALUES ('support_enabled', '1');
     INSERT OR IGNORE INTO bot_settings (setting_key, setting_value) VALUES ('birthday_notifications_enabled', '1');
-    INSERT OR IGNORE INTO bot_settings (setting_key, setting_value) VALUES ('daily_thought_notifications_enabled', '1');
+    INSERT INTO bot_settings (setting_key, setting_value) VALUES ('daily_thought_notifications_enabled', '1')
+      ON CONFLICT(setting_key) DO UPDATE SET setting_value = '1', updated_at = CURRENT_TIMESTAMP;
 
     CREATE TABLE IF NOT EXISTS sent_daily_thoughts (
       user_id TEXT NOT NULL,

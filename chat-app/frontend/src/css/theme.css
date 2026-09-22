@@ -734,6 +734,27 @@
   box-shadow: 0 4px 12px rgba(102, 126, 234, 0.15);
 }
 
+[data-theme="dark"] .admin-full-page .admin-chart-card {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(102, 126, 234, 0.18);
+}
+
+[data-theme="dark"] .admin-full-page .admin-chart-period-tabs {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+[data-theme="dark"] .admin-full-page .admin-bar {
+  fill: #667eea;
+}
+
+[data-theme="dark"] .admin-full-page .admin-bar:hover {
+  fill: #8a9bf2;
+}
+
+[data-theme="dark"] .admin-full-page .admin-chart-grid {
+  stroke: rgba(255, 255, 255, 0.08);
+}
+
 [data-theme="dark"] .admin-full-page .form-group input[type="text"] {
   background: rgba(255, 255, 255, 0.06);
   border-color: rgba(102, 126, 234, 0.2);

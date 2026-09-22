@@ -321,4 +321,35 @@ body::before {
   margin: 8px 0 4px 0 !important;
   object-fit: contain !important;
 }
+
+/* ============================================================
+   Экономия GPU в фоне: класс app-hidden ставится на <body>,
+   когда окно/вкладка невидимы или не в фокусе (см. App.js).
+   Останавливаем тяжёлые CSS-анимации и backdrop-filter, которые
+   иначе продолжают пересчитываться на GPU на полной частоте.
+   ============================================================ */
+body.app-hidden * {
+  animation-play-state: paused !important;
+  transition: none !important;
+}
+
+body.app-hidden {
+  /* Отключаем дорогой backdrop-filter blur в фоне (модалки, логин, звонки) */
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  filter: none !important;
+  -webkit-filter: none !important;
+}
+
+body.app-hidden * {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  filter: none !important;
+  -webkit-filter: none !important;
+}
+
+/* Фоновое видео на экране логина тоже глушим в фоне (пауза дублируется JS-ом) */
+body.app-hidden .login-video-bg {
+  opacity: 0;
+}
 

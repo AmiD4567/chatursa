@@ -1945,184 +1945,7 @@
   }
 }
 
-/* Обёртка для реакций + кнопка сворачивания */
-.context-menu-reactions-wrapper {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-}
-
-/* Быстрые реакции в контекстном меню */
-.context-menu-reactions {
-  display: flex;
-  flex-wrap: nowrap;
-  gap: 6px;
-  padding: 10px 12px;
-  background: linear-gradient(135deg, rgba(102, 126, 234, 0.08), rgba(118, 75, 162, 0.08));
-  border-bottom: 1px solid rgba(102, 126, 234, 0.15);
-  overflow-x: auto;
-  position: relative;
-}
-
-/* Развёрнутый режим — grid по 6 в ряд */
-.context-menu-reactions.expanded {
-  display: grid;
-  grid-template-columns: repeat(6, 1fr);
-  gap: 6px;
-  padding: 10px 12px;
-  background: linear-gradient(135deg, rgba(102, 126, 234, 0.08), rgba(118, 75, 162, 0.08));
-  border-bottom: none;
-  overflow: visible;
-}
-
-/* Разделитель-подсветка между реакциями и остальным меню */
-.context-menu-reactions::after {
-  content: '';
-  position: absolute;
-  bottom: 0;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 80%;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(102, 126, 234, 0.2), transparent);
-}
-
-/* В развёрнутом режиме разделитель убираем — он будет у toggle */
-.context-menu-reactions.expanded::after {
-  display: none;
-}
-
-/* Скроллбар только для свёрнутого режима (горизонтальный) */
-.context-menu-reactions::-webkit-scrollbar {
-  height: 4px;
-}
-
-.context-menu-reactions::-webkit-scrollbar-track {
-  background: rgba(102, 126, 234, 0.05);
-  border-radius: 8px;
-  margin: 0 8px;
-}
-
-.context-menu-reactions::-webkit-scrollbar-thumb {
-  background: linear-gradient(90deg, #667eea, #764ba2);
-  border-radius: 8px;
-}
-
-/* В развёрнутом режиме скроллбар не нужен */
-.context-menu-reactions.expanded::-webkit-scrollbar {
-  display: none;
-}
-
-/* Кнопка сворачивания/разворачивания реакций */
-.context-menu-reactions-toggle {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 8px 12px;
-  background: linear-gradient(135deg, rgba(102, 126, 234, 0.06), rgba(118, 75, 162, 0.06));
-  border: none;
-  border-top: 1px solid rgba(102, 126, 234, 0.1);
-  cursor: pointer;
-  transition: all 0.2s ease;
-  color: rgba(170, 180, 220, 0.75);
-  font-size: 12px;
-  font-family: inherit;
-  letter-spacing: 0.3px;
-}
-
-.context-menu-reactions-toggle:hover {
-  background: linear-gradient(135deg, rgba(102, 126, 234, 0.12), rgba(118, 75, 162, 0.12));
-  color: rgba(200, 210, 240, 0.95);
-}
-
-.context-menu-reactions-toggle .reactions-toggle-icon {
-  font-size: 10px;
-  line-height: 1;
-  opacity: 0.6;
-  transition: opacity 0.2s;
-}
-
-.context-menu-reactions-toggle:hover .reactions-toggle-icon {
-  opacity: 1;
-}
-
-.context-menu-reactions-toggle .reactions-toggle-text {
-  font-weight: 500;
-}
-
-/* Реакции в развёрнутом grid-режиме — растягиваем на ячейку */
-.context-menu-reactions.expanded .context-menu-reaction-btn {
-  min-width: unset;
-  width: 100%;
-  height: 34px;
-  font-size: 18px;
-}
-
-/* Реакции в свёрнутом режиме — фиксированный размер */
-.context-menu-reactions:not(.expanded) .context-menu-reaction-btn {
-  min-width: 29px;
-  width: auto;
-}
-
-.context-menu-reaction-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 29px;
-  height: 29px;
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(102, 126, 234, 0.3);
-  border-radius: 11px;
-  cursor: pointer;
-  transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
-  font-size: 17px;
-  flex-shrink: 0;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-  position: relative;
-  overflow: hidden;
-  padding: 0;
-}
-
-.context-menu-reaction-btn img {
-  width: 20px !important;
-  height: 20px !important;
-  max-width: 20px !important;
-  max-height: 20px !important;
-  object-fit: contain !important;
-  vertical-align: middle;
-  display: block !important;
-}
-
-.context-menu-reaction-btn::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: linear-gradient(135deg, rgba(102, 126, 234, 0.2), rgba(118, 75, 162, 0.2));
-  opacity: 0;
-  transition: opacity 0.2s;
-}
-
-.context-menu-reaction-btn:hover {
-  transform: translateY(-2px) scale(1.12);
-  box-shadow: 
-    0 6px 20px rgba(102, 126, 234, 0.4),
-    0 0 0 3px rgba(102, 126, 234, 0.15);
-  border-color: rgba(102, 126, 234, 0.6);
-  background: rgba(255, 255, 255, 0.12);
-}
-
-.context-menu-reaction-btn:hover::before {
-  opacity: 1;
-}
-
-.context-menu-reaction-btn:active {
-  transform: translateY(0) scale(1.08);
-}
-
+/* Разделитель пунктов контекстного меню */
 .context-menu-divider {
   height: 1px;
   background: linear-gradient(90deg, 
@@ -2130,6 +1953,154 @@
     rgba(102, 126, 234, 0.35), 
     rgba(102, 126, 234, 0.15));
   margin: 4px 0;
+}
+
+/* Эмодзи-пикер выбора произвольной реакции — позиционируем справа от контекстного меню.
+   .reaction-picker-anchor статичен, поэтому absolute-пикер позиционируется
+   относительно .message-context-menu (fixed-предка). */
+.reaction-picker-anchor {
+  position: static;
+}
+
+.message-context-menu.reaction-picker-open {
+  overflow: visible;
+}
+
+.message-context-menu .reaction-picker-anchor .emoji-inline-picker {
+  position: absolute;
+  left: calc(100% + 10px);
+  top: 0;
+  bottom: auto;   /* сброс из базового стиля пикера (bottom: calc(100%+8px)) */
+  right: auto;    /* сброс из базового стиля пикера (right: 0) */
+  z-index: 10001;
+}
+
+.message-context-menu .reaction-picker-anchor .emoji-inline-picker::before {
+  content: '';
+  position: absolute;
+  left: -6px;
+  top: 24px;
+  width: 12px;
+  height: 12px;
+  background: inherit;
+  transform: rotate(45deg);
+  border-left: 1px solid rgba(102, 126, 234, 0.3);
+  border-bottom: 1px solid rgba(102, 126, 234, 0.3);
+  z-index: -1;
+}
+
+/* Когда пикер не помещается справа (меню у правого края экрана) — открываем слева */
+.message-context-menu.reaction-picker-left .reaction-picker-anchor .emoji-inline-picker {
+  left: auto;
+  right: calc(100% + 10px);
+}
+
+.message-context-menu.reaction-picker-left .reaction-picker-anchor .emoji-inline-picker::before {
+  left: auto;
+  right: -6px;
+  border-left: none;
+  border-bottom: none;
+  border-right: 1px solid rgba(102, 126, 234, 0.3);
+  border-top: 1px solid rgba(102, 126, 234, 0.3);
+}
+
+/* Вертикальное меню последних реакций — подменю справа от контекстного меню */
+.message-context-menu.has-reactions-menu {
+  overflow: visible;
+}
+
+.recent-reactions-menu {
+  position: absolute;
+  top: 0;
+  left: calc(100% + 10px);
+  right: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 6px;
+  background: rgba(30, 30, 50, 0.425);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(102, 126, 234, 0.3);
+  border-radius: 16px;
+  box-shadow: 
+    0 10px 40px rgba(0, 0, 0, 0.4),
+    0 0 0 1px rgba(255, 255, 255, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  z-index: 10000;
+}
+
+/* Кнопка «+» — быстрый доступ к полному выбору реакции */
+.recent-reaction-add {
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.25), rgba(118, 75, 162, 0.25));
+  margin-top: 2px;
+}
+
+.recent-reaction-add .context-menu-icon {
+  width: 20px;
+  height: 20px;
+  opacity: 1;
+}
+
+/* Скроллируемый список последних реакций — видно ровно 5 кнопок,
+   остальные листаются колесиком мыши (overflow-y: auto).
+   Ползунок скрыт, прокрутка колесиком работает. */
+.recent-reactions-list {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  max-height: 186px; /* 5 кнопок по 34px + 4 зазора по 4px */
+  overflow-y: auto;
+  scrollbar-width: none; /* Firefox: скрыть ползунок */
+  padding: 0 2px;
+}
+
+.recent-reactions-list::-webkit-scrollbar {
+  display: none; /* Chromium/WebKit: скрыть ползунок */
+}
+
+.recent-reaction-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(102, 126, 234, 0.3);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+  flex-shrink: 0;
+}
+
+.recent-reaction-btn img {
+  width: 20px !important;
+  height: 20px !important;
+  max-width: 20px !important;
+  max-height: 20px !important;
+  object-fit: contain !important;
+  display: block !important;
+  vertical-align: middle;
+}
+
+.recent-reaction-btn:hover {
+  transform: translateY(-1px) scale(1.1);
+  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(102, 126, 234, 0.6);
+  box-shadow: 0 4px 14px rgba(102, 126, 234, 0.4);
+}
+
+/* Когда пикер не помещается справа — вертикальное меню открываем слева */
+.message-context-menu.reaction-picker-left .recent-reactions-menu {
+  left: auto;
+  right: calc(100% + 10px);
+}
+
+/* Когда открыт полный пикер — скрываем вертикальное меню последних (пикер заменяет его) */
+.message-context-menu.reaction-picker-open .recent-reactions-menu {
+  display: none;
 }
 
 .context-menu-items {
@@ -2185,6 +2156,32 @@
 .context-menu-item span {
   position: relative;
   z-index: 1;
+}
+
+/* SVG-иконки в пунктах контекстного меню (вместо смайлов) */
+.context-menu-item .context-menu-icon {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  color: inherit;
+  opacity: 0.75;
+}
+
+.context-menu-item:hover .context-menu-icon {
+  opacity: 1;
+}
+
+.context-menu-item-danger .context-menu-icon {
+  color: #ef4444;
+}
+
+.context-menu-item-danger:hover .context-menu-icon {
+  color: #ef4444;
+}
+
+/* Индикатор «Проверка…» в меню орфографии */
+.context-menu-item.spell-checking .context-menu-icon {
+  opacity: 0.7;
 }
 
 .context-menu-item-danger:hover {
@@ -3914,6 +3911,103 @@
 .admin-full-page .admin-stat-card .stat-label {
   font-size: 13px;
   color: var(--text-secondary);
+}
+
+.admin-full-page .admin-chart-card {
+  grid-column: 1 / -1;
+  background: var(--page-card-bg);
+  border: 1px solid var(--page-card-border);
+  border-radius: 12px;
+  padding: 20px;
+  margin-top: 4px;
+}
+
+.admin-full-page .admin-chart-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.admin-full-page .admin-chart-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--page-text-primary);
+}
+
+.admin-full-page .admin-chart-icon {
+  font-size: 20px;
+}
+
+.admin-full-page .admin-chart-period-tabs {
+  display: flex;
+  gap: 4px;
+  background: var(--page-card-border);
+  border-radius: 8px;
+  padding: 3px;
+}
+
+.admin-full-page .admin-chart-period-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 5px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  transition: all 0.15s;
+}
+
+.admin-full-page .admin-chart-period-btn:hover {
+  color: var(--page-text-primary);
+}
+
+.admin-full-page .admin-chart-period-btn.active {
+  background: #667eea;
+  color: #fff;
+}
+
+.admin-full-page .admin-chart-svg {
+  width: 100%;
+  height: 220px;
+  display: block;
+}
+
+.admin-full-page .admin-bar {
+  fill: #667eea;
+  transition: fill 0.15s, opacity 0.15s;
+}
+
+.admin-full-page .admin-bar:hover {
+  fill: #5568d3;
+  opacity: 0.85;
+}
+
+.admin-full-page .admin-chart-grid {
+  stroke: var(--page-card-border);
+  stroke-width: 1;
+  stroke-dasharray: 2 3;
+}
+
+.admin-full-page .admin-chart-axis-label {
+  font-size: 10px;
+  fill: var(--text-secondary);
+  font-family: inherit;
+}
+
+.admin-full-page .admin-chart-empty {
+  height: 220px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  font-size: 14px;
 }
 
 .admin-full-page .admin-users-list,

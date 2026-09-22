@@ -1396,12 +1396,31 @@ io.on('connection', (socket) => {
       // Удаляем все реакции на это сообщение
       db.run('DELETE FROM message_reactions WHERE message_id = ?', [messageId]);
 
-      // Отправляем уведомление всем участникам чата о удалении сообщения
+      // Отправляем уведомление всем участникам чата о удалении сообщения.
+      // Поле `id` дублирует `messageId` для совместимости с клиентским
+      // обработчиком ({ id }) и REST-путём удаления (admin.js).
       io.to(chatId).emit('message_deleted', {
+        id: messageId,
         messageId,
         deletedBy: onlineUser.id,
         chatId
       });
+
+      // Обновляем lastMessage в списках чатов участников: без этого превью
+      // удалённого сообщения «зависало» до перезапуска сервера.
+      try {
+        const chatDetails = getChatWithDetails(chatId);
+        if (chatDetails && chatDetails.participantsDetails) {
+          chatDetails.participantsDetails.forEach(p => {
+            emitToUser(p.id, 'chat_updated', {
+              chatId,
+              chat: getChatWithDetails(chatId, p.id)
+            });
+          });
+        }
+      } catch (e) {
+        console.error('Ошибка рассылки chat_updated после удаления сообщения:', e.message);
+      }
     } catch (err) {
       console.error('Ошибка при удалении сообщения:', err);
     }

@@ -1745,7 +1745,8 @@ body,
 
 [data-theme="light"] .context-menu-items,
 [data-theme="light"] .message-context-menu,
-[data-theme="light"] .chat-context-menu {
+[data-theme="light"] .chat-context-menu,
+[data-theme="light"] .recent-reactions-menu {
   background: var(--card-bg);
   border: 1px solid var(--border-color);
   box-shadow: var(--shadow-lg);

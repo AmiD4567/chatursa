@@ -1361,6 +1361,63 @@
   font-family: var(--message-font);
 }
 
+/* Markdown-рендеринг обычного текста сообщений: заголовки, списки, таблицы.
+   Оборачиваем в .message-text-main, поэтому сбрасываем white-space pre-wrap,
+   иначе переносы ломают блоки Markdown. */
+.message-text-main .message-md {
+  white-space: normal;
+  display: block;
+}
+
+.message-md.markdown-body {
+  font-size: 14px;
+  line-height: 1.55;
+  color: inherit;
+  word-break: break-word;
+  overflow-wrap: break-word;
+}
+
+.message-md.markdown-body > :first-child { margin-top: 0; }
+.message-md.markdown-body > :last-child { margin-bottom: 0; }
+
+.message-md.markdown-body h1 { font-size: 20px; margin: 14px 0 8px; color: inherit; }
+.message-md.markdown-body h2 { font-size: 17px; margin: 13px 0 8px; color: inherit; }
+.message-md.markdown-body h3 { font-size: 15px; margin: 12px 0 6px; color: inherit; }
+.message-md.markdown-body h4 { font-size: 14px; margin: 11px 0 6px; color: inherit; }
+.message-md.markdown-body p { margin: 0 0 8px; }
+.message-md.markdown-body ul, .message-md.markdown-body ol { margin: 0 0 8px; padding-left: 22px; }
+.message-md.markdown-body li { margin-bottom: 3px; }
+.message-md.markdown-body blockquote {
+  margin: 8px 0; padding: 4px 12px; border-left: 3px solid rgba(128,128,128,0.4);
+  color: inherit; opacity: 0.85;
+}
+.message-md.markdown-body code {
+  background: rgba(127,127,127,0.15); border-radius: 4px; padding: 1px 5px;
+  font-family: var(--mono-font, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); font-size: 13px;
+}
+.message-md.markdown-body pre {
+  background: rgba(0,0,0,0.35); border-radius: 6px; padding: 10px 12px; margin: 8px 0; overflow-x: auto;
+}
+.message-md.markdown-body pre code { background: transparent; padding: 0; }
+.message-md.markdown-body table { width: 100%; border-collapse: collapse; margin: 8px 0; display: block; overflow-x: auto; }
+.message-md.markdown-body th, .message-md.markdown-body td {
+  border: 1px solid rgba(128,128,128,0.3); padding: 5px 9px; text-align: left;
+}
+.message-md.markdown-body th { background: rgba(128,128,128,0.15); font-weight: 600; }
+.message-md.markdown-body hr { border: none; border-top: 1px solid rgba(128,128,128,0.3); margin: 12px 0; }
+.message-md.markdown-body a { color: var(--link-color, #667eea); text-decoration: none; }
+.message-md.markdown-body a:hover { text-decoration: underline; }
+.message-md.markdown-body img { max-width: 100%; border-radius: 4px; }
+.message-md.markdown-body strong { font-weight: 600; }
+.message-md.markdown-body em { font-style: italic; }
+
+/* Светлая тема для Markdown в сообщениях */
+[data-theme="light"] .message-md.markdown-body code { background: rgba(0,0,0,0.07); }
+[data-theme="light"] .message-md.markdown-body pre { background: #f5f5f5; }
+[data-theme="light"] .message-md.markdown-body th { background: rgba(0,0,0,0.04); }
+[data-theme="light"] .message-md.markdown-body th, [data-theme="light"] .message-md.markdown-body td { border-color: #d0d0d0; }
+[data-theme="light"] .message-md.markdown-body blockquote { border-left-color: #b0b0b0; }
+
 /* Текст входящего сообщения */
 .message-main:not(.own) .message-text-main {
   color: var(--bubble-other-text);
@@ -2044,6 +2101,13 @@
   box-shadow: none;
 }
 
+.selected-files-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
 .selected-file-main {
   display: flex;
   align-items: center;
@@ -2053,7 +2117,6 @@
   border-radius: var(--radius-xl);
   font-size: 13px;
   color: var(--primary-color);
-  margin-bottom: 8px;
   animation: slideIn 0.3s ease;
 }
 

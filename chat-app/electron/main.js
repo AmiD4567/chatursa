@@ -271,6 +271,22 @@ function createWindow() {
     return { action: 'deny' };
   });
 
+  // Клик по <a href> без target навигирует текущее окно — перехватываем
+  // внешние http(s) ссылки и открываем в системном браузере.
+  // setWindowOpenHandler выше ловит только target=_blank/window.open.
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (/^file:/i.test(url)) return; // локальная навигация (index.html)
+    if (!/^https?:\/\//i.test(url)) return;
+    try {
+      const host = new URL(url).hostname;
+      if (host === 'localhost' || host === '127.0.0.1') return; // адреса нашего сервера
+    } catch {}
+    event.preventDefault();
+    shell.openExternal(url).catch((err) => {
+      logError(`Ошибка открытия внешней ссылки (will-navigate): ${err.message}`);
+    });
+  });
+
   // Оставляем Ctrl+Shift+I для открытия консоли
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (input.control && input.shift && input.key.toLowerCase() === 'i' && !input.alt && !input.meta) {

@@ -6,7 +6,7 @@ const path = require('path');
 const fs = require('fs');
 
 module.exports = function register(app, deps) {
-  const { db, io, onlineUsers, UPLOADS_PATH, decryptText, uuidv4, bcrypt, speakeasy, QRCode, admin, checkAdmin } = deps;
+  const { db, io, onlineUsers, UPLOADS_PATH, decryptText, uuidv4, bcrypt, speakeasy, QRCode, admin, checkAdmin, emitToUser, getChatWithDetails } = deps;
 
 app.get('/api/admin/check', (req, res) => {
   const { userId } = req.query;
@@ -52,6 +52,55 @@ app.get('/api/admin/stats', (req, res) => {
     onlineUsers: onlineUsersCount,
     uploadsSize
   });
+});
+
+// График сообщений по дням — для админ-дашборда.
+// Метрика отражает только живое общение людей:
+//  - исключены личные чаты с ботом-помощником (bot-chat-*) и ИИ-агентом (ai-chat-*);
+//  - исключены сообщения бота 'Помощник' в общем/групповых чатах (приветствия новых
+//    пользователей, напоминания, «мысли дня» из jobs.js, объявления о днях рождения);
+//  - исключены системные сообщения (is_system=1: «X создал группу», «X покинул чат»).
+// Так авто-сообщения бота не маскируют падение реальной активности.
+app.get('/api/admin/messages-daily', (req, res) => {
+  const { userId } = req.query;
+
+  if (!checkAdmin(userId)) {
+    return res.status(403).json({ error: 'Доступ запрещён' });
+  }
+
+  const allowed = [7, 14, 30, 90];
+  let days = parseInt(req.query.days, 10);
+  if (!allowed.includes(days)) days = 14;
+
+  const rows = db.prepare(`
+    SELECT DATE(timestamp) as day, COUNT(*) as count
+    FROM messages
+    WHERE timestamp >= date('now', ?)
+      AND chat_id NOT LIKE 'bot-chat-%'
+      AND chat_id NOT LIKE 'ai-chat-%'
+      AND (sender_id IS NULL OR sender_id != (SELECT id FROM users WHERE username = 'Помощник'))
+      AND (is_system = 0 OR is_system IS NULL)
+    GROUP BY day
+    ORDER BY day
+  `).all(`-${days} days`);
+
+  // Заполняем нулевые дни, чтобы график был непрерывным (days+1 точек вкл. сегодня).
+  // ВАЖНО: ключи дня берём в UTC, чтобы совпадало с DATE(timestamp) в SQL
+  // (SQLite date() парсит ISO-Z как UTC). Иначе для не-UTC таймзон сегодняшний
+  // бар всегда показывал 0 — сообщения «уезжали» на вчерашний ключ.
+  const counts = new Map(rows.map(r => [r.day, r.count]));
+  const now = new Date();
+  const todayUtcMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const points = [];
+  let total = 0;
+  for (let i = days; i >= 0; i--) {
+    const day = new Date(todayUtcMs - i * 86400000).toISOString().slice(0, 10);
+    const count = counts.get(day) || 0;
+    points.push({ day, count });
+    total += count;
+  }
+
+  res.json({ points, days, total });
 });
 
 // Получение списка всех пользователей
@@ -639,6 +688,17 @@ app.delete('/api/admin/messages/:messageId', (req, res) => {
 
     // Отправляем событие всем подключенным клиентам в этом чате
     io.to(chatId).emit('message_deleted', deletedMessage);
+
+    // Обновляем lastMessage в списках чатов участников: без этого превью
+    // удалённого сообщения «зависало» до перезапуска сервера.
+    try {
+      const participants = db.prepare('SELECT user_id FROM chat_participants WHERE chat_id = ?').all(chatId);
+      participants.forEach(p => {
+        emitToUser(p.user_id, 'chat_updated', { chatId, chat: getChatWithDetails(chatId, p.user_id) });
+      });
+    } catch (e) {
+      console.error('Ошибка рассылки chat_updated после удаления сообщения:', e.message);
+    }
 
     res.json({
       success: true,

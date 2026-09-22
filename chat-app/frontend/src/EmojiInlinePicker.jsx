@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import './EmojiInlinePicker.css';
 import emojiData from './emojiData.json';
 import stickerData from './stickerData.json';
+import TgsSticker from './TgsSticker';
 
 /** Извлекает unified код из emoji-символа (с удалением variation selectors) */
 function getUnified(emoji) {
@@ -154,6 +155,25 @@ function StickerItem({ file, name, emoji, size = '64px', onClick, serverUrl }) {
       </button>
     );
   }
+  // Анимированные .tgs — рендерим через Lottie (lottie-web), анимация по наведению
+  if (file && file.toLowerCase().endsWith('.tgs')) {
+    return (
+      <button
+        type="button"
+        className="eip-sticker-btn"
+        onClick={() => onClick({ type: 'sticker', file, emoji })}
+        title={name}
+      >
+        <TgsSticker
+          src={stickerUrl(file, serverUrl)}
+          size={size}
+          alt={emoji}
+          hoverPlay
+          className="eip-sticker-img"
+        />
+      </button>
+    );
+  }
   return (
     <button
       type="button"
@@ -168,7 +188,7 @@ function StickerItem({ file, name, emoji, size = '64px', onClick, serverUrl }) {
   );
 }
 
-export default function EmojiInlinePicker({ show, onEmojiClick, onClose, theme, onStickerSend, serverUrl }) {
+export default function EmojiInlinePicker({ show, onEmojiClick, onClose, theme, onStickerSend, serverUrl, hideStickers }) {
   const [activeCategory, setActiveCategory] = useState('smilies');
   const recentInit = getRecentStickers(32);
   const firstTab = recentInit.length > 0 ? '__recent__' : (Object.keys(stickerData.popular?.categories || {})[0] || '');
@@ -258,13 +278,15 @@ export default function EmojiInlinePicker({ show, onEmojiClick, onClose, theme, 
         >
           😀 Смайлы
         </button>
-        <button
-          type="button"
-          className={`eip-mode-btn ${panelMode === 'stickers' ? 'active' : ''}`}
-          onClick={() => setPanelMode('stickers')}
-        >
-          🎨 Стикеры
-        </button>
+        {!hideStickers && (
+          <button
+            type="button"
+            className={`eip-mode-btn ${panelMode === 'stickers' ? 'active' : ''}`}
+            onClick={() => setPanelMode('stickers')}
+          >
+            🎨 Стикеры
+          </button>
+        )}
       </div>
 
       {/* Верхние категории (только для эмодзи) */}
@@ -306,7 +328,7 @@ export default function EmojiInlinePicker({ show, onEmojiClick, onClose, theme, 
       )}
 
       {/* Сетка стикеров */}
-      {panelMode === 'stickers' && (
+      {!hideStickers && panelMode === 'stickers' && (
         <>
           {/* Переключатель вариантов стикеров */}
           <div className="eip-sticker-variants">

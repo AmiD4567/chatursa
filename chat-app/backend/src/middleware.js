@@ -108,8 +108,8 @@ function setupMiddleware(app) {
   });
   app.use('/api/', apiLimiter);
 
-  // Регистрируем MIME-тип для .avif (стикеры)
-  express.static.mime.define({ 'image/avif': ['avif'] });
+  // Регистрируем MIME-тип для .avif (стикеры) и .tgs (анимированные Telegram-стикеры)
+  express.static.mime.define({ 'image/avif': ['avif'], 'application/x-tgsticker': ['tgs'] });
   app.use(express.json({ limit: '1mb' }));
   app.use('/uploads', express.static(cfg.UPLOADS_PATH));
   app.use('/stickers', express.static(path.join(cfg.BACKEND_ROOT, '../frontend/build/stickers')));

@@ -3,7 +3,7 @@ import EmojiInlinePicker from './EmojiInlinePicker';
 
 function MessageInput({
   inputText,
-  selectedFile,
+  selectedFiles,
   isUploading,
   isDragOver,
   showEmojiPicker,
@@ -25,7 +25,7 @@ function MessageInput({
   setIsTyping,
   setShowEmojiPicker,
   setEmojiPickerPinned,
-  setSelectedFile,
+  setSelectedFiles,
   setMessageDrafts,
   onSubmit,
   onDragOver,
@@ -90,6 +90,7 @@ function MessageInput({
       )}
       <input
         type="file"
+        multiple
         ref={fileInputRef}
         onChange={onFileSelect}
         style={{ display: 'none' }}
@@ -100,14 +101,18 @@ function MessageInput({
           <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
         </svg>
       </label>
-      {selectedFile && (
-        <span className="selected-file-main">
-          📎 {selectedFile.name}
-          <button type="button" onClick={() => {
-            setSelectedFile(null);
-            if (fileInputRef.current) fileInputRef.current.value = '';
-          }}>✕</button>
-        </span>
+      {selectedFiles && selectedFiles.length > 0 && (
+        <div className="selected-files-list">
+          {selectedFiles.map((f, i) => (
+            <span className="selected-file-main" key={i}>
+              📎 {f.name}
+              <button type="button" onClick={() => {
+                setSelectedFiles(prev => prev.filter((_, idx) => idx !== i));
+                if (fileInputRef.current) fileInputRef.current.value = '';
+              }}>✕</button>
+            </span>
+          ))}
+        </div>
       )}
       <div
         ref={messageInputRef}
@@ -172,7 +177,7 @@ function MessageInput({
             <line x1="15" y1="9" x2="15.01" y2="9"/>
           </svg>
         </button>
-        <button type="submit" disabled={isUploading || (!hasInputContent() && !selectedFile)}>
+        <button type="submit" disabled={isUploading || (!hasInputContent() && !(selectedFiles && selectedFiles.length))}>
           {isUploading ? '⏳' : '➤'}
         </button>
       </div>

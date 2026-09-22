@@ -1,15 +1,27 @@
 import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import io from 'socket.io-client';
 import EmojiInlinePicker from './EmojiInlinePicker';
+import TgsSticker from './TgsSticker';
 import LinkPreviewCard from './LinkPreviewCard';
 import { SAFE_EMOJIS } from './safe-emojis';
-import { splitTextByUrls, detectUrls } from './urlUtils';
+import { detectUrls } from './urlUtils';
 import { useReactionParticles } from './ReactionParticlesManager';
 import emojiData from './emojiData.json';
 import { saveMessages, getMessages, saveChats, getChats, queueOutgoing, getOutbox, removeFromOutbox, saveCustomBg, getAllCustomBgs, deleteCustomBg, compareChatsPinnedFirst } from './db';
 import { initE2EEForUser, ensureSharedKey, encryptMessage, decryptMessage, getCachedSharedKey, setE2EEApiBase, getCachedGroupKey, cacheGroupKey, decryptGroupKey, generateGroupKey, encryptGroupKeyForMember, getPeerPublicKey } from './crypto';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
+
+// Внешние ссылки в markdown (база знаний) открываются в новой вкладке/
+// системном браузере, а не навигацией текущего окна приложения.
+// Хук глобальный, но DOMPurify.sanitize зовёт только renderMarkdown (wiki),
+// поэтому на остальные рендеры не влияет.
+DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+  if (node && node.tagName && node.tagName.toUpperCase() === 'A' && node.getAttribute('href')) {
+    node.setAttribute('target', '_blank');
+    node.setAttribute('rel', 'noopener noreferrer');
+  }
+});
 import DisconnectedOverlay from './DisconnectedOverlay';
 import InAppNotification from './InAppNotification';
 import useCall from './hooks/useCall';
@@ -368,6 +380,69 @@ function shouldTriggerConfetti(text) {
   return CONFETTI_WORDS.some(w => words.includes(w)) || CONFETTI_EMOJIS.some(e => text.includes(e));
 }
 
+// ══════════ Feather-иконки (stroke=currentColor) для контекстных меню ══════════
+const MenuIcon = ({ children, size = 16 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
+    stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+    className="context-menu-icon" aria-hidden="true">
+    {children}
+  </svg>
+);
+const IconUser = () => (
+  <MenuIcon><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></MenuIcon>
+);
+const IconPin = () => (
+  <MenuIcon><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></MenuIcon>
+);
+const IconBell = () => (
+  <MenuIcon><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></MenuIcon>
+);
+const IconBellOff = () => (
+  <MenuIcon><path d="M13.73 21a2 2 0 0 1-3.46 0"/><path d="M18.63 13A17.89 17.89 0 0 1 18 8"/><path d="M6.26 6.26A5.86 5.86 0 0 0 6 8c0 7-3 9-3 9h14"/><path d="M18 8a6 6 0 0 0-9.33-5"/><line x1="1" y1="1" x2="23" y2="23"/></MenuIcon>
+);
+const IconMail = () => (
+  <MenuIcon><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></MenuIcon>
+);
+const IconTrash = () => (
+  <MenuIcon><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></MenuIcon>
+);
+const IconXCircle = () => (
+  <MenuIcon><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></MenuIcon>
+);
+const IconCornerUpLeft = () => (
+  <MenuIcon><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></MenuIcon>
+);
+const IconCopy = () => (
+  <MenuIcon><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></MenuIcon>
+);
+const IconEdit = () => (
+  <MenuIcon><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></MenuIcon>
+);
+const IconSend = () => (
+  <MenuIcon><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></MenuIcon>
+);
+const IconCalendar = () => (
+  <MenuIcon><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></MenuIcon>
+);
+const IconCheckSquare = () => (
+  <MenuIcon><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></MenuIcon>
+);
+const IconScissors = () => (
+  <MenuIcon><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></MenuIcon>
+);
+const IconClipboard = () => (
+  <MenuIcon><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/></MenuIcon>
+);
+const IconSearch = () => (
+  <MenuIcon><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></MenuIcon>
+);
+const IconSmile = () => (
+  <MenuIcon><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></MenuIcon>
+);
+const IconPlus = () => (
+  <MenuIcon><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></MenuIcon>
+);
+
 function App() {
   const [socket, setSocket] = useState(null);
   const [currentUser, setCurrentUser] = useState(null);
@@ -414,6 +489,7 @@ function App() {
   const [historyUi, setHistoryUi] = useState({ loadingMore: false, hasMore: true });
   const historyMetaRef = useRef({});   // { [chatId]: { hasMore, loadingMore, oldestTs } }
   const messagesContainerRef = useRef(null);
+  const loginVideoRef = useRef(null);
   const [users, setUsers] = useState([]);
 
   // Видимость приложения (для корректного подсчёта непрочитанных)
@@ -424,7 +500,7 @@ function App() {
   const isWindowFocusedRef = useRef(true);
 
   const [inputText, setInputText] = useState('');
-  const [selectedFile, setSelectedFile] = useState(null);
+  const [selectedFiles, setSelectedFiles] = useState([]);
   const [isUploading, setIsUploading] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
   // Файл тащат над областью переписки (а не над полем ввода)
@@ -460,6 +536,10 @@ function App() {
     messageSenderId: null,
     reactionsExpanded: false,
   });
+
+  // Открыт ли эмодзи-пикер выбора произвольной реакции (в контекстном меню сообщений)
+  const [reactionPickerOpen, setReactionPickerOpen] = useState(false);
+  const reactionPickerRef = useRef(null);
 
   // Контекстное меню чата (в списке чатов по правому клику)
   const [chatContextMenu, setChatContextMenu] = useState({
@@ -861,6 +941,8 @@ function App() {
 
   const [isAdmin, setIsAdmin] = useState(false);
   const [adminStats, setAdminStats] = useState(null);
+  const [adminMessagesDaily, setAdminMessagesDaily] = useState([]);
+  const [adminChartDays, setAdminChartDays] = useState(14);
   const [botAnalyticsData, setBotAnalyticsData] = useState(null);
   const [botSettings, setBotSettings] = useState(null);
   const [supportRequests, setSupportRequests] = useState([]);
@@ -1469,7 +1551,11 @@ function App() {
             isAppVisibleRef.current = !!state.visible;
             setIsWindowFocused(!!state.focused);
             isWindowFocusedRef.current = !!state.focused;
-            console.log(`app visibility: ${state.visible}, focused: ${state.focused}`);
+            // Когда окно невидимо/не в фокусе — глушим тяжёлый рендеринг (анимации,
+            // backdrop-filter, видео-фон), чтобы снизить нагрузку на GPU.
+            const hidden = !state.visible && !state.focused;
+            document.body.classList.toggle('app-hidden', hidden);
+            console.log(`app visibility: ${state.visible}, focused: ${state.focused}, hidden: ${hidden}`);
           });
         }
         if (window.electronAPI.getAppVisibilityStatus) {
@@ -1488,6 +1574,40 @@ function App() {
     };
 
     initApp();
+  }, []);
+
+  // Для браузерного окружения (веб/PWA): глушим тяжёлый рендеринг,
+  // когда вкладка скрыта — снижает нагрузку на GPU в фоне.
+  useEffect(() => {
+    if (window.electronAPI) return;
+    const onVis = () => {
+      const hidden = document.hidden;
+      setIsAppVisible(!hidden);
+      isAppVisibleRef.current = !hidden;
+      document.body.classList.toggle('app-hidden', hidden);
+    };
+    onVis();
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, []);
+
+  // Когда окно/вкладка скрыто (класс app-hidden на body) — ставим фоновое видео
+  // на паузу, чтобы остановить постоянное аппаратное декодирование на GPU.
+  useEffect(() => {
+    const applyVideo = () => {
+      const video = loginVideoRef.current;
+      if (!video) return;
+      const hidden = document.body.classList.contains('app-hidden');
+      if (hidden) {
+        if (!video.paused) video.pause();
+      } else if (video.paused) {
+        video.play().catch(() => {});
+      }
+    };
+    applyVideo();
+    const obs = new MutationObserver(() => applyVideo());
+    obs.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+    return () => obs.disconnect();
   }, []);
 
   // ============================================
@@ -3087,6 +3207,7 @@ function App() {
         if (data.isAdmin) {
           setIsAdmin(true);
           loadAdminStats();
+          loadAdminMessagesDaily();
         }
       }
     } catch (err) {
@@ -3107,6 +3228,25 @@ function App() {
       console.error('Ошибка загрузки статистики:', err);
     }
   };
+
+  const loadAdminMessagesDaily = async (days) => {
+    if (!currentUser) return;
+    const period = days || adminChartDays;
+    try {
+      const response = await fetch(`${SOCKET_URL}/api/admin/messages-daily?userId=${currentUser.id}&days=${period}`);
+      if (response.ok) {
+        const data = await response.json();
+        setAdminMessagesDaily(Array.isArray(data.points) ? data.points : []);
+      }
+    } catch (err) {
+      console.error('Ошибка загрузки графика сообщений:', err);
+    }
+  };
+
+  // Перезагружаем график сообщений при смене периода
+  useEffect(() => {
+    if (isAdmin) loadAdminMessagesDaily();
+  }, [adminChartDays, isAdmin]);
 
   const loadBotAnalytics = async () => {
     if (!currentUser) return;
@@ -3178,7 +3318,7 @@ function App() {
   const handleAdminTabChange = (tab) => {
     setActiveAdminTab(tab);
     if (tab === 'users') loadAdminUsers();
-    if (tab === 'dashboard') loadAdminStats();
+    if (tab === 'dashboard') { loadAdminStats(); loadAdminMessagesDaily(); }
   };
 
   const handleDeleteUser = async (userId) => {
@@ -4766,43 +4906,50 @@ function App() {
       return;
     }
     e.preventDefault();
-    if (!socket || (!hasInputContent() && !selectedFile) || !activeChatId) return;
+    if (!socket || (!hasInputContent() && selectedFiles.length === 0) || !activeChatId) return;
 
     const messageText = getMessageText();
 
-    if (selectedFile) {
+    if (selectedFiles.length > 0) {
       setIsUploading(true);
-      const formData = new FormData();
-      formData.append('file', selectedFile);
+      const expiresAt = selfDestructTimer ? new Date(Date.now() + selfDestructTimer).toISOString() : null;
 
       try {
-        const response = await fetch(`${SOCKET_URL}/upload`, {
-          method: 'POST',
-          body: formData
-        });
-        const fileData = await response.json();
+        for (let i = 0; i < selectedFiles.length; i++) {
+          const file = selectedFiles[i];
+          const isFirst = (i === 0);
+          // Текст и ответ прикрепляем только к первому сообщению
+          const textForMsg = isFirst ? messageText : '';
+          const formData = new FormData();
+          formData.append('file', file);
 
-        const e2eePrepared = await prepareE2EEMessage(activeChatId, messageText);
-        const expiresAt = selfDestructTimer ? new Date(Date.now() + selfDestructTimer).toISOString() : null;
-        sendOrQueueMessage({
-          chatId: activeChatId,
-          text: e2eePrepared.text,
-          ...(e2eePrepared.e2ee ? { e2ee: true, e2ee_nonce: e2eePrepared.e2ee_nonce, e2ee_ephemeral: e2eePrepared.e2ee_ephemeral } : {}),
-          replyTo: replyToMessage ? { messageId: replyToMessage.id, text: replyToMessage.text, senderName: replyToMessage.senderName } : null,
-          ...(expiresAt ? { expiresAt } : {}),
-          file: {
-            filename: fileData.filename,
-            url: fileData.url,
-            size: fileData.size,
-            mimetype: fileData.mimetype
-          }
-        }, messageText);
+          const response = await fetch(`${SOCKET_URL}/upload`, {
+            method: 'POST',
+            body: formData
+          });
+          const fileData = await response.json();
+
+          const e2eePrepared = await prepareE2EEMessage(activeChatId, textForMsg);
+          sendOrQueueMessage({
+            chatId: activeChatId,
+            text: e2eePrepared.text,
+            ...(e2eePrepared.e2ee ? { e2ee: true, e2ee_nonce: e2eePrepared.e2ee_nonce, e2ee_ephemeral: e2eePrepared.e2ee_ephemeral } : {}),
+            ...(isFirst && replyToMessage ? { replyTo: { messageId: replyToMessage.id, text: replyToMessage.text, senderName: replyToMessage.senderName } } : {}),
+            ...(expiresAt ? { expiresAt } : {}),
+            file: {
+              filename: fileData.filename,
+              url: fileData.url,
+              size: fileData.size,
+              mimetype: fileData.mimetype
+            }
+          }, textForMsg);
+        }
         setSelfDestructTimer(null);
       } catch (error) {
         console.error('Ошибка загрузки файла:', error);
       } finally {
         setIsUploading(false);
-        setSelectedFile(null);
+        setSelectedFiles([]);
         setReplyToMessage(null);
         setInputText('');
         // Очищаем contentEditable div
@@ -4864,9 +5011,9 @@ function App() {
   };
 
   const handleFileSelect = (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      setSelectedFile(file);
+    const files = Array.from(e.target.files || []);
+    if (files.length > 0) {
+      setSelectedFiles(files);
     }
   };
 
@@ -5346,7 +5493,7 @@ function App() {
     const pastedFile = new File([imageBlob], fileName, { type: imageType });
 
     // Устанавливаем как выбранный файл (аналогично прикреплению через кнопку)
-    setSelectedFile(pastedFile);
+    setSelectedFiles([pastedFile]);
 
     // Очищаем поле ввода от вставленного изображения
     if (messageInputRef.current) {
@@ -5379,9 +5526,9 @@ function App() {
   };
 
   const attachDroppedFile = (e) => {
-    const files = e.dataTransfer.files;
+    const files = Array.from(e.dataTransfer.files || []);
     if (files.length > 0) {
-      setSelectedFile(files[0]);
+      setSelectedFiles(files);
       // Возвращаем фокус в поле ввода для набора сопроводительного текста
       setTimeout(() => messageInputRef.current?.focus(), 0);
     }
@@ -5594,13 +5741,22 @@ return parts.length > 0 ? parts : text;
       for (let i = 0; i < parts.length; i++) {
         if (i % 2 === 1) {
           const stickerFile = parts[i];
-          result.push(
-            <img key={`stk-${key++}`} className="sticker-inline" data-sticker="true"
-                 src={stickerUrl(stickerFile)} alt=""
-                 style={{ width: 'var(--message-emoji-size, 28px)', height: 'var(--message-emoji-size, 28px)',
-                          objectFit: 'contain', verticalAlign: 'middle' }}
-                 onError={(e) => { e.target.style.display = 'none'; }} />
-          );
+          const stkSize = 'var(--message-emoji-size, 28px)';
+          if (stickerFile && stickerFile.toLowerCase().endsWith('.tgs')) {
+            // Анимированный стикер (.tgs) — рендерим через Lottie, autoplay
+            result.push(
+              <TgsSticker key={`stk-${key++}`} src={stickerUrl(stickerFile)}
+                          size={stkSize} className="sticker-inline" alt="" />
+            );
+          } else {
+            result.push(
+              <img key={`stk-${key++}`} className="sticker-inline" data-sticker="true"
+                   src={stickerUrl(stickerFile)} alt=""
+                   style={{ width: stkSize, height: stkSize,
+                            objectFit: 'contain', verticalAlign: 'middle' }}
+                   onError={(e) => { e.target.style.display = 'none'; }} />
+            );
+          }
         } else if (parts[i]) {
           const wrapped = wrapEmojisInText(parts[i]);
           if (typeof wrapped === 'string') {
@@ -5637,66 +5793,69 @@ return parts.length > 0 ? parts : text;
       );
     }
 
-    // Regular text: split by URLs, render text parts normally and URLs as clickable links
-    const urlParts = splitTextByUrls(text);
-    const elements = [];
-    let key = 0;
+    // Regular text: render as Markdown (headings, bold, tables, links),
+    // preserving Apple emoji images and wiki links inside the rendered HTML.
+    return (
+      <span
+        className="message-md markdown-body"
+        onClick={handleMarkdownWikiClick}
+        dangerouslySetInnerHTML={{ __html: renderMarkdownMessageText(text) }}
+      />
+    );
+  };
 
-    for (const part of urlParts) {
-      if (part.type === 'url') {
-        elements.push(
-          <a key={`link-${key++}`} href={part.content} target="_blank" rel="noopener noreferrer" className="message-link-inline">
-            {part.content}
-          </a>
-        );
-      } else {
-        const wikiLinkRegex = /wiki:\/\/(\S+)/g;
-        let lastIdx = 0;
-        let match;
-        let hasWikiLinks = false;
-        const textParts = [];
+  // Рендер обычного текста сообщения как Markdown: заголовки, жирный, курсив,
+  // списки, таблицы и ссылки. Эмодзи-кластеры сохраняем как картинки Apple,
+  // а wiki-ссылки (wiki://id) делаем кликабельными.
+  const renderMarkdownMessageText = (text) => {
+    if (!text) return '';
 
-        while ((match = wikiLinkRegex.exec(part.content)) !== null) {
-          hasWikiLinks = true;
-          if (match.index > lastIdx) {
-            textParts.push(part.content.substring(lastIdx, match.index));
-          }
-          const articleId = match[1];
-          textParts.push({ type: 'wiki', articleId, full: match[0] });
-          lastIdx = match.index + match[0].length;
-        }
-        if (hasWikiLinks) {
-          if (lastIdx < part.content.length) {
-            textParts.push(part.content.substring(lastIdx));
-          }
-          for (const tp of textParts) {
-            if (typeof tp === 'string') {
-              const wrapped = wrapEmojisInText(tp);
-              if (typeof wrapped === 'string') {
-                elements.push(wrapped);
-              } else {
-                wrapped.forEach(w => elements.push(w));
-              }
-            } else if (tp.type === 'wiki') {
-              elements.push(
-                <span key={`wiki-${key++}`} className="wiki-link-inline" onClick={() => openWikiArticleById(tp.articleId)} title="Открыть в базе знаний">
-                  📖 Статья в базе знаний
-                </span>
-              );
-            }
-          }
-        } else {
-          const wrapped = wrapEmojisInText(part.content);
-          if (typeof wrapped === 'string') {
-            elements.push(wrapped);
-          } else {
-            wrapped.forEach(w => elements.push(w));
-          }
-        }
-      }
+    // 1. Извлекаем эмодзи-кластеры в уникальные плейсхолдеры, чтобы marked
+    //    не трогал их, а после санитизации вернуть как картинки Apple.
+    const emojiMap = [];
+    const escaped = text.replace(STATUS_EMOJI_CLUSTER_RE, (m) => {
+      const ph = `\u0001E${emojiMap.length}\u0001`;
+      emojiMap.push(m);
+      return ph;
+    });
+
+    // 2. Markdown -> HTML -> санитизация (защита от XSS, target=_blank через хук)
+    let html;
+    try {
+      html = marked.parse(escaped);
+    } catch (e) {
+      html = escaped;
+    }
+    html = DOMPurify.sanitize(html);
+
+    // 3. Возвращаем эмодзи-кластеры как картинки Apple (безопасные, свои данные).
+    if (emojiMap.length) {
+      html = html.replace(/\u0001E(\d+)\u0001/g, (_, i) => {
+        const cluster = emojiMap[+i];
+        const variants = emojiUnifiedVariants(cluster);
+        const src = `https://cdn.jsdelivr.net/npm/emoji-datasource-apple@15.0.1/img/apple/64/${variants[0]}.png`;
+        const dim = 'var(--message-emoji-size, 20px)';
+        return `<img class="status-emoji-img emoji" src="${src}" alt="${cluster.replace(/"/g, '&quot;')}" loading="lazy" style="width:${dim};height:${dim};vertical-align:middle;display:inline-block;object-fit:contain;" onerror="this.outerHTML=this.alt;">`;
+      });
     }
 
-    return elements.length > 0 ? elements : text;
+    // 4. Делаем wiki-ссылки кликабельными (после санитизации, т.к. это свои данные).
+    html = html.replace(/wiki:\/\/([^\s<]+)/g, (m, id) => {
+      const safeId = id.replace(/"/g, '&quot;');
+      return `<span class="wiki-link-inline" data-wiki="${safeId}" title="Открыть в базе знаний">📖 Статья в базе знаний</span>`;
+    });
+
+    return html;
+  };
+
+  // Делегированный клик по wiki-ссылкам внутри Markdown-рендеринга сообщений.
+  const handleMarkdownWikiClick = (e) => {
+    const el = e.target && e.target.closest ? e.target.closest('[data-wiki]') : null;
+    if (el && el.dataset.wiki) {
+      e.preventDefault();
+      e.stopPropagation();
+      openWikiArticleById(el.dataset.wiki);
+    }
   };
 
   const renderLinkPreviews = (text) => {
@@ -6036,6 +6195,7 @@ return parts.length > 0 ? parts : text;
   // Закрытие контекстного меню
   const closeContextMenu = () => {
     setContextMenu({ visible: false, x: 0, y: 0, rawX: 0, rawY: 0, messageId: null, messageText: '', messageChatId: null, messageSenderId: null, reactionsExpanded: false });
+    setReactionPickerOpen(false);
   };
 
   // --- Контекстное меню чата (правый клик по строке в списке чатов) ---
@@ -6408,11 +6568,48 @@ return parts.length > 0 ? parts : text;
 
   // === ОБРАБОТКА РЕАКЦИЙ ===
 
+  // Ключ localStorage для истории последних реакций пользователя
+  const RECENT_REACTIONS_KEY = 'recent_reactions';
+
+  // Получить последние N поставленных реакций (новые первыми)
+  const getRecentReactions = (limit = 10) => {
+    try {
+      const stored = localStorage.getItem(RECENT_REACTIONS_KEY);
+      if (!stored) return [];
+      const reactions = JSON.parse(stored);
+      return Array.isArray(reactions) ? reactions.slice(-limit).reverse() : [];
+    } catch {
+      return [];
+    }
+  };
+
+  // Записать реакцию в историю (без дубликатов, ограниченная по размеру)
+  const addReactionToHistory = (emoji) => {
+    try {
+      const stored = localStorage.getItem(RECENT_REACTIONS_KEY);
+      let reactions = stored ? JSON.parse(stored) : [];
+      if (!Array.isArray(reactions)) reactions = [];
+      reactions = reactions.filter(e => e !== emoji);
+      reactions.push(emoji);
+      if (reactions.length > 20) {
+        reactions = reactions.slice(-20);
+      }
+      localStorage.setItem(RECENT_REACTIONS_KEY, JSON.stringify(reactions));
+    } catch (e) {
+      console.warn('Не удалось сохранить историю реакций:', e);
+    }
+  };
+
   // Добавить или удалить реакцию
   const handleAddReaction = (emoji, messageId, rect) => {
     if (!socket) {
       console.error('Сокет не подключён!');
       return;
+    }
+
+    // Запоминаем реакцию в историю последних (для вертикального меню быстрых реакций)
+    if (emoji) {
+      addReactionToHistory(emoji);
     }
 
     // Отправляем реакцию на сервер
@@ -8190,6 +8387,91 @@ return parts.length > 0 ? parts : text;
     gfm: true
   });
 
+  const renderMessagesChart = (points) => {
+    if (!Array.isArray(points) || points.length === 0) {
+      return <div className="admin-chart-empty">Нет данных за выбранный период</div>;
+    }
+
+    const W = 800;
+    const H = 220;
+    const padL = 36;
+    const padR = 12;
+    const padT = 12;
+    const padB = 28;
+    const chartW = W - padL - padR;
+    const chartH = H - padT - padB;
+
+    const max = Math.max(1, ...points.map(p => p.count));
+    // Округляем максимум вверх до «красивого» числа для оси
+    const niceMax = (() => {
+      if (max <= 5) return 5;
+      const pow = Math.pow(10, Math.floor(Math.log10(max)));
+      const n = max / pow;
+      const step = n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10;
+      return step * pow;
+    })();
+
+    const barW = chartW / points.length;
+    const gap = Math.min(4, barW * 0.25);
+    const bw = Math.max(1, barW - gap);
+
+    // Подписи по X: показываем ~6-7 равноотстоящих меток
+    const labelCount = Math.min(7, points.length);
+    const labelIdx = new Set();
+    for (let i = 0; i < labelCount; i++) {
+      labelIdx.add(Math.round((i * (points.length - 1)) / Math.max(1, labelCount - 1)));
+    }
+
+    const fmtDay = (day) => {
+      const d = new Date(day + 'T00:00:00');
+      return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
+    };
+
+    // Горизонтальные линии сетки + подписи Y
+    const gridLines = [];
+    const yTicks = 4;
+    for (let i = 0; i <= yTicks; i++) {
+      const val = Math.round((niceMax * i) / yTicks);
+      const y = padT + chartH - (val / niceMax) * chartH;
+      gridLines.push(
+        <g key={`g-${i}`}>
+          <line x1={padL} y1={y} x2={W - padR} y2={y} className="admin-chart-grid" />
+          <text x={padL - 6} y={y + 3} textAnchor="end" className="admin-chart-axis-label">{val}</text>
+        </g>
+      );
+    }
+
+    return (
+      <svg className="admin-chart-svg" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" role="img" aria-label="График сообщений по дням">
+        {gridLines}
+        {points.map((p, i) => {
+          const h = (p.count / niceMax) * chartH;
+          const x = padL + i * barW + gap / 2;
+          const y = padT + chartH - h;
+          return (
+            <g key={p.day}>
+              <rect
+                x={x}
+                y={y}
+                width={bw}
+                height={h}
+                rx={2}
+                className="admin-bar"
+              >
+                <title>{`${fmtDay(p.day)}: ${p.count} сообщ.`}</title>
+              </rect>
+              {labelIdx.has(i) && (
+                <text x={x + bw / 2} y={H - padB + 16} textAnchor="middle" className="admin-chart-axis-label">
+                  {fmtDay(p.day)}
+                </text>
+              )}
+            </g>
+          );
+        })}
+      </svg>
+    );
+  };
+
   const renderMarkdown = (text) => {
     if (!text) return '';
     const raw = marked.parse(text);
@@ -8351,6 +8633,7 @@ return parts.length > 0 ? parts : text;
       <div className="login-container">
         {/* Видео-фон */}
         <video
+          ref={loginVideoRef}
           className="login-video-bg"
           autoPlay
           loop
@@ -9234,6 +9517,7 @@ return parts.length > 0 ? parts : text;
 
             <div className="admin-content">
                 {activeAdminTab === 'dashboard' && adminStats && (
+                  <>
                   <div className="admin-dashboard">
                     <div className="admin-stat-card">
                       <div className="stat-icon">👥</div>
@@ -9271,6 +9555,28 @@ return parts.length > 0 ? parts : text;
                       </div>
                     </div>
                   </div>
+
+                  <div className="admin-chart-card">
+                    <div className="admin-chart-header">
+                      <div className="admin-chart-title">
+                        <span className="admin-chart-icon">📊</span>
+                        Сообщения по дням
+                      </div>
+                      <div className="admin-chart-period-tabs">
+                        {[7, 14, 30, 90].map(d => (
+                          <button
+                            key={d}
+                            className={`admin-chart-period-btn ${adminChartDays === d ? 'active' : ''}`}
+                            onClick={() => setAdminChartDays(d)}
+                          >
+                            {d} дн
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    {renderMessagesChart(adminMessagesDaily)}
+                  </div>
+                  </>
                 )}
 
                 {activeAdminTab === 'users' && (
@@ -10825,19 +11131,24 @@ return parts.length > 0 ? parts : text;
               )}
               <input
                 type="file"
+                multiple
                 ref={fileInputRef}
                 onChange={handleFileSelect}
                 style={{ display: 'none' }}
                 id="file-input-main"
               />
-              {selectedFile && (
-                <span className="selected-file-main">
-                  📎 {selectedFile.name}
-                  <button type="button" onClick={() => {
-                    setSelectedFile(null);
-                    if (fileInputRef.current) fileInputRef.current.value = '';
-                  }}>✕</button>
-                </span>
+              {selectedFiles.length > 0 && (
+                <div className="selected-files-list">
+                  {selectedFiles.map((f, i) => (
+                    <span className="selected-file-main" key={i}>
+                      📎 {f.name}
+                      <button type="button" onClick={() => {
+                        setSelectedFiles(prev => prev.filter((_, idx) => idx !== i));
+                        if (fileInputRef.current) fileInputRef.current.value = '';
+                      }}>✕</button>
+                    </span>
+                  ))}
+                </div>
               )}
               <div ref={addMenuRef} style={{ position: 'relative', display: 'inline-flex', alignSelf: 'center', marginRight: '8px' }}>
                 <button type="button" className="add-menu-btn" onClick={(e) => { e.preventDefault(); setShowAddMenu(prev => !prev); }} title="Добавить">
@@ -10935,7 +11246,7 @@ return parts.length > 0 ? parts : text;
                   </svg>
                 </button>
                 )}
-                <button type="submit" disabled={isUploading || isGroupWriteBlocked() || (!hasInputContent() && !selectedFile)}>
+                <button type="submit" disabled={isUploading || isGroupWriteBlocked() || (!hasInputContent() && selectedFiles.length === 0)}>
                   {isUploading ? '⏳' : '➤'}
                 </button>
               </div>
@@ -14839,7 +15150,7 @@ return parts.length > 0 ? parts : text;
                     handleViewUserInfo(otherUser);
                   }}
                 >
-                  👤 Информация о пользователе
+                  <IconUser /> <span>Информация о пользователе</span>
                 </button>
                 <div className="context-menu-divider"></div>
               </>
@@ -14852,7 +15163,7 @@ return parts.length > 0 ? parts : text;
                 toggleChatPin(menuChat);
               }}
             >
-              {menuChat.pinned ? '📌 Открепить чат' : '📌 Закрепить чат'}
+              {menuChat.pinned ? <><IconPin /> <span>Открепить чат</span></> : <><IconPin /> <span>Закрепить чат</span></>}
             </button>
             <button
               className="context-menu-item"
@@ -14862,7 +15173,7 @@ return parts.length > 0 ? parts : text;
                 toggleChatMute(menuChat);
               }}
             >
-              {menuChat.muted ? '🔔 Включить уведомления' : '🔕 Выключить уведомления'}
+              {menuChat.muted ? <><IconBellOff /> <span>Включить уведомления</span></> : <><IconBell /> <span>Выключить уведомления</span></>}
             </button>
             <button
               className="context-menu-item"
@@ -14872,7 +15183,7 @@ return parts.length > 0 ? parts : text;
                 setChatUnread(menuChat, true);
               }}
             >
-              ◽ Пометить как непрочитанное
+              <IconMail /> <span>Пометить как непрочитанное</span>
             </button>
             <div className="context-menu-divider"></div>
             <button
@@ -14882,7 +15193,7 @@ return parts.length > 0 ? parts : text;
                 clearChatHistory(menuChat);
               }}
             >
-              🗑️ Очистить историю
+              <IconTrash /> <span>Очистить историю</span>
             </button>
             <button
               className="context-menu-item context-menu-item-danger"
@@ -14893,7 +15204,7 @@ return parts.length > 0 ? parts : text;
                 handleDeleteChat(menuChat);
               }}
             >
-              ⛔ Удалить чат
+              <IconXCircle /> <span>Удалить чат</span>
             </button>
           </div>
         </div>
@@ -14905,92 +15216,76 @@ return parts.length > 0 ? parts : text;
       {contextMenu.visible && (
         <div
           ref={messageMenuRef}
-          className="message-context-menu"
+          className={`message-context-menu has-reactions-menu${reactionPickerOpen ? ' reaction-picker-open' : ''}${(() => {
+            const submenuWidth = reactionPickerOpen ? 340 : 50;
+            return submenuWidth > 0 && contextMenu.x + 224 + 10 + submenuWidth > window.innerWidth - 8 ? ' reaction-picker-left' : '';
+          })()}`}
           style={{ top: contextMenu.y, left: contextMenu.x }}
           onClick={closeContextMenu}
         >
-          {/* Быстрые реакции */}
-          <div className="context-menu-reactions-wrapper">
-            {QUICK_REACTIONS.length > 6 ? (
-              <>
-                <div className={`context-menu-reactions ${contextMenu.reactionsExpanded ? 'expanded' : ''}`}>
-                  {(contextMenu.reactionsExpanded ? QUICK_REACTIONS : QUICK_REACTIONS.slice(0, 6)).map((emoji) => (
-                    <button
-                      key={emoji}
-                      className="context-menu-reaction-btn"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        const rect = e.target.getBoundingClientRect();
-                        handleAddReaction(emoji, contextMenu.messageId, rect);
-                      }}
-                    >
-                      {renderEmoji(emoji)}
-                    </button>
-                  ))}
-                </div>
+          {/* Выбор произвольной реакции — эмодзи-пикер (справа от меню) */}
+          <div className="reaction-picker-anchor" ref={reactionPickerRef} onClick={(e) => e.stopPropagation()}>
+            <EmojiInlinePicker
+              show={reactionPickerOpen}
+              onEmojiClick={(emoji) => {
+                const rect = reactionPickerRef.current ? reactionPickerRef.current.getBoundingClientRect() : null;
+                handleAddReaction(emoji, contextMenu.messageId, rect);
+                setReactionPickerOpen(false);
+              }}
+              onClose={() => setReactionPickerOpen(false)}
+              hideStickers
+            />
+          </div>
+          {/* Последние реакции — вертикальное подменю (справа/слева от меню) */}
+          <div className="recent-reactions-menu" onClick={(e) => e.stopPropagation()}>
+            <div className="recent-reactions-list">
+              {getRecentReactions(10).map((emoji) => (
                 <button
-                  className="context-menu-reactions-toggle"
+                  key={emoji}
+                  className="recent-reaction-btn"
+                  title={emoji}
                   onClick={(e) => {
                     e.stopPropagation();
-                    toggleReactionsExpand();
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    handleAddReaction(emoji, contextMenu.messageId, rect);
                   }}
-                  title={contextMenu.reactionsExpanded ? 'Свернуть реакции' : 'Развернуть все реакции'}
                 >
-                  {contextMenu.reactionsExpanded ? (
-                    <>
-                      <span className="reactions-toggle-icon">▲</span>
-                      <span className="reactions-toggle-text">Свернуть</span>
-                    </>
-                  ) : (
-                    <>
-                      <span className="reactions-toggle-icon">▼</span>
-                      <span className="reactions-toggle-text">{QUICK_REACTIONS.length - 6} ещё</span>
-                    </>
-                  )}
+                  {renderEmoji(emoji, '', 20)}
                 </button>
-              </>
-            ) : (
-              <div className="context-menu-reactions">
-                {QUICK_REACTIONS.map((emoji) => (
-                  <button
-                    key={emoji}
-                    className="context-menu-reaction-btn"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      const rect = e.target.getBoundingClientRect();
-                      handleAddReaction(emoji, contextMenu.messageId, rect);
-                    }}
-                  >
-                    {renderEmoji(emoji)}
-                  </button>
-                ))}
-              </div>
-            )}
+              ))}
+            </div>
+            <button
+              className="recent-reaction-btn recent-reaction-add"
+              title="Добавить реакцию"
+              onClick={(e) => { e.stopPropagation(); setReactionPickerOpen(true); }}
+            >
+              <IconPlus />
+            </button>
           </div>
           <div className="context-menu-divider"></div>
           <div className="context-menu-items">
             {/* Ответить */}
             <button className="context-menu-item" onClick={(e) => { e.stopPropagation(); openReply(contextMenu.messageId, contextMenu.messageText, contextMenu.messageSenderName); }}>
-              ↩️ Ответить
+              <IconCornerUpLeft /> <span>Ответить</span>
             </button>
             <div className="context-menu-divider"></div>
             <button className="context-menu-item" onClick={(e) => { e.stopPropagation(); handleCopyMessage(); }}>
-              📋 Копировать
+              <IconCopy /> <span>Копировать</span>
             </button>
             {/* Редактировать: только свои сообщения */}
             {contextMenu.messageSenderId === currentUser?.id && (
               <button className="context-menu-item" onClick={(e) => { e.stopPropagation(); openEditMessage(contextMenu.messageId, contextMenu.messageText, contextMenu.messageSenderName); }}>
-                ✏️ Изменить
+                <IconEdit /> <span>Изменить</span>
               </button>
             )}
             <button className="context-menu-item" onClick={(e) => { e.stopPropagation(); handleForwardMessage({ id: contextMenu.messageId, text: contextMenu.messageText }); }}>
-              ➤ Переслать
+              <IconSend /> <span>Переслать</span>
             </button>
             <button className="context-menu-item" onClick={(e) => { e.stopPropagation(); createTaskFromMessage(); }} title="Создать задачу в календаре на основе этого сообщения">
-              📅 Создать задачу
+              <IconCalendar /> <span>Создать задачу</span>
             </button>
             <button className="context-menu-item" onClick={(e) => { e.stopPropagation(); enterSelectionMode(contextMenu.messageId); }} title="Выбрать несколько сообщений для пересылки">
-              ☑️ Выбрать сообщения
+              <IconCheckSquare /> <span>Выбрать сообщения</span>
             </button>
             {/* Закрепить/Открепить */}
             {(() => {
@@ -15006,7 +15301,7 @@ return parts.length > 0 ? parts : text;
                     handlePinMessage(contextMenu.messageId);
                   }
                 }}>
-                  {isPinned ? '📌 Открепить' : '📌 Закрепить'}
+                  {isPinned ? <><IconPin /> <span>Открепить</span></> : <><IconPin /> <span>Закрепить</span></>}
                 </button>
               );
             })()}
@@ -15024,8 +15319,8 @@ return parts.length > 0 ? parts : text;
                   handleDeleteMessage({ id: contextMenu.messageId });
                 }}
               >
-                🗑️ Удалить
-              </button>
+                  <IconTrash /> <span>Удалить</span>
+                </button>
             ) : null}
           </div>
         </div>
@@ -15043,7 +15338,7 @@ return parts.length > 0 ? parts : text;
             {inputContextMenu.word && (inputContextMenu.checking || (inputContextMenu.suggestions || []).length > 0) && (
               <>
                 {inputContextMenu.checking ? (
-                  <div className="context-menu-item spell-checking">🔍 Проверка…</div>
+                  <div className="context-menu-item spell-checking"><IconSearch /> <span>Проверка…</span></div>
                 ) : (
                   <>
                     {(inputContextMenu.suggestions || []).map((s, i) => (
@@ -15062,13 +15357,13 @@ return parts.length > 0 ? parts : text;
               </>
             )}
             <button className="context-menu-item" onClick={(e) => { e.stopPropagation(); handleCutText(); }}>
-              ✂️ Вырезать
+              <IconScissors /> <span>Вырезать</span>
             </button>
             <button className="context-menu-item" onClick={(e) => { e.stopPropagation(); handleCopyText(); }}>
-              📋 Копировать
+              <IconCopy /> <span>Копировать</span>
             </button>
             <button className="context-menu-item" onClick={(e) => { e.stopPropagation(); handlePasteText(); }}>
-              📄 Вставить
+              <IconClipboard /> <span>Вставить</span>
             </button>
           </div>
         </div>
