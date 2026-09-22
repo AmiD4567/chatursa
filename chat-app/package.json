@@ -1,6 +1,6 @@
 {
     "name": "chat-app",
-    "version": "1.0.207",
+    "version": "1.0.208",
     "description": "РљРѕСЂРїРѕСЂР°С‚РёРІРЅС‹Р№ РјРµСЃСЃРµРЅРґР¶РµСЂ",
     "main": "electron/main.js",
     "scripts": {
