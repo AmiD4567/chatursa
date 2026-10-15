@@ -30,7 +30,7 @@
   border-radius: 10px;
   padding: 10px 14px;
   box-shadow: var(--shadow-lg);
-  z-index: 9999;
+  z-index: var(--z-floating);
   display: flex;
   align-items: center;
   gap: 10px;
@@ -80,7 +80,7 @@
   position: fixed;
   top: 12px;
   right: 12px;
-  z-index: 99998;
+  z-index: var(--z-toast);
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -394,6 +394,9 @@
   background-color: transparent;
   background-image: var(--chat-bg-image, radial-gradient(circle at 18% 15%, rgba(102, 126, 234, 0.22) 0%, transparent 52%), radial-gradient(circle at 88% 90%, rgba(118, 75, 162, 0.18) 0%, transparent 55%));
   overflow: hidden;
+  /* overflow: clip не создаёт scroll-контейнер, поэтому каркас нельзя
+     прокрутить программно (scrollIntoView/фокус) — защита от «разъезжания» layout */
+  overflow: clip;
 }
 
 @supports (height: 100dvh) {

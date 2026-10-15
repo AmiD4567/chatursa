@@ -39,6 +39,7 @@ fun AudioPlayer(
     var duration by remember { mutableIntStateOf(0) }
     var currentPosition by remember { mutableIntStateOf(0) }
     var localFile by remember(url) { mutableStateOf<File?>(null) }
+    var player by remember(url) { mutableStateOf<MediaPlayer?>(null) }
 
     val bgColor = if (isOwn) Color.White.copy(alpha = 0.15f) else Color.Black.copy(alpha = 0.1f)
     val accentColor = if (isOwn) Color.White else Color(0xFF6C5CE7)
@@ -46,15 +47,26 @@ fun AudioPlayer(
 
     LaunchedEffect(url) {
         localFile = downloadToCache(context, url)
-        localFile?.let { file ->
+    }
+
+    DisposableEffect(url) {
+        onDispose {
+            try { player?.release() } catch (_: Exception) {}
+            player = null
+        }
+    }
+
+    LaunchedEffect(isPlaying) {
+        while (isPlaying) {
             try {
-                val mp = MediaPlayer()
-                mp.setDataSource(file.absolutePath)
-                mp.prepare()
-                duration = mp.duration
-                mp.release()
-            } catch (e: Exception) {
-            }
+                val mp = player
+                if (mp != null) {
+                    currentPosition = mp.currentPosition
+                    if (duration <= 0) duration = mp.duration
+                    progress = if (duration > 0) currentPosition.toFloat() / duration else 0f
+                }
+            } catch (_: Exception) {}
+            delay(200)
         }
     }
 
@@ -70,34 +82,48 @@ fun AudioPlayer(
                 .padding(horizontal = 8.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Play/Pause button
             Box(
                 modifier = Modifier
                     .size(36.dp)
                     .clip(CircleShape)
                     .background(accentColor.copy(alpha = 0.3f))
                     .clickable {
-                        if (isPlaying) {
-                            // Would need persistent MediaPlayer instance
-                        }
-                        scope.launch {
-                            try {
-                                val file = localFile ?: downloadToCache(context, url) ?: return@launch
-                                val mp = MediaPlayer()
-                                mp.setDataSource(file.absolutePath)
-                                mp.prepare()
-                                duration = mp.duration
-                                mp.start()
-                                isPlaying = true
-                                while (mp.isPlaying) {
-                                    currentPosition = mp.currentPosition
-                                    progress = if (duration > 0) currentPosition.toFloat() / duration else 0f
-                                    delay(200)
+                        val mp = player
+                        val currentlyPlaying = try { mp?.isPlaying == true } catch (_: Exception) { false }
+                        when {
+                            mp != null && currentlyPlaying -> {
+                                try { mp.pause() } catch (_: Exception) {}
+                                isPlaying = false
+                            }
+                            mp != null -> {
+                                try {
+                                    mp.start()
+                                    isPlaying = true
+                                } catch (_: Exception) {
+                                    isPlaying = false
                                 }
-                                isPlaying = false
-                                mp.release()
-                            } catch (e: Exception) {
-                                isPlaying = false
+                            }
+                            else -> scope.launch {
+                                try {
+                                    val file = localFile ?: downloadToCache(context, url) ?: return@launch
+                                    localFile = file
+                                    val newMp = MediaPlayer()
+                                    newMp.setDataSource(file.absolutePath)
+                                    newMp.prepare()
+                                    duration = newMp.duration
+                                    newMp.setOnCompletionListener { completed ->
+                                        isPlaying = false
+                                        progress = 0f
+                                        currentPosition = 0
+                                        try { completed.seekTo(0) } catch (_: Exception) {}
+                                    }
+                                    newMp.start()
+                                    player = newMp
+                                    isPlaying = true
+                                } catch (e: Exception) {
+                                    Log.e("AudioPlayer", "Play failed: $url", e)
+                                    isPlaying = false
+                                }
                             }
                         }
                     },
@@ -113,7 +139,6 @@ fun AudioPlayer(
 
             Spacer(modifier = Modifier.width(8.dp))
 
-            // Progress bar
             Column(modifier = Modifier.weight(1f)) {
                 LinearProgressIndicator(
                     progress = { progress },

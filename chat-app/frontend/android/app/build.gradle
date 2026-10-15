@@ -13,8 +13,8 @@ android {
         applicationId "com.chatursa.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 13
-        versionName "1.22"
+        versionCode 15
+        versionName "1.24"
     }
 
     signingConfigs {
@@ -27,6 +27,9 @@ android {
     }
 
     buildTypes {
+        debug {
+            signingConfig signingConfigs.release
+        }
         release {
             signingConfig signingConfigs.release
             minifyEnabled false

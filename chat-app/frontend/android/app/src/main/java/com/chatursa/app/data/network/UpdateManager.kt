@@ -55,15 +55,25 @@ class UpdateManager(private val context: Context) {
                 if (compareVersions(tag, currentVersion) <= 0) continue
                 if (compareVersions(tag, latestTag) <= 0) continue
 
-                // Found a newer version, check for APK asset
+                // Found a newer version, check for APK asset.
+                // Prefer the canonical "chatursa.apk" asset; fall back to any .apk.
                 val assets = release.optJSONArray("assets")
                 var assetUrl = ""
                 if (assets != null) {
                     for (j in 0 until assets.length()) {
                         val asset = assets.getJSONObject(j)
-                        if (asset.optString("name", "").endsWith(".apk")) {
+                        if (asset.optString("name", "").equals("chatursa.apk", ignoreCase = true)) {
                             assetUrl = asset.optString("browser_download_url", "")
                             break
+                        }
+                    }
+                    if (assetUrl.isBlank()) {
+                        for (j in 0 until assets.length()) {
+                            val asset = assets.getJSONObject(j)
+                            if (asset.optString("name", "").endsWith(".apk")) {
+                                assetUrl = asset.optString("browser_download_url", "")
+                                break
+                            }
                         }
                     }
                 }
@@ -75,9 +85,9 @@ class UpdateManager(private val context: Context) {
                 notes = release.optString("body", "")
             }
 
-            // Fallback: construct URL from tag
+            // Fallback: use the tag as-is (tags are not guaranteed to carry a "v" prefix)
             if (downloadUrl.isBlank() && latestTag.isNotBlank()) {
-                downloadUrl = "https://github.com/${com.chatursa.app.AppConfig.GITHUB_REPO_OWNER}/${com.chatursa.app.AppConfig.GITHUB_REPO_NAME}/releases/download/v$latestTag/chatursa-$latestTag-debug.apk"
+                downloadUrl = "https://github.com/${com.chatursa.app.AppConfig.GITHUB_REPO_OWNER}/${com.chatursa.app.AppConfig.GITHUB_REPO_NAME}/releases/download/$latestTag/chatursa.apk"
             }
 
             val hasUpdate = latestTag.isNotBlank()

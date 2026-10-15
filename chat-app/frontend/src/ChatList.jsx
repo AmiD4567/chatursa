@@ -52,7 +52,7 @@ const ChatList = ({
           <input
             type="text"
             className="chats-search-input"
-            placeholder="Поиск сообщений..."
+            placeholder="Поиск"
             value={searchQuery}
             onChange={(e) => onSearchChange(e.target.value)}
             onKeyPress={(e) => e.key === 'Enter' && onSearchMessages()}

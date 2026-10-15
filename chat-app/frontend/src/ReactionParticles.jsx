@@ -1,78 +1,16 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import './ReactionParticles.css';
+import { EmojiImg } from './emojiUnified';
 
-/** Конвертирует emoji в Apple unified code (hex) */
-function emojiToUnified(emoji) {
-  if (!emoji) return '';
-  try {
-    const codePoints = [...emoji].map(char => {
-      const code = char.codePointAt(0);
-      // НЕ фильтруем FE0F — для ❤️ нужен формат "2764-fe0f" (файл 2764.png не существует на CDN)
-      if (code === 0x20E3) return null;                         // combining enclosing keycap
-      if (code >= 0x1F3FB && code <= 0x1F3FF) return null;     // skin tone modifiers
-      return code.toString(16);
-    }).filter(Boolean);
-
-    let result = codePoints.join('-');
-
-    // Для символов из диапазонов Miscellaneous Symbols (U+2600–U+26FF)
-    // и Dingbats (U+2700–U+27BF), которые не являются полноценными emoji,
-    // требуется добавление Variation Selector-16 (-fe0f) для корректного
-    // отображения в стиле Apple. Без VS16 файл не существует в CDN.
-    if (codePoints.length === 1 && !result.includes('fe0f')) {
-      const code = parseInt(codePoints[0], 16);
-      if ((code >= 0x2600 && code <= 0x26FF) || (code >= 0x2700 && code <= 0x27BF)) {
-        result += '-fe0f';
-      }
-    }
-
-    return result;
-  } catch {
-    return '';
-  }
-}
-
-/** URL Apple CDN для emoji */
-const EMOJI_CDN = 'https://cdn.jsdelivr.net/npm/emoji-datasource-apple@15.0.1/img/apple/64';
-
-/** Отрисовка emoji как <img> (стиль Apple) с fallback-логикой */
+/** Отрисовка emoji как <img> (стиль Apple) с перебором unified-вариантов */
 function EmojiImage({ emoji, size }) {
-  const unified = emojiToUnified(emoji);
-  const primarySrc = `${EMOJI_CDN}/${unified}.png`;
-
-  // Fallback: если emoji содержит FE0F но unified его не содержит — пробуем добавить
-  let fallbackSrc = null;
-  if (!unified.includes('fe0f')) {
-    const hasFE0F = [...emoji].some(c => c.codePointAt(0) >= 0xFE00 && c.codePointAt(0) <= 0xFE0F);
-    if (hasFE0F) {
-      fallbackSrc = `${EMOJI_CDN}/${unified}-fe0f.png`;
-    }
-  }
-
-  const [imgSrc, setImgSrc] = useState(primarySrc);
-
-  useEffect(() => {
-    // Проверяем существование основного URL через Image onload/onerror
-    const img = new Image();
-    img.onload = () => setImgSrc(primarySrc);
-    img.onerror = () => {
-      if (fallbackSrc) {
-        img.src = fallbackSrc;
-        img.onload = () => setImgSrc(fallbackSrc);
-        img.onerror = () => setImgSrc(primarySrc); // показываем сломанный если ничего не помогло
-      } else {
-        setImgSrc(primarySrc);
-      }
-    };
-    img.src = primarySrc;
-  }, [primarySrc, fallbackSrc]);
-
   return (
-    <img
-      src={imgSrc}
+    <EmojiImg
+      cluster={emoji}
+      size={size}
       alt={emoji}
       draggable={false}
-      style={{ width: size, height: size, display: 'block', objectFit: 'contain' }}
+      style={{ display: 'block' }}
     />
   );
 }

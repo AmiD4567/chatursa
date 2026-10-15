@@ -1707,9 +1707,11 @@ io.on('connection', (socket) => {
         [onlineUser.id, now, messageId]);
       // Получаем полные данные сообщения для рассылки (с camelCase ключами)
       const row = db.prepare(`
-        SELECT m.*, u.username as sender_name, u.avatar as sender_avatar
+        SELECT m.*, u.username as sender_name, u.avatar as sender_avatar,
+               pu.username as pinned_by_name
         FROM messages m
         JOIN users u ON m.sender_id = u.id
+        LEFT JOIN users pu ON m.pinned_by = pu.id
         WHERE m.id = ?
       `).get(messageId);
       let fullMessage = null;
@@ -1726,7 +1728,10 @@ io.on('connection', (socket) => {
           senderAvatar: String(row.sender_avatar || row.avatar || ''),
           e2ee: pinIsE2EE ? 1 : 0,
           e2ee_nonce: pinIsE2EE ? String(row.e2ee_nonce || '') : undefined,
-          e2ee_ephemeral: pinIsE2EE ? String(row.e2ee_ephemeral || '') : undefined
+          e2ee_ephemeral: pinIsE2EE ? String(row.e2ee_ephemeral || '') : undefined,
+          pinned_at: row.pinned_at || now,
+          pinned_by: row.pinned_by || onlineUser.id,
+          pinnedByName: String(row.pinned_by_name || onlineUser.username || '')
         };
       }
 
@@ -1799,9 +1804,11 @@ io.on('connection', (socket) => {
 
     try {
       const resultRows = db.prepare(`
-        SELECT m.*, u.username as sender_name, u.avatar as sender_avatar
+        SELECT m.*, u.username as sender_name, u.avatar as sender_avatar,
+               pu.username as pinned_by_name
         FROM messages m
         JOIN users u ON m.sender_id = u.id
+        LEFT JOIN users pu ON m.pinned_by = pu.id
         WHERE m.chat_id = ? AND m.is_pinned = 1
         ORDER BY m.pinned_at DESC
         LIMIT 50
@@ -1820,7 +1827,10 @@ io.on('connection', (socket) => {
           senderAvatar: String(obj.sender_avatar || obj.avatar || ''),
           e2ee: pinListIsE2EE ? 1 : 0,
           e2ee_nonce: pinListIsE2EE ? (obj.e2ee_nonce || '') : undefined,
-          e2ee_ephemeral: pinListIsE2EE ? (obj.e2ee_ephemeral || '') : undefined
+          e2ee_ephemeral: pinListIsE2EE ? (obj.e2ee_ephemeral || '') : undefined,
+          pinned_at: obj.pinned_at || null,
+          pinned_by: obj.pinned_by || null,
+          pinnedByName: String(obj.pinned_by_name || '')
         };
       });
 

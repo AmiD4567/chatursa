@@ -112,7 +112,7 @@ app.get('/api/admin/users', (req, res) => {
     return res.status(403).json({ error: 'Доступ запрещён' });
   }
 
-  const userList = db.prepare('SELECT id, username, email, full_name, status, is_admin, created_at, last_seen, host, ip_address, can_book_meeting_room, can_edit_wiki, can_view_kpi, app_version FROM users ORDER BY username').all().map(row => ({
+  const userList = db.prepare('SELECT id, username, email, full_name, status, is_admin, created_at, last_seen, host, ip_address, can_book_meeting_room, can_edit_wiki, app_version FROM users ORDER BY username').all().map(row => ({
     id: row.id,
     username: row.username,
     email: row.email,
@@ -125,7 +125,6 @@ app.get('/api/admin/users', (req, res) => {
     ip_address: row.ip_address || 'unknown',
     can_book_meeting_room: row.can_book_meeting_room || 0,
     can_edit_wiki: row.can_edit_wiki || 0,
-    can_view_kpi: row.can_view_kpi || 0,
     app_version: row.app_version || null
   }));
 
@@ -302,28 +301,6 @@ app.put('/api/admin/users/:userId/wiki-rights', (req, res) => {
     res.json({ success: true });
   } catch (err) {
     console.error('Ошибка изменения права на wiki:', err);
-    res.status(500).json({ error: 'Ошибка при изменении права' });
-  }
-});
-
-app.put('/api/admin/users/:userId/kpi-rights', (req, res) => {
-  const { userId } = req.params;
-  const { can_view_kpi, adminId } = req.body;
-
-  if (!checkAdmin(adminId)) {
-    return res.status(403).json({ error: 'Доступ запрещён' });
-  }
-
-  const userCheck = db.prepare('SELECT username FROM users WHERE id = ?').get(userId);
-  if (userCheck && userCheck.username === 'Root') {
-    return res.status(400).json({ error: 'Нельзя изменить права Root' });
-  }
-
-  try {
-    db.run('UPDATE users SET can_view_kpi = ? WHERE id = ?', [can_view_kpi ? 1 : 0, userId]);
-    res.json({ success: true });
-  } catch (err) {
-    console.error('Ошибка изменения права на KPI:', err);
     res.status(500).json({ error: 'Ошибка при изменении права' });
   }
 });
@@ -589,13 +566,18 @@ app.get('/api/admin/security-logs', (req, res) => {
 });
 
 // ============================================
-// API для удаления сообщений администратором
+// API для удаления сообщений
+// mode=me       — скрыть только у себя (сообщение остаётся у остальных)
+// mode=everyone — удалить у всех: строка сохраняется, рисуется заглушка
 // ============================================
 
-// Удаление сообщения
+// Сколько часов автор может удалять своё сообщение у всех
+const DELETE_FOR_EVERYONE_HOURS = 2;
+
 app.delete('/api/admin/messages/:messageId', (req, res) => {
   const { messageId } = req.params;
-  const { adminId, userId } = req.query;
+  const { adminId, userId, mode } = req.query;
+  const deleteMode = mode === 'me' ? 'me' : 'everyone';
 
   // Если передан userId вместо adminId, проверяем существование пользователя
   const userIdToCheck = userId || adminId;
@@ -609,7 +591,7 @@ app.delete('/api/admin/messages/:messageId', (req, res) => {
   }
 
   // Проверяем существование пользователя
-  const userData = db.prepare('SELECT id, is_admin FROM users WHERE id = ?').get(userIdToCheck);
+  const userData = db.prepare('SELECT id, username, is_admin FROM users WHERE id = ?').get(userIdToCheck);
 
   if (!userData) {
     return res.status(403).json({ error: 'Пользователь не найден' });
@@ -623,6 +605,7 @@ app.delete('/api/admin/messages/:messageId', (req, res) => {
     // Получаем информацию о сообщении для проверки
     const messageData = db.prepare(`
       SELECT m.id, m.chat_id, m.sender_id, m.text as text, m.file_data, m.timestamp,
+             m.deleted_at,
              u.username as sender_username
       FROM messages m
       JOIN users u ON m.sender_id = u.id
@@ -631,6 +614,9 @@ app.delete('/api/admin/messages/:messageId', (req, res) => {
 
     if (!messageData) {
       return res.status(404).json({ error: 'Сообщение не найдено' });
+    }
+    if (messageData.deleted_at) {
+      return res.status(400).json({ error: 'Сообщение уже удалено у всех' });
     }
 
     const chatId = messageData.chat_id;
@@ -645,6 +631,36 @@ app.delete('/api/admin/messages/:messageId', (req, res) => {
     if (chatId === 'general' && userData.is_admin !== 1 && senderId !== userIdToCheck) {
       return res.status(403).json({ error: 'В общем чате сообщения могут удалять только администраторы или автор сообщения' });
     }
+
+    // ─── Режим «только у себя»: скрываем сообщение у этого пользователя ───
+    if (deleteMode === 'me') {
+      db.run('INSERT OR IGNORE INTO message_hidden (message_id, user_id) VALUES (?, ?)', [messageId, userIdToCheck]);
+      db.run('DELETE FROM unread_messages WHERE user_id = ? AND message_id = ?', [userIdToCheck, messageId]);
+      db.run('DELETE FROM message_reads WHERE message_id = ? AND user_id = ?', [messageId, userIdToCheck]);
+
+      // Сообщение убираем только у этого пользователя
+      emitToUser(userIdToCheck, 'message_hidden', { messageId, chatId });
+
+      return res.json({ success: true, mode: 'me', messageId, chatId });
+    }
+
+    // ─── Режим «у обоих»: автор в течение 2 часов либо администратор ───
+    const isAdmin = userData.is_admin === 1;
+    const isAuthor = senderId === userIdToCheck;
+    if (!isAdmin && !isAuthor) {
+      return res.status(403).json({ error: 'Удалить у всех можно только своё сообщение' });
+    }
+    if (!isAdmin) {
+      const sentAt = new Date(messageData.timestamp).getTime();
+      const deadline = sentAt + DELETE_FOR_EVERYONE_HOURS * 60 * 60 * 1000;
+      if (Number.isFinite(sentAt) && Date.now() > deadline) {
+        return res.status(403).json({
+          error: `Удалить у всех можно только в течение ${DELETE_FOR_EVERYONE_HOURS} часов после отправки`
+        });
+      }
+    }
+
+    const now = new Date().toISOString();
 
     // Удаляем файл если он есть
     if (fileData) {
@@ -662,31 +678,35 @@ app.delete('/api/admin/messages/:messageId', (req, res) => {
       }
     }
 
-    // Удаляем сообщение из БД
-    db.run('DELETE FROM messages WHERE id = ?', [messageId]);
+    // Мягкое удаление: строка остаётся, чтобы сохранить позицию в ленте,
+    // но содержимое затирается — клиент покажет «... удалил сообщение».
+    db.run(`
+      UPDATE messages
+      SET deleted_at = ?, deleted_by = ?, text = NULL, file_data = NULL, poll_id = NULL,
+          button_data = NULL, e2ee = 0, e2ee_nonce = NULL, e2ee_ephemeral = NULL
+      WHERE id = ?
+    `, [now, userIdToCheck, messageId]);
 
+    db.run('DELETE FROM message_reactions WHERE message_id = ?', [messageId]);
+    db.run('DELETE FROM message_reads WHERE message_id = ?', [messageId]);
+    db.run('DELETE FROM unread_messages WHERE message_id = ?', [messageId]);
+    db.run('DELETE FROM message_hidden WHERE message_id = ?', [messageId]);
 
     // Логируем событие удаления
     const logId = uuidv4();
-    const userNameRow = db.prepare('SELECT username FROM users WHERE id = ?').get(userIdToCheck);
-    const userName = userNameRow?.username || 'User';
-    
     db.run(`INSERT INTO security_logs (id, event_type, event, user_id, username, status) VALUES (?, ?, ?, ?, ?, ?)`,
-      [logId, 'message_deleted', `Сообщение от ${senderUsername} удалено пользователем ${userName}`, senderId, senderUsername, 'warning']);
+      [logId, 'message_deleted', `Сообщение от ${senderUsername} удалено у всех пользователем ${userData.username}`, senderId, senderUsername, 'warning']);
 
-
-    // Уведомляем клиентов через socket о удалении сообщения
+    // Уведомляем клиентов: строка остаётся, но с признаком удаления
     const deletedMessage = {
       id: messageId,
       chat_id: chatId,
       sender_id: senderId,
-      text: text,
-      file_data: fileData,
+      deleted_at: now,
       deleted_by: userIdToCheck,
-      deleted_at: new Date().toISOString()
+      deletedByName: userData.username
     };
 
-    // Отправляем событие всем подключенным клиентам в этом чате
     io.to(chatId).emit('message_deleted', deletedMessage);
 
     // Обновляем lastMessage в списках чатов участников: без этого превью
@@ -702,6 +722,7 @@ app.delete('/api/admin/messages/:messageId', (req, res) => {
 
     res.json({
       success: true,
+      mode: 'everyone',
       messageId,
       chatId,
       deletedMessage: deletedMessage

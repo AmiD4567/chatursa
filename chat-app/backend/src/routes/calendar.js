@@ -256,22 +256,37 @@ app.put('/api/meeting-room/bookings/:id', (req, res) => {
 
 // API для создания задачи
 app.post('/api/calendar/tasks', (req, res) => {
-  const { userId, title, description, taskDate, taskTime, taskEndTime, color, reminderType, sourceChatId, sourceMessageId } = req.body;
+  const { userId, title, description, taskDate, taskTime, taskEndTime, color, reminderType, sourceChatId, sourceMessageId, kind, reminderAt, sourceMessagePreview } = req.body;
 
   if (!userId || !title || !taskDate) {
     return res.status(400).json({ error: 'userId, title и taskDate обязательны' });
   }
 
   const taskId = uuidv4();
+  const taskKind = kind === 'message_reminder' ? 'message_reminder' : 'task';
 
   try {
-    // Рассчитываем время напоминания если выбран reminderType
+    // Рассчитываем время напоминания
     let reminderTime = null;
-    if (reminderType && reminderType !== 'none') {
-      const baseDate = new Date(`${taskDate}${taskTime ? 'T' + taskTime : 'T09:00'}`);
+    const user = getUserById(userId);
 
-      // Получаем имя пользователя для логирования
-      const user = getUserById(userId);
+    if (taskKind === 'message_reminder') {
+      // Напоминание о сообщении: клиент присылает готовое время (ISO, локальное)
+      if (!reminderAt) {
+        return res.status(400).json({ error: 'reminderAt обязателен для напоминания о сообщении' });
+      }
+      reminderTime = String(reminderAt).slice(0, 19);
+
+      if (reminderTime && user) {
+        scheduleTaskReminder(taskId, userId, user.username, title, taskDate, taskTime || null, reminderTime, {
+          kind: 'message_reminder',
+          chatId: sourceChatId || null,
+          messageId: sourceMessageId || null,
+          preview: sourceMessagePreview || title
+        });
+      }
+    } else if (reminderType && reminderType !== 'none') {
+      const baseDate = new Date(`${taskDate}${taskTime ? 'T' + taskTime : 'T09:00'}`);
 
       if (reminderType === '1h') {
         reminderTime = new Date(baseDate.getTime() - 60 * 60 * 1000).toISOString().slice(0, 19);
@@ -290,9 +305,9 @@ app.post('/api/calendar/tasks', (req, res) => {
     }
 
     db.run(`
-      INSERT INTO calendar_tasks (id, user_id, title, description, task_date, task_time, task_end_time, color, reminder_time, source_chat_id, source_message_id, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-    `, [taskId, userId, title, description || null, taskDate, taskTime || null, taskEndTime || null, color || '#667eea', reminderTime, sourceChatId || null, sourceMessageId || null]);
+      INSERT INTO calendar_tasks (id, user_id, title, description, task_date, task_time, task_end_time, color, reminder_time, kind, source_chat_id, source_message_id, source_message_preview, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    `, [taskId, userId, title, description || null, taskDate, taskTime || null, taskEndTime || null, color || '#667eea', reminderTime, taskKind, sourceChatId || null, sourceMessageId || null, sourceMessagePreview || null]);
 
 
     const task = db.prepare('SELECT * FROM calendar_tasks WHERE id = ?').get(taskId);
@@ -321,7 +336,25 @@ app.put('/api/calendar/tasks/:taskId', (req, res) => {
     const existingTask = db.prepare('SELECT * FROM calendar_tasks WHERE id = ?').get(taskId);
     let reminderTime = null;
 
-    if (reminderType && reminderType !== 'none' && existingTask) {
+    const isMessageReminder = existingTask && existingTask.kind === 'message_reminder';
+
+    if (isMessageReminder) {
+      // Напоминание о сообщении: пересчитываем только время (текст/ссылка не меняются)
+      if (req.body.reminderAt) {
+        reminderTime = String(req.body.reminderAt).slice(0, 19);
+        const user = getUserById(existingTask.user_id);
+        if (reminderTime && user) {
+          scheduleTaskReminder(taskId, existingTask.user_id, user.username, existingTask.title, taskDate, taskTime || null, reminderTime, {
+            kind: 'message_reminder',
+            chatId: existingTask.source_chat_id || null,
+            messageId: existingTask.source_message_id || null,
+            preview: existingTask.source_message_preview || existingTask.title
+          });
+        }
+      } else if (reminderType === 'none' || req.body.cancelReminder) {
+        pendingReminders.delete(taskId);
+      }
+    } else if (reminderType && reminderType !== 'none' && existingTask) {
       const baseDate = new Date(`${taskDate}${taskTime ? 'T' + taskTime : 'T09:00'}`);
       const user = getUserById(existingTask.user_id);
 
@@ -347,7 +380,7 @@ app.put('/api/calendar/tasks/:taskId', (req, res) => {
       UPDATE calendar_tasks
       SET title = ?, description = ?, task_date = ?, task_time = ?, task_end_time = ?, color = ?, reminder_time = ?
       WHERE id = ?
-    `, [title, description || null, taskDate, taskTime || null, taskEndTime || null, color || '#667eea', reminderTime, taskId]);
+    `, [title, description || null, taskDate, taskTime || null, taskEndTime || null, color || '#667eea', isMessageReminder ? (reminderTime || null) : reminderTime, taskId]);
 
 
     const task = db.prepare('SELECT * FROM calendar_tasks WHERE id = ?').get(taskId);

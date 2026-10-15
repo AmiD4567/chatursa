@@ -1,7 +1,9 @@
 package com.chatursa.app.ui.chatlist
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -20,12 +22,14 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.chatursa.app.AppConfig
 import com.chatursa.app.avatarUrl
 import com.chatursa.app.data.model.Chat
 import com.chatursa.app.data.sticker.StickerManager
 import com.chatursa.app.ui.ChatAvatar
+import com.chatursa.app.ui.avatarOrPeer
 import com.chatursa.app.ui.theme.*
 import kotlinx.coroutines.launch
 
@@ -40,6 +44,7 @@ fun ChatListScreen(
     var showSearch by remember { mutableStateOf(false) }
     var searchText by remember { mutableStateOf("") }
     var showUsersDialog by remember { mutableStateOf(false) }
+    var contextChat by remember { mutableStateOf<Chat?>(null) }
 
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
@@ -191,7 +196,11 @@ fun ChatListScreen(
                                     typingText = uiState.typingUsers[chat.id]?.let {
                                         "${it.joinToString(", ")} печатает..."
                                     },
-                                    onClick = { onChatClick(chat) }
+                                    onClick = {
+                                        viewModel.resetUnread(chat.id)
+                                        onChatClick(chat)
+                                    },
+                                    onLongClick = { contextChat = chat }
                                 )
                             }
                         }
@@ -212,20 +221,72 @@ fun ChatListScreen(
         )
     }
 
-
+    contextChat?.let { chat ->
+        AlertDialog(
+            onDismissRequest = { contextChat = null },
+            title = { Text(chat.name.ifBlank { "Чат" }) },
+            text = {
+                Column {
+                    ChatMenuItem(if (chat.pinned) "📌 Открепить" else "📌 Закрепить") {
+                        viewModel.togglePin(chat); contextChat = null
+                    }
+                    ChatMenuItem(if (chat.muted) "🔔 Включить звук" else "🔕 Без звука") {
+                        viewModel.toggleMute(chat); contextChat = null
+                    }
+                    ChatMenuItem("🔵 Отметить непрочитанным") {
+                        viewModel.markUnread(chat); contextChat = null
+                    }
+                    ChatMenuItem("🧹 Очистить историю") {
+                        viewModel.clearChat(chat); contextChat = null
+                    }
+                    if (chat.type == "group") {
+                        ChatMenuItem("🚪 Покинуть группу", danger = true) {
+                            viewModel.leaveChat(chat); contextChat = null
+                        }
+                    } else {
+                        ChatMenuItem("🗑 Удалить чат", danger = true) {
+                            viewModel.deleteChat(chat.id); contextChat = null
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { contextChat = null }) { Text("Отмена") }
+            },
+            containerColor = MaterialTheme.colorScheme.surface
+        )
+    }
 }
 
+@Composable
+private fun ChatMenuItem(text: String, danger: Boolean = false, onClick: () -> Unit) {
+    Surface(onClick = onClick, color = Color.Transparent) {
+        Text(
+            text = text,
+            color = if (danger) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+            style = MaterialTheme.typography.bodyLarge,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 10.dp)
+        )
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ChatListItem(
     chat: Chat,
     isTyping: Boolean,
     typingText: String?,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onLongClick: () -> Unit = {}
 ) {
     Surface(
-        onClick = onClick,
         color = Color.Transparent,
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier
+            .fillMaxWidth()
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
     ) {
         Row(
             modifier = Modifier
@@ -235,7 +296,7 @@ fun ChatListItem(
         ) {
             Box {
                 ChatAvatar(
-                    avatarUrl = chat.avatar,
+                    avatarUrl = chat.avatarOrPeer(),
                     name = chat.name,
                     size = 56.dp
                 )
@@ -258,15 +319,28 @@ fun ChatListItem(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = chat.name.ifBlank { "Чат" },
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f)
-                    )
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (chat.pinned) {
+                            Text("📌", fontSize = 12.sp, modifier = Modifier.padding(end = 2.dp))
+                        }
+                        if (chat.muted) {
+                            Text("🔕", fontSize = 12.sp, modifier = Modifier.padding(end = 2.dp))
+                        }
+                        if (chat.e2ee) {
+                            Text("🔒", fontSize = 12.sp, modifier = Modifier.padding(end = 2.dp))
+                        }
+                        Text(
+                            text = chat.name.ifBlank { "Чат" },
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                     if (chat.lastMessage != null) {
                         Text(
                             text = formatTimestamp(chat.lastMessage.timestamp),

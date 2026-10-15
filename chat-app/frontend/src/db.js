@@ -187,6 +187,46 @@ export async function removeFromOutbox(id) {
   db.close();
 }
 
+/**
+ * Меняет статус записи очереди: 'pending' → 'failed' и обратно.
+ * getOutbox() читает только 'pending', поэтому failed-запись сама выпадает
+ * из повторов и перестаёт блокировать то, что стоит за ней в очереди.
+ */
+export async function setOutboxStatus(id, status) {
+  const db = await openDB();
+  const tx = db.transaction('outbox', 'readwrite');
+  const store = tx.objectStore('outbox');
+  const req = store.get(id);
+  req.onsuccess = () => {
+    const rec = req.result;
+    if (!rec) return;
+    store.put({ ...rec, status, failedAt: status === 'failed' ? new Date().toISOString() : null });
+  };
+  await new Promise((resolve, reject) => {
+    tx.oncomplete = resolve;
+    tx.onerror = (e) => reject(e.target.error);
+  });
+  db.close();
+}
+
+/** Записи со статусом 'failed' — их показываем как «не доставлено» и повторяем вручную. */
+export async function getFailedOutbox() {
+  const db = await openDB();
+  const tx = db.transaction('outbox', 'readonly');
+  const index = tx.objectStore('outbox').index('status');
+  const failed = [];
+  await new Promise((resolve, reject) => {
+    const req = index.openCursor(IDBKeyRange.only('failed'));
+    req.onsuccess = (e) => {
+      const cursor = e.target.result;
+      if (cursor) { failed.push(cursor.value); cursor.continue(); } else resolve();
+    };
+    req.onerror = (e) => reject(e.target.error);
+  });
+  db.close();
+  return failed;
+}
+
 export async function setMetadata(key, value) {
   const db = await openDB();
   const tx = db.transaction('metadata', 'readwrite');

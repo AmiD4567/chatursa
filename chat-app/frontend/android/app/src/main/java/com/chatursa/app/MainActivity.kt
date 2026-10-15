@@ -1,10 +1,13 @@
 package com.chatursa.app
 
+import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -43,24 +46,28 @@ class MainActivity : FragmentActivity() {
     private var biometricPending = false
     private var contentReady = false
 
+    private val deepLinkChatId = mutableStateOf<String?>(null)
+    private val sharedTextState = mutableStateOf<String?>(null)
+    private val sharedMediaState = mutableStateOf<List<String>>(emptyList())
+
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        val sharedText = extractSharedText(intent)
-        val sharedImageUri = extractSharedImageUri(intent)
+        consumeIntent(intent)
+        requestNotificationPermissionIfNeeded()
 
         if (BiometricLockManager.isEnabled(this)) {
             biometricPending = true
             showBiometricGate {
                 biometricPending = false
                 contentReady = true
-                setAppContent(sharedText, sharedImageUri)
+                setAppContent()
             }
         } else {
             contentReady = true
-            setAppContent(sharedText, sharedImageUri)
+            setAppContent()
         }
 
         lifecycle.addObserver(LifecycleEventObserver { _, event ->
@@ -97,15 +104,21 @@ class MainActivity : FragmentActivity() {
         )
     }
 
-    private fun setAppContent(sharedText: String?, sharedImageUri: Uri?) {
+    private fun setAppContent() {
         setContent {
             val themeViewModel: ThemeViewModel = viewModel()
             ChatUrsaTheme(themeViewModel = themeViewModel) {
                 LastCrashLogDialog()
                 AppNavGraph(
                     themeViewModel = themeViewModel,
-                    sharedText = sharedText,
-                    sharedImageUri = sharedImageUri
+                    sharedText = sharedTextState.value,
+                    pendingShareMediaUris = sharedMediaState.value,
+                    deepLinkChatId = deepLinkChatId.value,
+                    onDeepLinkConsumed = { deepLinkChatId.value = null },
+                    onShareConsumed = {
+                        sharedTextState.value = null
+                        sharedMediaState.value = emptyList()
+                    }
                 )
             }
         }
@@ -114,6 +127,23 @@ class MainActivity : FragmentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        consumeIntent(intent)
+    }
+
+    private fun consumeIntent(intent: Intent?) {
+        if (intent == null) return
+        intent.getStringExtra("chatId")?.let { deepLinkChatId.value = it }
+        extractSharedText(intent)?.let { sharedTextState.value = it }
+        val media = extractSharedMedia(intent)
+        if (media.isNotEmpty()) sharedMediaState.value = media
+    }
+
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1001)
+            }
+        }
     }
 
     private fun extractSharedText(intent: Intent): String? {
@@ -122,11 +152,21 @@ class MainActivity : FragmentActivity() {
         return intent.getStringExtra(Intent.EXTRA_TEXT)
     }
 
-    private fun extractSharedImageUri(intent: Intent): Uri? {
-        if (intent.action != Intent.ACTION_SEND) return null
-        val type = intent.type ?: return null
-        if (!type.startsWith("image/")) return null
-        return intent.getParcelableExtra(Intent.EXTRA_STREAM)
+    @Suppress("DEPRECATION")
+    private fun extractSharedMedia(intent: Intent): List<String> {
+        val type = intent.type ?: return emptyList()
+        if (!type.startsWith("image/") && !type.startsWith("video/")) return emptyList()
+        return when (intent.action) {
+            Intent.ACTION_SEND -> {
+                val uri = intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
+                listOfNotNull(uri?.toString())
+            }
+            Intent.ACTION_SEND_MULTIPLE -> {
+                intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)?.map { it.toString() }
+                    ?: emptyList()
+            }
+            else -> emptyList()
+        }
     }
 }
 

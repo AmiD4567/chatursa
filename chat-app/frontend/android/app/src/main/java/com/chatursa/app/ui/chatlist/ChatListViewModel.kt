@@ -38,6 +38,7 @@ data class ChatListUiState(
 class ChatListViewModel(application: Application) : AndroidViewModel(application) {
 
     private val socketManager = SocketManager()
+    private val chatActions = com.chatursa.app.data.network.ChatActionsRepository()
 
     private val _uiState = MutableStateFlow(ChatListUiState())
     val uiState: StateFlow<ChatListUiState> = _uiState.asStateFlow()
@@ -88,7 +89,7 @@ class ChatListViewModel(application: Application) : AndroidViewModel(application
                         isConnecting = false
                         _uiState.value = _uiState.value.copy(
                             currentUser = event.user,
-                            chats = event.chats.distinctBy { it.id },
+                            chats = event.chats.distinctBy { it.id }.sortedForList(),
                             isConnected = true,
                             isConnecting = false
                         )
@@ -110,7 +111,7 @@ class ChatListViewModel(application: Application) : AndroidViewModel(application
                         updateChatWithNewMessage(event.message, event.chat)
                     }
                     is SocketEvent.ChatCreated -> {
-                        val chats = (listOf(event.chat) + _uiState.value.chats).distinctBy { it.id }
+                        val chats = (listOf(event.chat) + _uiState.value.chats).distinctBy { it.id }.sortedForList()
                         _uiState.value = _uiState.value.copy(chats = chats, createdChatId = event.chat.id)
                     }
                     is SocketEvent.ChatUpdated -> {
@@ -118,8 +119,7 @@ class ChatListViewModel(application: Application) : AndroidViewModel(application
                         // созданном другим пользователем, — добавляем его в список
                         val exists = _uiState.value.chats.any { it.id == event.chat.id }
                         val updatedChats = if (!exists) {
-                            (listOf(event.chat) + _uiState.value.chats).distinctBy { it.id }
-                                .sortedByDescending { it.lastMessage?.timestamp ?: "" }
+                            (listOf(event.chat) + _uiState.value.chats).distinctBy { it.id }.sortedForList()
                         } else {
                             _uiState.value.chats.map { chat ->
                                 if (chat.id == event.chat.id) {
@@ -169,6 +169,38 @@ class ChatListViewModel(application: Application) : AndroidViewModel(application
                         }
                         _uiState.value = _uiState.value.copy(chats = updatedChats)
                     }
+                    is SocketEvent.UserProfileUpdated -> {
+                        _uiState.value = _uiState.value.copy(
+                            users = _uiState.value.users.map { u ->
+                                if (u.id == event.userId) u.copy(
+                                    username = event.username.ifBlank { u.username },
+                                    statusText = event.statusText.ifEmpty { null },
+                                    fullName = event.fullName.ifEmpty { null },
+                                    mobilePhone = event.mobilePhone.ifEmpty { null }
+                                ) else u
+                            }
+                        )
+                    }
+                    is SocketEvent.UserAvatarUpdated -> {
+                        val changedName = _uiState.value.users.find { it.id == event.userId }?.username
+                        _uiState.value = _uiState.value.copy(
+                            users = _uiState.value.users.map { u ->
+                                if (u.id == event.userId) u.copy(avatar = event.avatar) else u
+                            },
+                            chats = _uiState.value.chats.map { c ->
+                                if (c.type == "direct" && changedName != null &&
+                                    c.participants.any { it.equals(changedName, ignoreCase = true) }
+                                ) c.copy(avatar = event.avatar) else c
+                            }
+                        )
+                    }
+                    is SocketEvent.ChatAvatarUpdated -> {
+                        _uiState.value = _uiState.value.copy(
+                            chats = _uiState.value.chats.map { c ->
+                                if (c.id == event.chatId) (event.chat ?: c.copy(avatar = event.avatar)) else c
+                            }
+                        )
+                    }
                     is SocketEvent.Disconnected -> {
                         _uiState.value = _uiState.value.copy(isConnected = false)
                     }
@@ -208,33 +240,76 @@ class ChatListViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun deleteChat(chatId: String) {
-        viewModelScope.launch {
-            withContext(Dispatchers.IO) {
-                try {
-                    val client = OkHttpClient.Builder()
-                        .connectTimeout(10, TimeUnit.SECONDS)
-                        .readTimeout(10, TimeUnit.SECONDS)
-                        .build()
+        val userId = _uiState.value.currentUser?.id ?: return
+        _uiState.value = _uiState.value.copy(chats = _uiState.value.chats.filter { it.id != chatId })
+        viewModelScope.launch { chatActions.delete(chatId, userId) }
+    }
 
-                    val request = Request.Builder()
-                        .url("${AppConfig.SERVER_URL}/api/chats/$chatId")
-                        .delete()
-                        .build()
+    fun togglePin(chat: Chat) {
+        val userId = _uiState.value.currentUser?.id ?: return
+        val newValue = !chat.pinned
+        _uiState.value = _uiState.value.copy(
+            chats = _uiState.value.chats.map {
+                if (it.id == chat.id) it.copy(pinned = newValue) else it
+            }.sortedForList()
+        )
+        viewModelScope.launch { chatActions.setPinned(chat.id, userId, newValue) }
+    }
 
-                    client.newCall(request).execute()
-                } catch (e: Exception) {
-                    android.util.Log.e("ChatListVM", "Delete chat failed", e)
-                }
+    fun toggleMute(chat: Chat) {
+        val userId = _uiState.value.currentUser?.id ?: return
+        val newValue = !chat.muted
+        _uiState.value = _uiState.value.copy(
+            chats = _uiState.value.chats.map {
+                if (it.id == chat.id) it.copy(muted = newValue) else it
             }
-            _uiState.value = _uiState.value.copy(
-                chats = _uiState.value.chats.filter { it.id != chatId }
-            )
-        }
+        )
+        viewModelScope.launch { chatActions.setMuted(chat.id, userId, newValue) }
+    }
+
+    fun markUnread(chat: Chat) {
+        val userId = _uiState.value.currentUser?.id ?: return
+        _uiState.value = _uiState.value.copy(
+            chats = _uiState.value.chats.map {
+                if (it.id == chat.id) it.copy(unreadCount = maxOf(1, it.unreadCount)) else it
+            }
+        )
+        viewModelScope.launch { chatActions.setUnread(chat.id, userId, true) }
+    }
+
+    fun clearChat(chat: Chat) {
+        val userId = _uiState.value.currentUser?.id ?: return
+        _uiState.value = _uiState.value.copy(
+            chats = _uiState.value.chats.map {
+                if (it.id == chat.id) it.copy(lastMessage = null, unreadCount = 0) else it
+            }
+        )
+        viewModelScope.launch { chatActions.clear(chat.id, userId) }
+    }
+
+    fun leaveChat(chat: Chat) {
+        val userId = _uiState.value.currentUser?.id ?: return
+        _uiState.value = _uiState.value.copy(chats = _uiState.value.chats.filter { it.id != chat.id })
+        viewModelScope.launch { chatActions.leave(chat.id, userId) }
+    }
+
+    fun resetUnread(chatId: String) {
+        if (_uiState.value.chats.none { it.id == chatId && it.unreadCount > 0 }) return
+        _uiState.value = _uiState.value.copy(
+            chats = _uiState.value.chats.map {
+                if (it.id == chatId) it.copy(unreadCount = 0) else it
+            }
+        )
     }
 
     fun cancelDeleteChat() {
         _uiState.value = _uiState.value.copy(pendingDeleteChat = null)
     }
+
+    private fun List<Chat>.sortedForList(): List<Chat> = sortedWith(
+        compareByDescending<Chat> { it.pinned }
+            .thenByDescending { it.lastMessage?.timestamp ?: it.lastActivity ?: "" }
+    )
 
     private fun updateChatWithNewMessage(message: Message, incomingChat: Chat? = null) {
         val myId = _uiState.value.currentUser?.id
@@ -257,7 +332,7 @@ class ChatListViewModel(application: Application) : AndroidViewModel(application
                         chat.unreadCount + 1 else chat.unreadCount
                 )
             } else chat
-        }.sortedByDescending { it.lastMessage?.timestamp ?: "" }
+        }.sortedForList()
 
         _uiState.value = _uiState.value.copy(chats = updatedChats)
     }
@@ -283,9 +358,15 @@ class ChatListViewModel(application: Application) : AndroidViewModel(application
         val targetUser = _uiState.value.users.find { it.id == userId } ?: return
         val targetUsername = targetUser.username
         val existing = _uiState.value.chats.find { chat ->
-            chat.type == "direct" &&
-            chat.participants.contains(targetUsername) &&
-            chat.participants.contains(currentUser.username)
+            if (chat.type != "direct") return@find false
+            when {
+                chat.participantsDetails.isNotEmpty() -> {
+                    val ids = chat.participantsDetails.map { it.id }
+                    ids.contains(currentUser.id) && ids.contains(userId)
+                }
+                else -> chat.participants.contains(targetUsername) &&
+                    chat.participants.contains(currentUser.username)
+            }
         }
         if (existing != null) {
             _uiState.value = _uiState.value.copy(createdChatId = existing.id)

@@ -4,10 +4,13 @@ import EmojiInlinePicker from './EmojiInlinePicker';
 import TgsSticker from './TgsSticker';
 import LinkPreviewCard from './LinkPreviewCard';
 import { SAFE_EMOJIS } from './safe-emojis';
+import Dialog from './Dialog';
+import ThreadModal from './ThreadModal';
+import { EmojiImg, EMOJI_CDN, emojiUnifiedCandidates, emojiUnifiedUrl } from './emojiUnified';
 import { detectUrls } from './urlUtils';
 import { useReactionParticles } from './ReactionParticlesManager';
 import emojiData from './emojiData.json';
-import { saveMessages, getMessages, saveChats, getChats, queueOutgoing, getOutbox, removeFromOutbox, saveCustomBg, getAllCustomBgs, deleteCustomBg, compareChatsPinnedFirst } from './db';
+import { saveMessages, getMessages, saveChats, getChats, queueOutgoing, getOutbox, removeFromOutbox, setOutboxStatus, getFailedOutbox, saveCustomBg, getAllCustomBgs, deleteCustomBg, compareChatsPinnedFirst } from './db';
 import { initE2EEForUser, ensureSharedKey, encryptMessage, decryptMessage, getCachedSharedKey, setE2EEApiBase, getCachedGroupKey, cacheGroupKey, decryptGroupKey, generateGroupKey, encryptGroupKeyForMember, getPeerPublicKey } from './crypto';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
@@ -28,6 +31,15 @@ import useCall from './hooks/useCall';
 import CallOverlay from './CallOverlay';
 import ImageGalleryModal from './ImageGalleryModal';
 import ConfettiOverlay from './ConfettiOverlay';
+import {
+  DashboardIcon, ChartIcon, UsersIcon, MonitorIcon, FolderIcon, ShieldIcon,
+  BotIcon, PhoneIcon, GearIcon, FileTextIcon, UserPlusIcon, UserIcon, CrownIcon,
+  KeyIcon, TrashIcon, StopIcon, ImageIcon, VideoIcon, MusicIcon, MessageIcon,
+  XCircleIcon, AlertTriangleIcon, CheckIcon, CheckCircleIcon,
+  BanIcon, TrophyIcon, SaveIcon, DatabaseIcon, DotIcon,
+  BellIcon, ClockIcon, PaperclipIcon, CalendarIcon, XIcon,
+  PinIcon, ChevronUpIcon, ChevronDownIcon, ListIcon
+} from './Icons';
 
 // Автоопределение адреса сервера.
 // Electron и Android (Capacitor) загружают фронтенд локально,
@@ -53,39 +65,12 @@ const STORAGE_KEY = 'chat_user_data';
 const STATUS_EMOJI_CLUSTER_RE =
   /(?:\p{RI}\p{RI}|\p{Extended_Pictographic})(?:[\u{1F3FB}-\u{1F3FF}\uFE0F])?(?:\u200D(?:\p{RI}\p{RI}|\p{Extended_Pictographic})(?:[\u{1F3FB}-\u{1F3FF}\uFE0F])?)*/gu;
 
-function emojiUnifiedVariants(cluster) {
-  const cps = [...cluster];
-  const raw = cps.map(c => c.codePointAt(0).toString(16)).join('-');
-  // Классический вариант из emojiToUnified: без FE0F/20E3/скин-тонов,
-  // c -fe0f для одиночных из Misc Symbols/Dingbats
-  const filtered = cps.map(c => {
-    const code = c.codePointAt(0);
-    if ((code >= 0xFE00 && code <= 0xFE0F) || code === 0x20E3) return null;
-    if (code >= 0x1F3FB && code <= 0x1F3FF) return null;
-    return code.toString(16);
-  }).filter(Boolean);
-  let classic = filtered.join('-');
-  if (filtered.length === 1) {
-    const code = parseInt(filtered[0], 16);
-    if ((code >= 0x2600 && code <= 0x26FF) || (code >= 0x2700 && code <= 0x27BF)) classic += '-fe0f';
-  }
-  return [...new Set([raw, classic].filter(Boolean))];
-}
-
 function StatusEmojiImg({ cluster, size }) {
-  const [variant, setVariant] = React.useState(0);
-  const variants = emojiUnifiedVariants(cluster);
-  const dim = typeof size === 'number' ? `${size}px` : size;
-  if (!cluster || variant >= variants.length) {
-    return <span style={{ fontSize: dim }}>{cluster}</span>; // нативный глиф как последний фолбэк
-  }
   return (
-    <img
-      src={`https://cdn.jsdelivr.net/npm/emoji-datasource-apple@15.0.1/img/apple/64/${variants[variant]}.png`}
-      alt={cluster}
-      onError={() => setVariant(v => v + 1)}
+    <EmojiImg
+      cluster={cluster}
+      size={size}
       className="status-emoji-img emoji"
-      style={{ width: dim, height: dim, verticalAlign: 'middle', display: 'inline-block', objectFit: 'contain' }}
       loading="lazy"
     />
   );
@@ -366,6 +351,9 @@ const CONFETTI_PHRASES = ['с днём рождения', 'день рожден
 const CONFETTI_WORDS = ['поздравляю', 'congratulations', 'ура'];
 const CONFETTI_EMOJIS = ['🎉', '🥳', '🎊'];
 
+// Сколько превью показывать в одном сообщении. Дальше — просто ссылки.
+const MAX_LINK_PREVIEWS = 2;
+
 // Диагностика скролла: включается localStorage.chatScrollDebug = '1'
 function sdbg(...a) {
   try { if (localStorage.getItem('chatScrollDebug') === '1') console.log('[scroll]', ...a); } catch (e) {}
@@ -378,6 +366,15 @@ function shouldTriggerConfetti(text) {
   // Токенизация с учётом кириллицы: знаки препинания не мешают («Ура!» → «ура»)
   const words = lower.match(/[\p{L}\p{N}]+/gu) || [];
   return CONFETTI_WORDS.some(w => words.includes(w)) || CONFETTI_EMOJIS.some(e => text.includes(e));
+}
+
+// Локальные дата/время (YYYY-MM-DD / HH:MM) для планирования напоминаний и отправки
+function localDateTimeParts(d) {
+  const pad = n => String(n).padStart(2, '0');
+  return {
+    date: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`,
+    time: `${pad(d.getHours())}:${pad(d.getMinutes())}`
+  };
 }
 
 // ══════════ Feather-иконки (stroke=currentColor) для контекстных меню ══════════
@@ -414,6 +411,9 @@ const IconCornerUpLeft = () => (
 );
 const IconCopy = () => (
   <MenuIcon><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></MenuIcon>
+);
+const IconMessage = () => (
+  <MenuIcon><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 9 9 0 0 1-4.2-1L3 20l1.1-3.6A8.4 8.4 0 0 1 12 3.1a8.4 8.4 0 0 1 9 8.4z"/></MenuIcon>
 );
 const IconEdit = () => (
   <MenuIcon><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></MenuIcon>
@@ -492,12 +492,12 @@ function App() {
   const loginVideoRef = useRef(null);
   const [users, setUsers] = useState([]);
 
-  // Видимость приложения (для корректного подсчёта непрочитанных)
-  const [isAppVisible, setIsAppVisible] = useState(true);
+  // Видимость приложения и фокус окна — для непрочитанных, уведомлений и галочек.
+  // Храним в ref: значения читаются из socket-колбэков, ре-рендер из-за них не нужен.
   const isAppVisibleRef = useRef(true);
-  // Фокус окна (для системных уведомлений и счётчика непрочитанных)
-  const [isWindowFocused, setIsWindowFocused] = useState(true);
   const isWindowFocusedRef = useRef(true);
+  // Таймер сверки фокуса: подстраховка, если события focus/blur потерялись
+  const reconcileTimerRef = useRef(null);
 
   const [inputText, setInputText] = useState('');
   const [selectedFiles, setSelectedFiles] = useState([]);
@@ -523,7 +523,28 @@ function App() {
   const [showAvatarModal, setShowAvatarModal] = useState(false);
   const [avatarUrl, setAvatarUrl] = useState('');
 
+  // Круговой кроп аватара профиля
+  const [showAvatarCrop, setShowAvatarCrop] = useState(false);
+  const [avatarCropSrc, setAvatarCropSrc] = useState(null);
+  const [avatarCropZoom, setAvatarCropZoom] = useState(1);
+  const [avatarCropOffset, setAvatarCropOffset] = useState({ x: 0, y: 0 });
+  const [avatarCropImageSize, setAvatarCropImageSize] = useState({ w: 0, h: 0 });
+  const avatarCropStageSize = 280; // сторона квадратной области кропа (px)
+  const avatarCropDragRef = useRef(null); // { startX, startY, offsetX, offsetY } при перетаскивании
+
   // Контекстное меню сообщений
+  // Окно обсуждения (тред)
+  const [threadModal, setThreadModal] = useState({ open: false, messageId: null });
+  // Инкремент заставляет открытое окно перечитать ветку, когда приходит новый ответ
+  const [threadRefreshTick, setThreadRefreshTick] = useState(0);
+
+  const openThread = (messageId) => {
+    if (!messageId) return;
+    setThreadModal({ open: true, messageId });
+  };
+
+  const closeThread = () => setThreadModal({ open: false, messageId: null });
+
   const [contextMenu, setContextMenu] = useState({
     visible: false,
     x: 0,
@@ -535,6 +556,7 @@ function App() {
     messageChatId: null,
     messageSenderId: null,
     reactionsExpanded: false,
+    selectedText: '',
   });
 
   // Открыт ли эмодзи-пикер выбора произвольной реакции (в контекстном меню сообщений)
@@ -571,6 +593,8 @@ function App() {
   const messageMenuRef = useRef(null);
   const chatMenuRef = useRef(null);
   const inputMenuRef = useRef(null);
+  // Long-press (мобильные) для меню сообщения
+  const longPressTimerRef = useRef(null);
 
   // Точный «доводчик» позиции меню: измеряем реальный размер и не даём выйти за окно.
   // offsetWidth/offsetHeight вместо getBoundingClientRect — не искажаются CSS-анимацией (scale)
@@ -580,6 +604,14 @@ function App() {
       x: Math.max(margin, Math.min(rawX, window.innerWidth - menuEl.offsetWidth - margin)),
       y: Math.max(margin, Math.min(rawY, window.innerHeight - menuEl.offsetHeight - margin))
     };
+  };
+
+  // Угол, из которого растёт меню: по умолчанию левый верхний (там курсор),
+  // но у правого/нижнего края экрана меню сдвинуто — тогда растём от другого угла.
+  const menuTransformOrigin = (x, y, rawX, rawY) => {
+    const fromRight = x < rawX;
+    const fromBottom = y < rawY;
+    return `${fromRight ? 'right' : 'left'} ${fromBottom ? 'bottom' : 'top'}`;
   };
 
   // Меню сообщения: пересчёт после монтирования и при раскрытии реакций
@@ -686,7 +718,6 @@ function App() {
   });
   const [canBookMeetingRoom, setCanBookMeetingRoom] = useState(false); // Право на бронирование
   const [canEditWiki, setCanEditWiki] = useState(false); // Право на редактирование wiki
-  const [canViewKpi, setCanViewKpi] = useState(false); // Право на просмотр показателей
   const [showTaskModal, setShowTaskModal] = useState(false);
   const [editingTask, setEditingTask] = useState(null);
   const [taskForm, setTaskForm] = useState({
@@ -702,6 +733,19 @@ function App() {
   const [selectedDayTasks, setSelectedDayTasks] = useState([]);
   // Источник задачи «из сообщения»: { chatId, messageId } — сохраняется с задачей для кнопки перехода
   const [taskSource, setTaskSource] = useState(null);
+
+  // ── Напоминание о сообщении (модалка, как у задачи) ──
+  const [showReminderModal, setShowReminderModal] = useState(false);
+  const [reminderTarget, setReminderTarget] = useState(null); // { chatId, messageId, senderName, preview }
+  const [editingReminderTask, setEditingReminderTask] = useState(null); // задача-напоминание при редактировании из календаря
+  const [reminderForm, setReminderForm] = useState({ date: '', time: '', note: '' });
+
+  // ── Отложенная отправка сообщения ──
+  const [showScheduleModal, setShowScheduleModal] = useState(false);
+  const [scheduleForm, setScheduleForm] = useState({ date: '', time: '' });
+  const [schedulePreview, setSchedulePreview] = useState('');
+  const [scheduledMessages, setScheduledMessages] = useState([]); // pending для текущего пользователя
+  const [showScheduledPanel, setShowScheduledPanel] = useState(false);
   const [showChatMenu, setShowChatMenu] = useState(false);
   const [showMediaViewer, setShowMediaViewer] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -718,10 +762,6 @@ function App() {
   const galleryIndexRef = useRef(0);
   const [showStatusPicker, setShowStatusPicker] = useState(false);
   const [readMessages, setReadMessages] = useState({}); // { messageId: [userIds] }
-  // Глобальный Map: chatId -> Set(readerUserIds) для стабильных двойных галочек
-  const readByChatRef = useRef(new Map());
-  // Версия статуса прочтения — триггерит ре-рендер при получении messages_read
-  const [readStatusVersion, setReadStatusVersion] = useState(0);
   const [readByPopup, setReadByPopup] = useState(null); // { messageId, readers: [{username, avatar}], x, y }
 
   // Закрытие readByPopup по Escape
@@ -766,13 +806,17 @@ function App() {
   const [showSearchMessages, setShowSearchMessages] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
+  const [searchMessagesTotal, setSearchMessagesTotal] = useState(0);
   const [fileResults, setFileResults] = useState([]); // Результаты единого поиска файлов (чаты + wiki)
+  const [wikiResults, setWikiResults] = useState([]); // Результаты поиска по статьям базы знаний
+  const [searchTab, setSearchTab] = useState('all'); // Активный раздел поиска: all | users | messages | wiki | files
   const [currentSearchIndex, setCurrentSearchIndex] = useState(0);
   const [isSearching, setIsSearching] = useState(false);
   const [chatSearchActive, setChatSearchActive] = useState(false);
   const [chatSearchQuery, setChatSearchQuery] = useState('');
   const [chatSearchResults, setChatSearchResults] = useState([]);
   const [chatSearchIndex, setChatSearchIndex] = useState(-1);
+  const [chatSearchTotal, setChatSearchTotal] = useState(0);
   const [userSearchResults, setUserSearchResults] = useState([]);
   const [mentionPopup, setMentionPopup] = useState({ show: false, filter: '', x: 0, y: 0 });
   const [showShareTaskModal, setShowShareTaskModal] = useState(false);
@@ -935,9 +979,8 @@ function App() {
 
   // Закреплённые сообщения по чатам
   const [pinnedMessages, setPinnedMessages] = useState({}); // { chatId: [messages] }
-  const [showPinnedBar, setShowPinnedBar] = useState(false);
-  const [pinnedBarCollapsed, setPinnedBarCollapsed] = useState(true);
-  const [showPinnedModal, setShowPinnedModal] = useState(false);
+  const [pinnedIndex, setPinnedIndex] = useState(0);       // текущий закреп в полосе
+  const [showPinnedList, setShowPinnedList] = useState(false); // выпадающий список закрепов
 
   const [isAdmin, setIsAdmin] = useState(false);
   const [adminStats, setAdminStats] = useState(null);
@@ -945,6 +988,12 @@ function App() {
   const [adminChartDays, setAdminChartDays] = useState(14);
   const [botAnalyticsData, setBotAnalyticsData] = useState(null);
   const [botSettings, setBotSettings] = useState(null);
+  // Рассылка от Помощника (доступна только Root)
+  const [broadcastText, setBroadcastText] = useState('');
+  const [broadcastButtons, setBroadcastButtons] = useState('');
+  const [broadcastSending, setBroadcastSending] = useState(false);
+  const [broadcastRecipients, setBroadcastRecipients] = useState(null);
+  const [broadcastResult, setBroadcastResult] = useState(null);
   const [supportRequests, setSupportRequests] = useState([]);
   const [supportActiveFilter, setSupportActiveFilter] = useState('open');
   const [adminUsers, setAdminUsers] = useState([]);
@@ -1004,6 +1053,38 @@ function App() {
   const [customBackgrounds, setCustomBackgrounds] = useState([]);
   const [activeCustomBgUrl, setActiveCustomBgUrl] = useState(null);
   const clientVersionRef = useRef('web');
+
+  // Пользователь действительно смотрит на экран: окно видно И в фокусе.
+  // Свёрнутое или перекрытое другим приложением окно не считается.
+  const isReallyVisible = () => isAppVisibleRef.current && isWindowFocusedRef.current;
+
+  // Чат перед глазами: окно не свёрнуто и не скрыто. Фокус ОС здесь не нужен —
+  // иначе бейдж не гаснет, пока пользователь читает (в Electron фокус приходит
+  // из main-процесса и может «залипнуть», если событие прошло до подписки).
+  // Источник истины зависит от окружения: в Electron главный процесс учитывает
+  // и сворачивание окна, чего document.visibilityState не показывает, поэтому
+  // там доверяем только IPC-флагу, а в браузере — видимости вкладки.
+  const isChatOnScreen = (chatId) => {
+    if (!chatId) return false;
+    if (activeChatIdRef.current !== chatId) return false;
+    if (window.electronAPI) return isAppVisibleRef.current;
+    return document.visibilityState !== 'hidden';
+  };
+
+  // Отметка прочтения разделена на две части:
+  //  - локальный бейдж гасим, как только чат на экране;
+  //  - mark_read серверу отправляем только при настоящем фокусе, иначе галочки
+  //    у собеседника позеленели бы, хотя его никто не смотрел.
+  const markChatReadIfVisible = (chatId) => {
+    if (!socketRef.current || !chatId) return;
+    if (!isChatOnScreen(chatId)) return;
+
+    setChats(prev => prev.map(c => (c.id === chatId ? { ...c, unreadCount: 0 } : c)));
+
+    if (isReallyVisible()) {
+      socketRef.current.emit('mark_read', { chatId });
+    }
+  };
 
   // Вычисляем активный чат по ID
   const activeChat = chats.find(c => c.id === activeChatId) || null;
@@ -1317,6 +1398,22 @@ function App() {
     }
   }, [userUiSettings.chatBackground, userUiSettings.chatBackgroundImage, activeCustomBgUrl]);
 
+  // Загрузка отложенных сообщений при входе (для чипа над полем ввода)
+  useEffect(() => {
+    if (!isLoggedIn || !currentUser?.id) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const resp = await fetch(`${SOCKET_URL}/api/scheduled-messages?userId=${currentUser.id}`);
+        if (resp.ok) {
+          const data = await resp.json();
+          if (!cancelled) setScheduledMessages(data.items || []);
+        }
+      } catch (e) { /* сеть недоступна — чип просто не покажется */ }
+    })();
+    return () => { cancelled = true; };
+  }, [isLoggedIn, currentUser?.id]);
+
   // Загрузка состояния автозапуска (только Electron)
   useEffect(() => {
     if (window.electronAPI?.getAutoLaunch) {
@@ -1391,6 +1488,14 @@ function App() {
     })();
     return () => { cancelled = true; };
   }, [currentUser?.id]);
+
+  // Держим ref активного чата в синхроне со состоянием. Раньше он обновлялся
+  // лишь вручную в трёх местах и никогда не сбрасывался в null — после удаления
+  // чата проверки «открыт ли этот чат» (прочтение, история, скролл) работали
+  // со старым значением.
+  useEffect(() => {
+    activeChatIdRef.current = activeChatId;
+  }, [activeChatId]);
 
   // Автофокус на поле ввода при переключении чата + сохранение черновиков
   useEffect(() => {
@@ -1547,15 +1652,18 @@ function App() {
         // Подписка на статус видимости приложения
         if (window.electronAPI.onAppVisibility) {
           window.electronAPI.onAppVisibility((state) => {
-            setIsAppVisible(!!state.visible);
             isAppVisibleRef.current = !!state.visible;
-            setIsWindowFocused(!!state.focused);
             isWindowFocusedRef.current = !!state.focused;
             // Когда окно невидимо/не в фокусе — глушим тяжёлый рендеринг (анимации,
             // backdrop-filter, видео-фон), чтобы снизить нагрузку на GPU.
             const hidden = !state.visible && !state.focused;
             document.body.classList.toggle('app-hidden', hidden);
-            console.log(`app visibility: ${state.visible}, focused: ${state.focused}, hidden: ${hidden}`);
+            // Окно снова на экране — то, что перед глазами, считается прочитанным.
+            // Фокус ОС здесь не требуем: бейдж локальный, а mark_read внутри
+            // функции всё равно отправится только при настоящем фокусе.
+            if (state.visible) {
+              markChatReadIfVisible(activeChatIdRef.current);
+            }
           });
         }
         if (window.electronAPI.getAppVisibilityStatus) {
@@ -1576,20 +1684,63 @@ function App() {
     initApp();
   }, []);
 
-  // Для браузерного окружения (веб/PWA): глушим тяжёлый рендеринг,
-  // когда вкладка скрыта — снижает нагрузку на GPU в фоне.
-  useEffect(() => {
-    if (window.electronAPI) return;
-    const onVis = () => {
+// Отслеживаем скрытие вкладки и фокус окна — от этого зависят непрочитанные,
+// уведомления и галочки прочтения.
+useEffect(() => {
+  const isElectron = !!window.electronAPI;
+
+  // Сверка фокуса с тем, что Chromium считает «окно в фокусе». События window
+  // иногда не приходят вовремя (окно создано уже сфокусированным, или фокус
+  // вернулся мимо blur/focus), и тогда флаг остаётся неверным навсегда.
+  // document.hasFocus() работает и в Electron-рендерере, поэтому сверяем его
+  // при старте, при смене видимости и по таймеру.
+  const reconcileFocus = () => {
+    if (document.visibilityState !== 'visible') return;
+    const actual = document.hasFocus();
+    if (isWindowFocusedRef.current === actual) return;
+    isWindowFocusedRef.current = actual;
+    if (actual) {
+      markChatReadIfVisible(activeChatIdRef.current);
+    }
+  };
+
+  // Видимость в Electron приходит из main-процесса (там учитывается и свернутость
+  // окна, чего document.hidden не показывает), поэтому свой обработчик там не вешаем.
+  const onVis = () => {
+    if (!isElectron) {
       const hidden = document.hidden;
-      setIsAppVisible(!hidden);
       isAppVisibleRef.current = !hidden;
       document.body.classList.toggle('app-hidden', hidden);
-    };
-    onVis();
-    document.addEventListener('visibilitychange', onVis);
-    return () => document.removeEventListener('visibilitychange', onVis);
-  }, []);
+    }
+    reconcileFocus();
+  };
+
+  // Фокус окна ловим нативными событиями ВСЕГДА, включая Electron. Раньше для
+  // Electron эффект выходил сразу, и у рендерера не оставалось ни одного своего
+  // источника правды о фокусе: всё держалось на событиях из main-процесса, и при
+  // рассинхронизации флаг залипал в false.
+  const onFocus = () => {
+    isWindowFocusedRef.current = true;
+    if (document.visibilityState === 'visible') {
+      markChatReadIfVisible(activeChatIdRef.current);
+    }
+  };
+  const onBlur = () => { isWindowFocusedRef.current = false; };
+
+  onVis();
+  isWindowFocusedRef.current = document.hasFocus();
+  reconcileTimerRef.current = setInterval(reconcileFocus, 2000);
+  document.addEventListener('visibilitychange', onVis);
+  window.addEventListener('focus', onFocus);
+  window.addEventListener('blur', onBlur);
+  return () => {
+    document.removeEventListener('visibilitychange', onVis);
+    window.removeEventListener('focus', onFocus);
+    window.removeEventListener('blur', onBlur);
+    // Таймеры сверки снимаем тоже, иначе они останутся висеть после размонтирования
+    clearInterval(reconcileTimerRef.current);
+  };
+}, []);
 
   // Когда окно/вкладка скрыто (класс app-hidden на body) — ставим фоновое видео
   // на паузу, чтобы остановить постоянное аппаратное декодирование на GPU.
@@ -1895,12 +2046,10 @@ function App() {
           const canBook = fullUser.username === 'Root' || data.user.can_book_meeting_room === 1;
           setCanBookMeetingRoom(canBook);
           setCanEditWiki(fullUser.is_admin === 1 || data.user.can_edit_wiki === 1);
-          setCanViewKpi(fullUser.is_admin === 1 || data.user.can_view_kpi === 1);
         } else {
           setCurrentUser(user);
           setCanBookMeetingRoom(false);
           setCanEditWiki(user.is_admin === 1);
-          setCanViewKpi(user.is_admin === 1);
         }
       } catch (err) {
         console.error('Ошибка загрузки профиля:', err);
@@ -2032,6 +2181,25 @@ function App() {
     });
 
     newSocket.on('new_message', async ({ message, chat, isOwnMessage }) => {
+      // Ответ в треде в общую ленту не попадает: показываем его только в окне
+      // обсуждения, а у корневого сообщения наращиваем счётчик ответов.
+      if (message.reply_to && message.reply_to.thread === true) {
+        const rootId = message.reply_to.messageId;
+        if (message.chatId === activeChatIdRef.current && rootId) {
+          setMessages(prev => prev.map(m =>
+            m.id === rootId ? { ...m, threadReplyCount: (m.threadReplyCount || 0) + 1 } : m
+          ));
+        }
+        // Открытое окно обсуждения должно увидеть новый ответ без перезагрузки
+        setThreadModal(prev => {
+          if (prev.open && prev.messageId === rootId) {
+            setThreadRefreshTick(t => t + 1);
+          }
+          return prev;
+        });
+        return;
+      }
+
       // Расшифровываем E2EE сообщение
       if (message.e2ee && message.e2ee_nonce) {
         const decryptedText = await decryptE2EEMessageText(message, message.chatId);
@@ -2048,13 +2216,32 @@ function App() {
       const isMyMessage = isOwnMessage || message.senderId === myId;
       const isChatActive = message.chatId === activeChatIdRef.current;
 
+      // Сообщение пришло в открытый чат. Если окно на экране — гасим бейдж;
+      // mark_read уйдёт внутри функции и только когда окно ещё и в фокусе.
+      if (!isMyMessage && isChatActive && isChatOnScreen(message.chatId)) {
+        markChatReadIfVisible(message.chatId);
+      }
+
       // Конфетти ТОЛЬКО когда пользователь реально читает сообщение:
       // - своё сообщение видно сразу при отправке;
-      // - чужое — только если чат открыт, приложение видно и в фокусе.
+      // - чужое — только если чат открыт и окно на экране. Фокус ОС не спрашиваем:
+      //   он приходит из main-процесса и в Electron «залипал» в false, из-за чего
+      //   конфетти не срабатывали никогда (и заодно прилетали уведомления на
+      //   сообщения, которые пользователь видел перед глазами).
       try {
-        const readNow = isMyMessage ||
-          (isChatActive && isAppVisibleRef.current && isWindowFocusedRef.current);
-        if (readNow && shouldTriggerConfetti(stripStickerMarkers(message.text || ''))) {
+        const confettiText = stripStickerMarkers(message.text || '');
+        const triggers = shouldTriggerConfetti(confettiText);
+        const onScreen = isChatOnScreen(message.chatId);
+        const readNow = isMyMessage || (isChatActive && onScreen);
+        // ВРЕМЕННО: разовая диагностика, удалить после подтверждения правки
+        if (triggers && !readNow) {
+          console.log('[Confetti] текст подошёл, но чат не считается прочитанным:', {
+            text: confettiText, isMyMessage, isChatActive, onScreen,
+            appVisible: isAppVisibleRef.current, focused: isWindowFocusedRef.current,
+            activeChatId: activeChatIdRef.current, msgChatId: message.chatId,
+          });
+        }
+        if (readNow && triggers) {
           const isMuted = !!chatsRef.current.find(c => c.id === message.chatId)?.muted;
           const now = Date.now();
           if (!isMuted && now - lastConfettiRef.current > 5000) {
@@ -2146,11 +2333,15 @@ function App() {
               let newUnreadCount;
 
               // Логика подсчёта непрочитанных:
-              // - Если чат активен И приложение видно И в фокусе → сообщение на экране, unreadCount = 0
-              // - Если чат активен, но окно скрыто/свёрнуто/не в фокусе → пользователь не видит, увеличиваем счётчик
+              // - Если чат активен И окно на экране → сообщение видно, unreadCount = 0.
+              //   Фокус ОС здесь не спрашиваем: он приходит из main-процесса и может
+              //   «залипнуть» в false, из-за чего бейдж не гас (галочки «прочитано»
+              //   от этого не страдают — их шлёт отдельный mark_read по фокусу).
+              // - Если чат активен, но окно свёрнуто/скрыто → пользователь не видит, увеличиваем счётчик
               // - Исходящие сообщения → всегда 0
               // - Входящие + чат не активен → увеличиваем счётчик
-              if (!isMessageFromMe && isChatActive && isAppVisibleRef.current && isWindowFocusedRef.current) {
+              const onScreen = isChatOnScreen(message.chatId);
+              if (!isMessageFromMe && isChatActive && onScreen) {
                 newUnreadCount = 0;
               } else if (isMessageFromMe) {
                 newUnreadCount = 0;
@@ -2323,6 +2514,22 @@ function App() {
       setSelectedDayTasks(prev => prev.filter(t => t.id !== taskId));
     });
 
+    // Отложенные сообщения
+    newSocket.on('scheduled_message_created', ({ item }) => {
+      if (!item) return;
+      setScheduledMessages(prev => prev.some(m => m.id === item.id) ? prev : [...prev, item].sort((a, b) => (a.scheduledAtMs || 0) - (b.scheduledAtMs || 0)));
+    });
+    newSocket.on('scheduled_message_cancelled', ({ id }) => {
+      setScheduledMessages(prev => prev.filter(m => m.id !== id));
+    });
+    newSocket.on('scheduled_message_sent', ({ id }) => {
+      setScheduledMessages(prev => prev.filter(m => m.id !== id));
+    });
+    newSocket.on('scheduled_message_failed', ({ id }) => {
+      setScheduledMessages(prev => prev.filter(m => m.id !== id));
+      alert('Не удалось отправить отложенное сообщение');
+    });
+
     newSocket.on('user_profile_updated', ({ userId, username, full_name, work_phone, mobile_phone, status_text }) => {
       // Обновляем список пользователей
       setUsers(prev => {
@@ -2446,34 +2653,38 @@ function App() {
     newSocket.on('messages_read', ({ chatId, readBy, readAt }) => {
       if (!readBy || !readAt) return;
 
-      // Глобально отмечаем пользователя как читавшего в этом чате
-      let readers = readByChatRef.current.get(chatId);
-      if (!readers) {
-        readers = new Set();
-        readByChatRef.current.set(chatId, readers);
-      }
-      const wasNew = !readers.has(readBy);
-      readers.add(readBy);
-
-      // Обновляем сообщения в текущем активном чате — все кроме собственных
+      // Галочки рисуются только у СВОИХ сообщений, поэтому обновляем именно их.
+      // Отмечаем лишь те, что отправлены до момента прочтения, — сообщения,
+      // отправленные позже, собеседник ещё не видел.
       if (chatId === activeChatIdRef.current) {
+        const readAtMs = new Date(readAt).getTime();
+        const myId = currentUserRef.current?.id;
         setMessages(prev => prev.map(msg => {
-          if (msg.senderId !== currentUserRef.current?.id && !msg.read_at) {
-            return { ...msg, read_at: readAt };
-          }
-          return msg;
+          if (msg.senderId !== myId || msg.read_at) return msg;
+          const sentAtMs = msg.timestamp ? new Date(msg.timestamp).getTime() : 0;
+          if (sentAtMs && sentAtMs > readAtMs) return msg;
+          return { ...msg, read_at: readAt };
         }));
-      }
-
-      // Принудительный ре-рендер для обновления статусов на всех сообщениях чата
-      if (wasNew) {
-        setReadStatusVersion(v => v + 1);
       }
     });
 
-    // Обработка удаления сообщения администратором
-    newSocket.on('message_deleted', ({ id: deletedMessageId }) => {
-      setMessages(prev => prev.filter(msg => msg.id !== deletedMessageId));
+    // «Удалить у обоих»: сообщение остаётся на месте, но рисуется заглушка
+    newSocket.on('message_deleted', ({ id: deletedMessageId, deleted_at, deleted_by, deletedByName }) => {
+      if (deleted_at) {
+        setMessages(prev => prev.map(msg => (
+          msg.id === deletedMessageId
+            ? { ...msg, text: '', file: null, poll: null, reactions: undefined, deleted_at, deleted_by, deletedByName }
+            : msg
+        )));
+      } else {
+        // Старый формат события (жёсткое удаление) — убираем сообщение совсем
+        setMessages(prev => prev.filter(msg => msg.id !== deletedMessageId));
+      }
+    });
+
+    // «Удалить у себя» — сервер подтверждает скрытие только у нас
+    newSocket.on('message_hidden', ({ messageId }) => {
+      setMessages(prev => prev.filter(msg => msg.id !== messageId));
     });
 
     // Обработка редактирования сообщения
@@ -2624,40 +2835,35 @@ function App() {
     });
 
     // Обработка закрепления сообщения
-    newSocket.on('message_pinned', ({ chatId, messageId, message, pinnedBy, pinnedByName, pinnedAt }) => {
-      console.log('📌 message_pinned received:', { chatId, messageId, hasMessage: !!message });
+    newSocket.on('message_pinned', async ({ chatId, messageId, message, pinnedBy, pinnedByName, pinnedAt }) => {
       if (message && chatId) {
+        // E2EE: сервер присылает шифротекст — расшифровываем для превью
+        if (message.e2ee && message.e2ee_nonce) {
+          try {
+            const decrypted = await decryptE2EEMessageText(message, chatId);
+            if (decrypted !== message.text) message.text = decrypted;
+          } catch (e) { /* оставляем как есть */ }
+        }
         setPinnedMessages(prev => {
           const chatPinned = prev[chatId] || [];
-          // Проверяем, нет ли уже этого сообщения в списке закрепленных для данного чата
           if (!chatPinned.find(m => String(m.id) === String(messageId))) {
-            console.log('✅ Добавляем закрепленное сообщение:', messageId);
             return { ...prev, [chatId]: [message, ...chatPinned] };
           }
-          console.log('⚠️ Сообщение уже закреплено:', messageId);
           return prev;
         });
-        // Если это наш текущий активный чат, показываем плашку закрепленного сообщения
-        if (chatId === activeChatIdRef.current) {
-          console.log('📌 Активный чат совпадает, показываем плашку');
-          setShowPinnedBar(true);
-        } else {
-          console.log('⚠️ Чат не активен:', chatId, '!=', activeChatIdRef.current);
-        }
-      } else {
-        console.error('❌ message_pinned: нет message или chatId', { hasMessage: !!message, chatId });
+        if (chatId === activeChatIdRef.current) setPinnedIndex(0);
       }
     });
 
     // Обработка открепления сообщения
     newSocket.on('message_unpinned', ({ chatId, messageId }) => {
-      console.log('📍 message_unpinned received:', { chatId, messageId });
       if (chatId) {
         setPinnedMessages(prev => {
           const chatPinned = prev[chatId] || [];
           const updatedChatPinned = chatPinned.filter(m => String(m.id) !== String(messageId));
-          if (chatId === activeChatIdRef.current && updatedChatPinned.length === 0) {
-            setShowPinnedBar(false);
+          if (chatId === activeChatIdRef.current) {
+            setPinnedIndex(i => Math.min(i, Math.max(0, updatedChatPinned.length - 1)));
+            if (updatedChatPinned.length === 0) setShowPinnedList(false);
           }
           return { ...prev, [chatId]: updatedChatPinned };
         });
@@ -2665,10 +2871,17 @@ function App() {
     });
 
     // Получение списка закреплённых сообщений
-    newSocket.on('pinned_messages_list', ({ chatId, messages: pinnedMsgs }) => {
-      setPinnedMessages(prev => ({ ...prev, [chatId]: pinnedMsgs }));
-      if (chatId === activeChatIdRef.current && pinnedMsgs.length > 0) {
-        setShowPinnedBar(true);
+    newSocket.on('pinned_messages_list', async ({ chatId, messages: pinnedMsgs }) => {
+      let list = pinnedMsgs || [];
+      // E2EE: расшифровываем шифротекст для превью
+      if (list.some(m => m.e2ee && m.e2ee_nonce)) {
+        const decrypted = await decryptE2EEMessages(list, chatId);
+        list = decrypted;
+      }
+      setPinnedMessages(prev => ({ ...prev, [chatId]: list }));
+      if (chatId === activeChatIdRef.current) {
+        setPinnedIndex(i => Math.min(i, Math.max(0, list.length - 1)));
+        if (list.length === 0) setShowPinnedList(false);
       }
     });
 
@@ -2851,14 +3064,31 @@ function App() {
     }
   }, [users]);
 
-  // Отметка сообщений как прочитанные при открытии чата
+  // Отметка прочтения при открытии чата — только если окно реально видно и в фокусе
   useEffect(() => {
     if (socket && activeChatId && currentUser) {
-      socket.emit('mark_read', { chatId: activeChatId });
-      // Загружаем закреплённые сообщения для чата
+      markChatReadIfVisible(activeChatId);
+      // Закреплённые сообщения грузим независимо от видимости окна
       socket.emit('get_pinned_messages', { chatId: activeChatId });
     }
+    // При смене чата сбрасываем навигацию по закрепам
+    setPinnedIndex(0);
+    setShowPinnedList(false);
   }, [socket, activeChatId, currentUser]);
+
+  // Поиск по чату по мере ввода (debounce 300 мс)
+  useEffect(() => {
+    if (!chatSearchActive) return;
+    const q = chatSearchQuery.trim();
+    if (q.length < 2) {
+      setChatSearchResults([]);
+      setChatSearchTotal(0);
+      setChatSearchIndex(-1);
+      return;
+    }
+    const t = setTimeout(() => { handleChatSearch(q); }, 300);
+    return () => clearTimeout(t);
+  }, [chatSearchQuery, chatSearchActive, activeChatId]);
 
   // Запрос списка пользователей при входе
   useEffect(() => {
@@ -3274,6 +3504,67 @@ function App() {
     }
   };
 
+  // Рассылка от Помощника: число получателей (для подтверждения)
+  const loadBroadcastRecipients = async () => {
+    if (!currentUser || currentUser.username !== 'Root') return;
+    try {
+      const resp = await fetch(`${SOCKET_URL}/api/bot/broadcast/recipients?userId=${encodeURIComponent(currentUser.id)}`);
+      if (resp.ok) {
+        const data = await resp.json();
+        setBroadcastRecipients(data.total ?? null);
+      }
+    } catch (err) {
+      console.error('Ошибка загрузки получателей рассылки:', err);
+    }
+  };
+
+  // Отправка рассылки от имени Помощника всем пользователям
+  const handleSendBroadcast = async () => {
+    if (!currentUser || currentUser.username !== 'Root') return;
+    const text = broadcastText.trim();
+    if (!text) { alert('Введите текст рассылки'); return; }
+
+    // Кнопки: каждая строка "Текст | /команда" (необязательно, максимум 6)
+    const buttons = broadcastButtons
+      .split('\n')
+      .map(l => l.trim())
+      .filter(Boolean)
+      .map(l => {
+        const i = l.indexOf('|');
+        if (i === -1) return null;
+        const label = l.slice(0, i).trim();
+        const action = l.slice(i + 1).trim();
+        return (label && action) ? { label, action } : null;
+      })
+      .filter(Boolean)
+      .slice(0, 6);
+
+    const total = broadcastRecipients ?? '?';
+    if (!confirm(`Отправить сообщение от Помощника всем пользователям (${total})?`)) return;
+
+    setBroadcastSending(true);
+    setBroadcastResult(null);
+    try {
+      const resp = await fetch(`${SOCKET_URL}/api/bot/broadcast`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: currentUser.id, text, buttons })
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (resp.ok && data.success) {
+        setBroadcastResult({ ok: true, sent: data.sent, total: data.total });
+        setBroadcastText('');
+        setBroadcastButtons('');
+      } else {
+        setBroadcastResult({ ok: false, error: data.error || 'Не удалось отправить' });
+      }
+    } catch (err) {
+      setBroadcastResult({ ok: false, error: err.message || 'Ошибка сети' });
+    } finally {
+      setBroadcastSending(false);
+    }
+  };
+
   const loadSupportRequests = async (status = 'open') => {
     if (!currentUser) return;
     try {
@@ -3462,32 +3753,6 @@ function App() {
     }
   };
 
-  const handleToggleKpiRights = async (userId, currentCanView) => {
-    const newCanView = currentCanView === 1 ? 0 : 1;
-
-    try {
-      const response = await fetch(`${SOCKET_URL}/api/admin/users/${userId}/kpi-rights`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          can_view_kpi: newCanView,
-          adminId: currentUser.id
-        })
-      });
-
-      if (response.ok) {
-        loadAdminUsers();
-        if (userId === currentUser.id) {
-          setCanViewKpi(newCanView === 1);
-        }
-      } else {
-        alert('Ошибка изменения права на просмотр показателей');
-      }
-    } catch (err) {
-      console.error('Ошибка изменения права на KPI:', err);
-    }
-  };
-
   // Сброс пароля пользователя
   const handleOpenResetPassword = (user) => {
     setUserToResetPassword(user);
@@ -3648,134 +3913,6 @@ function App() {
     
     // Загружаем бронирования переговорной
     fetchMeetingRoomBookings(startOfMonth, endOfMonth);
-  };
-
-  const [pbiReports, setPbiReports] = useState([]);
-  const [selectedReport, setSelectedReport] = useState(null);
-  const [reportPermissions, setReportPermissions] = useState([]);
-  const [showReportPermEditor, setShowReportPermEditor] = useState(false);
-
-  const loadReportPermissions = async (reportId) => {
-    try {
-      const res = await fetch(`${SOCKET_URL}/api/pbi-reports/${reportId}/permissions`, {
-        headers: { 'X-User-Id': currentUser?.id || '' }
-      });
-      if (res.ok) setReportPermissions(await res.json());
-    } catch (e) {
-      console.error('Ошибка загрузки разрешений:', e);
-    }
-  };
-
-  const handleOpenReports = async () => {
-    setActiveView('reports');
-    try {
-      const res = await fetch(`${SOCKET_URL}/api/pbi-reports`, {
-        headers: { 'X-User-Id': currentUser?.id || '' }
-      });
-      if (res.ok) setPbiReports(await res.json());
-    } catch (e) {
-      console.error('Ошибка загрузки отчётов:', e);
-    }
-  };
-
-  const [kpiData, setKpiData] = useState(null);
-  const [kpiEditMode, setKpiEditMode] = useState(false);
-  const [kpiDraft, setKpiDraft] = useState({});
-  const [kpiRefreshing, setKpiRefreshing] = useState(false);
-  const [kpiPeriod, setKpiPeriod] = useState('all');
-
-  const KPI_PERIODS = {
-    sales_today: 'today',
-    sales_yesterday: 'yesterday',
-    sales_month: 'month',
-    frs_cash: 'yesterday',
-    frs_transfer: 'yesterday',
-    frs_other: 'yesterday'
-  };
-
-  const PERIOD_TABS = [
-    { key: 'all', label: 'Все' },
-    { key: 'today', label: 'Сегодня' },
-    { key: 'yesterday', label: 'Вчера' },
-    { key: 'month', label: 'Месяц' },
-    { key: 'manual', label: 'Вручную' }
-  ];
-
-  function kpiPeriodFilter(kpi) {
-    if (kpiPeriod === 'all') return true;
-    const p = KPI_PERIODS[kpi.id] || 'manual';
-    return p === kpiPeriod || (kpiPeriod !== 'manual' && p === 'manual');
-  }
-
-  const handleOpenKpi = async () => {
-    setActiveView('kpi');
-    setKpiEditMode(false);
-    try {
-      const res = await fetch(`${SOCKET_URL}/api/kpi`, {
-        headers: { 'X-User-Id': currentUser?.id || '' }
-      });
-      if (res.ok) setKpiData(await res.json());
-    } catch (e) {
-      console.error('Ошибка загрузки KPI:', e);
-    }
-  };
-
-  const handleKpiSave = async () => {
-    const entries = [];
-    for (const [kpiId, val] of Object.entries(kpiDraft)) {
-      if (val.value !== undefined && val.value !== '') {
-        entries.push({ kpi_id: kpiId, value: Number(val.value), plan_value: val.plan_value !== undefined ? Number(val.plan_value) : null });
-      }
-    }
-    try {
-      const res = await fetch(`${SOCKET_URL}/api/kpi`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', 'X-User-Id': currentUser?.id || '' },
-        body: JSON.stringify({ entries })
-      });
-      if (res.ok) {
-        setKpiEditMode(false);
-        handleOpenKpi();
-      } else {
-        alert('Ошибка сохранения');
-      }
-    } catch (e) {
-      console.error('Ошибка сохранения KPI:', e);
-    }
-  };
-
-  const handleKpiEdit = () => {
-    const draft = {};
-    if (kpiData) {
-      for (const group of Object.values(kpiData.groups)) {
-        for (const item of group) {
-          draft[item.id] = { value: item.value ?? '', plan_value: item.plan_value ?? '' };
-        }
-      }
-    }
-    setKpiDraft(draft);
-    setKpiEditMode(true);
-  };
-
-  const handleKpiRefresh = async () => {
-    setKpiRefreshing(true);
-    try {
-      const res = await fetch(`${SOCKET_URL}/api/kpi/refresh`, {
-        method: 'POST',
-        headers: { 'X-User-Id': currentUser?.id || '' }
-      });
-      if (res.ok) {
-        await handleOpenKpi();
-      } else {
-        const err = await res.json().catch(() => ({}));
-        alert(err.error || 'Ошибка обновления');
-      }
-    } catch (e) {
-      console.error('Ошибка обновления KPI:', e);
-      alert('Ошибка обновления КПЭ');
-    } finally {
-      setKpiRefreshing(false);
-    }
   };
 
   // Обновление задач текущего дня после загрузки календаря
@@ -3961,31 +4098,137 @@ function App() {
     }
   };
 
-  const handleUploadAvatar = async (e) => {
-    const file = e.target.files[0];
-    if (!file || !currentUser) return;
-    
+  const uploadAvatarBlob = async (blob, filename) => {
+    if (!currentUser) return false;
     const formData = new FormData();
-    formData.append('avatar', file);
+    formData.append('avatar', blob, filename || 'avatar.png');
     formData.append('userId', currentUser.id);
-    
+
     try {
       const response = await fetch(`${SOCKET_URL}/api/upload-avatar`, {
         method: 'POST',
         body: formData
       });
-      
+
       if (response.ok) {
         const data = await response.json();
         setProfileData(prev => ({ ...prev, avatar: data.avatar }));
         setCurrentUser(prev => ({ ...prev, avatar: data.avatar }));
         setMessages(prev => prev.map(m => m.senderId === currentUser.id ? { ...m, senderAvatar: data.avatar } : m));
+        return true;
       } else {
         alert('Ошибка загрузки аватара');
+        return false;
       }
     } catch (err) {
       console.error('Ошибка загрузки аватара:', err);
       alert('Ошибка соединения с сервером');
+      return false;
+    }
+  };
+
+  const handleAvatarFileSelected = (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file || !currentUser) {
+      if (e.target) e.target.value = '';
+      return;
+    }
+    if (!file.type.startsWith('image/')) {
+      alert('Выберите изображение (формат JPG, PNG, WEBP и т.п.)');
+      if (e.target) e.target.value = '';
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        setAvatarCropImageSize({ w: img.naturalWidth, h: img.naturalHeight });
+        setAvatarCropSrc(reader.result);
+        setAvatarCropZoom(1);
+        setAvatarCropOffset({ x: 0, y: 0 });
+        avatarCropDragRef.current = null;
+        setShowAvatarCrop(true);
+      };
+      img.onerror = () => {
+        alert('Не удалось прочитать изображение. Попробуйте другой файл.');
+        if (e.target) e.target.value = '';
+      };
+      img.src = reader.result;
+    };
+    reader.onerror = () => {
+      alert('Не удалось прочитать файл. Попробуйте другой файл.');
+      if (e.target) e.target.value = '';
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const closeAvatarCrop = () => {
+    setShowAvatarCrop(false);
+    setAvatarCropSrc(null);
+    setAvatarCropImageSize({ w: 0, h: 0 });
+    setAvatarCropZoom(1);
+    setAvatarCropOffset({ x: 0, y: 0 });
+    avatarCropDragRef.current = null;
+  };
+
+  // Масштаб, при котором картинка целиком покрывает круговую область кропа
+  const getAvatarCropMinZoom = () => {
+    const { w, h } = avatarCropImageSize;
+    const s = avatarCropStageSize;
+    if (!w || !h) return 1;
+    // Эффективный размер картинки (по большей стороне), когда zoom=1: чтобы вписать в область
+    const scaleToFit = s / Math.max(w, h);
+    const dispW = w * scaleToFit;
+    const dispH = h * scaleToFit;
+    return Math.max(s / dispW, s / dispH);
+  };
+
+  // Обрезка выбранной области и загрузка на сервер
+  const confirmAvatarCrop = async () => {
+    if (!avatarCropSrc || !currentUser) return;
+    const { w, h } = avatarCropImageSize;
+    const s = avatarCropStageSize;
+    if (!w || !h) return;
+    try {
+      const img = new Image();
+      await new Promise((resolve, reject) => {
+        img.onload = resolve;
+        img.onerror = reject;
+        img.src = avatarCropSrc;
+      });
+
+      const scaleToFit = s / Math.max(w, h);
+      const dispW = w * scaleToFit;
+      const dispH = h * scaleToFit;
+      const zoom = Math.max(avatarCropZoom, getAvatarCropMinZoom());
+      const finalW = dispW * zoom;
+      const finalH = dispH * zoom;
+
+      // Ограничиваем смещение так же, как в UI (круг не должен выходить за края картинки)
+      const maxOffsetX = Math.max(0, (finalW - s) / 2);
+      const maxOffsetY = Math.max(0, (finalH - s) / 2);
+      const ox = Math.min(Math.max(avatarCropOffset.x, -maxOffsetX), maxOffsetX);
+      const oy = Math.min(Math.max(avatarCropOffset.y, -maxOffsetY), maxOffsetY);
+
+      const srcX = (w / finalW) * (maxOffsetX - ox);
+      const srcY = (h / finalH) * (maxOffsetY - oy);
+      const srcSize = (w / finalW) * s;
+
+      const outSize = 512;
+      const canvas = document.createElement('canvas');
+      canvas.width = outSize;
+      canvas.height = outSize;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, srcX, srcY, srcSize, srcSize, 0, 0, outSize, outSize);
+
+      const blob = dataURLtoBlob(canvas.toDataURL('image/png'));
+      const ok = await uploadAvatarBlob(blob, 'avatar.png');
+      closeAvatarCrop();
+      return ok;
+    } catch (err) {
+      console.error('Ошибка кропа аватара:', err);
+      alert('Не удалось обрезать изображение');
+      return false;
     }
   };
 
@@ -4031,7 +4274,7 @@ function App() {
     }
   };
 
-  const handleSelectChat = async (chat) => {
+  const handleSelectChat = async (chat, opts = {}) => {
     setActiveChatId(chat.id);
     activeChatIdRef.current = chat.id;
     // Мгновенно очищаем окно: до прихода новой истории не показываем
@@ -4045,8 +4288,8 @@ function App() {
     startMagnet();
     setActiveView('chats'); // Переключаемся на вид чатов
 
-    // На мобильных — переключаемся на вид чата
-    setShowChatList(false);
+    // На мобильных — переключаемся на вид чата (кроме перехода по результатам поиска)
+    if (!opts.keepSearch) setShowChatList(false);
 
     // Очищаем индикаторы печати при смене чата
     setTypingUsers({});
@@ -4103,7 +4346,7 @@ function App() {
     } else {
       // Сокет подключён, используем WebSocket
       socket.emit('join_chat', chat.id);
-      socket.emit('mark_read', { chatId: chat.id });
+      markChatReadIfVisible(chat.id);
 
       // Устанавливаем таймаут на случай если chat_history не придёт
       const loadTimeout = setTimeout(async () => {
@@ -4144,11 +4387,16 @@ function App() {
     setChats(prev => prev.map(c =>
       c.id === chat.id ? { ...c, unreadCount: 0 } : c
     ));
-    // Сбрасываем поиск при переключении чата
-    setShowSearchMessages(false);
-    setSearchQuery('');
-    setSearchResults([]);
-    setCurrentSearchIndex(0);
+    // Сбрасываем поиск при переключении чата (но не при перемещении по результатам поиска)
+    if (!opts.keepSearch) {
+      setShowSearchMessages(false);
+      setSearchQuery('');
+      setSearchResults([]);
+      setFileResults([]);
+      setWikiResults([]);
+      setSearchTab('all');
+      setCurrentSearchIndex(0);
+    }
   };
 
   // ─── Пагинация истории: догрузка старых сообщений при скролле вверх ───
@@ -4289,20 +4537,25 @@ function App() {
     return () => events.forEach(ev => window.removeEventListener(ev, onMediaLoad, true));
   }, []);
 
-  // Поиск по сообщениям и пользователям (во всех чатах)
+  // Поиск по сообщениям, пользователям и статьям базы знаний (во всех чатах)
   const handleSearchMessages = async () => {
-    if (!searchQuery.trim()) {
+    if (searchQuery.trim().length < 2) {
       setSearchResults([]);
       setUserSearchResults([]);
       setFileResults([]);
+      setWikiResults([]);
+      setSearchMessagesTotal(0);
+      setSearchTab('all');
       setIsSearching(false);
       return;
     }
-    
+
     setIsSearching(true);
+    setSearchTab('all');
     const query = searchQuery.toLowerCase().trim();
     const userResults = [];
     let messages = [];
+    let messagesTotal = 0;
     
     // 1. Ищем пользователей
     users.forEach(user => {
@@ -4327,12 +4580,28 @@ function App() {
           ...msg,
           type: 'message'
         }));
+        messagesTotal = data.total ?? messages.length;
       }
     } catch (err) {
       console.error('Ошибка поиска сообщений:', err);
     }
 
-    // 3. Ищем файлы: вложения чатов + база знаний
+    // 3. Ищем статьи базы знаний (title + content, с учётом прав доступа)
+    let wiki = [];
+    try {
+      const wikiRes = await fetch(`${SOCKET_URL}/api/wiki/search?userId=${currentUser?.id}&q=${encodeURIComponent(query)}&limit=10`);
+      if (wikiRes.ok) {
+        const wikiData = await wikiRes.json();
+        wiki = (wikiData.results || []).map(a => ({
+          ...a,
+          type: 'wikiArticle'
+        }));
+      }
+    } catch (err) {
+      console.error('Ошибка поиска статей базы знаний:', err);
+    }
+
+    // 4. Ищем файлы: вложения чатов + база знаний
     let files = [];
     try {
       const filesRes = await fetch(`${SOCKET_URL}/api/search/files?userId=${currentUser?.id}&query=${encodeURIComponent(query)}`);
@@ -4344,10 +4613,12 @@ function App() {
       console.error('Ошибка поиска файлов:', err);
     }
 
-    // Объединяем результаты: сначала пользователи, потом сообщения
+    // Объединяем результаты: сначала пользователи, потом сообщения (общий массив для навигации ↑↓)
     const allResults = [...userResults, ...messages];
     setSearchResults(allResults);
+    setSearchMessagesTotal(messagesTotal);
     setUserSearchResults(userResults);
+    setWikiResults(wiki);
     setFileResults(files);
     setCurrentSearchIndex(0);
     setIsSearching(false);
@@ -4373,6 +4644,31 @@ function App() {
     setTimeout(retryScroll, 300);
   };
 
+  // Безопасный скролл элемента внутри конкретного контейнера.
+  // НЕ используем element.scrollIntoView(): он прокручивает ВСЕ scrollable-предки,
+  // включая .app-container/html/body (overflow:hidden всё равно программируется),
+  // из-за чего при очень высоком сообщении «разъезжается» весь каркас приложения.
+  const scrollElementIntoContainer = (element, container, behavior = 'smooth') => {
+    if (!element || !container) return;
+    const cRect = container.getBoundingClientRect();
+    const eRect = element.getBoundingClientRect();
+    const elTop = eRect.top - cRect.top + container.scrollTop;
+    const elHeight = element.offsetHeight;
+    // Если элемент выше контейнера — выравниваем по верху (иначе его середина
+    // «уедет», а верх окажется за кадром), иначе центрируем.
+    const target = elHeight >= container.clientHeight
+      ? elTop - 8
+      : elTop - (container.clientHeight - elHeight) / 2;
+    const max = Math.max(0, container.scrollHeight - container.clientHeight);
+    container.scrollTo({ top: Math.max(0, Math.min(target, max)), behavior });
+  };
+
+  const highlightElement = (el) => {
+    if (!el) return;
+    el.classList.add('message-highlight');
+    setTimeout(() => el.classList.remove('message-highlight'), 2000);
+  };
+
   const handleSearchResultClick = (result) => {
     if (result.type === 'user') {
       const existingChat = chats.find(c =>
@@ -4381,7 +4677,7 @@ function App() {
         c.participantsDetails.some(p => p.id === result.id)
       );
       if (existingChat) {
-        handleSelectChat(existingChat);
+        handleSelectChat(existingChat, { keepSearch: true });
       } else {
         // Чата ещё нет — показываем профиль вместо создания пустого чата
         const fullUser = users.find(u => u.id === result.id);
@@ -4395,16 +4691,18 @@ function App() {
     const chat = chats.find(c => c.id === chatId);
     if (!chat) return;
     if (activeChatId !== chatId) {
-      handleSelectChat(chat);
+      handleSelectChat(chat, { keepSearch: true });
     }
     handleCloseSearch();
     const retryScroll = (attempts = 40) => {
       if (attempts <= 0) return;
       const el = document.getElementById(`message-${result.id}`);
-      if (el) {
-        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        el.classList.add('message-highlight');
-        setTimeout(() => el.classList.remove('message-highlight'), 2000);
+      const container = messagesContainerRef.current;
+      if (el && container) {
+        stopMagnet();
+        followBottomRef.current = false;
+        scrollElementIntoContainer(el, container);
+        highlightElement(el);
       } else {
         setTimeout(() => retryScroll(attempts - 1), 250);
       }
@@ -4428,14 +4726,14 @@ function App() {
       );
       
       if (existingChat) {
-        handleSelectChat(existingChat);
+        handleSelectChat(existingChat, { keepSearch: true });
       }
       // Чат не создаём — пустые чаты в списке недопустимы
       setTimeout(() => scrollToUser(nextResult.id), 100);
     } else {
       // Если это сообщение
       if (nextResult.chatId !== activeChatId) {
-        handleSelectChat(chats.find(c => c.id === nextResult.chatId));
+        handleSelectChat(chats.find(c => c.id === nextResult.chatId), { keepSearch: true });
       }
       setTimeout(() => scrollToMessage(nextResult.id), 100);
     }
@@ -4457,14 +4755,14 @@ function App() {
       );
       
       if (existingChat) {
-        handleSelectChat(existingChat);
+        handleSelectChat(existingChat, { keepSearch: true });
       }
       // Чат не создаём — пустые чаты в списке недопустимы
       setTimeout(() => scrollToUser(prevResult.id), 100);
     } else {
       // Если это сообщение
       if (prevResult.chatId !== activeChatId) {
-        handleSelectChat(chats.find(c => c.id === prevResult.chatId));
+        handleSelectChat(chats.find(c => c.id === prevResult.chatId), { keepSearch: true });
       }
       setTimeout(() => scrollToMessage(prevResult.id), 100);
     }
@@ -4472,14 +4770,13 @@ function App() {
 
   const scrollToMessage = (messageId) => {
     const element = document.getElementById(`message-${messageId}`);
-    if (element) {
-      element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      // Подсветка сообщения
-      element.classList.add('message-highlight');
-      setTimeout(() => {
-        element.classList.remove('message-highlight');
-      }, 2000);
-    }
+    const container = messagesContainerRef.current;
+    if (!element || !container) return;
+    // Отключаем «магнит низа», иначе он борется за позицию скролла
+    stopMagnet();
+    followBottomRef.current = false;
+    scrollElementIntoContainer(element, container);
+    highlightElement(element);
   };
 
   // Переход к сообщению из другого места (например, из задачи «из сообщения»):
@@ -4507,7 +4804,8 @@ function App() {
     // Ищем элемент чата с этим пользователем в sidebar
     const chatElement = document.querySelector(`[data-user-id="${userId}"]`);
     if (chatElement) {
-      chatElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      // Скроллим только список чатов, не задевая предков каркаса
+      scrollElementIntoContainer(chatElement, chatElement.closest('.chats-list'));
       // Подсветка чата
       chatElement.classList.add('chat-highlight');
       setTimeout(() => {
@@ -4520,22 +4818,36 @@ function App() {
     setShowSearchMessages(false);
     setSearchQuery('');
     setSearchResults([]);
+    setSearchMessagesTotal(0);
     setFileResults([]);
+    setWikiResults([]);
+    setSearchTab('all');
     setCurrentSearchIndex(0);
+  };
+
+  // Горизонтальная прокрутка панели разделов колесиком мыши
+  const handleSearchTabsWheel = (e) => {
+    const el = e.currentTarget;
+    if (el.scrollWidth <= el.clientWidth) return; // нечего прокручивать
+    if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return; // тачпад по X — нативно
+    el.scrollLeft += e.deltaY;
   };
 
   // Per-chat search
   const handleChatSearch = async (query) => {
-    if (!query.trim() || !activeChatId || !currentUser) {
+    const trimmed = query.trim();
+    if (trimmed.length < 2 || !activeChatId || !currentUser) {
       setChatSearchResults([]);
+      setChatSearchTotal(0);
       setChatSearchIndex(-1);
       return;
     }
     try {
-      const resp = await fetch(`${SOCKET_URL}/api/search/messages?userId=${currentUser.id}&chatId=${activeChatId}&query=${encodeURIComponent(query.trim())}`);
+      const resp = await fetch(`${SOCKET_URL}/api/search/messages?userId=${currentUser.id}&chatId=${activeChatId}&query=${encodeURIComponent(trimmed)}`);
       if (resp.ok) {
         const data = await resp.json();
         setChatSearchResults(data.messages || []);
+        setChatSearchTotal(data.total ?? (data.messages?.length || 0));
         setChatSearchIndex(data.messages?.length > 0 ? 0 : -1);
       }
     } catch (err) {
@@ -4560,10 +4872,12 @@ function App() {
   const scrollToSearchResult = (result) => {
     if (result.chatId !== activeChatIdRef.current) return;
     const el = document.getElementById(`message-${result.id}`);
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      el.classList.add('message-highlight');
-      setTimeout(() => el.classList.remove('message-highlight'), 2000);
+    const container = messagesContainerRef.current;
+    if (el && container) {
+      stopMagnet();
+      followBottomRef.current = false;
+      scrollElementIntoContainer(el, container);
+      highlightElement(el);
     }
   };
 
@@ -4572,6 +4886,7 @@ function App() {
     if (chatSearchActive) {
       setChatSearchQuery('');
       setChatSearchResults([]);
+      setChatSearchTotal(0);
       setChatSearchIndex(-1);
     }
   };
@@ -4855,23 +5170,36 @@ function App() {
 
   // Отправка всех накопленных офлайн-сообщений.
   // Из очереди удаляем только после подтверждения сервера; при неудаче — стоп (порядок сохраняется).
+  //
+  // Сокет берём из socketRef, а не из состояния: flushOutbox зовут обработчики,
+  // зарегистрированные в useEffect(..., []) до первого setSocket, и они навсегда
+  // держат замыкание того рендера, где socket === null. Из-за этого очередь
+  // не отправлялась вообще никогда.
   const outboxFlushingRef = useRef(false);
+  const outboxAttemptRef = useRef(0);
+  const outboxRetryTimerRef = useRef(null);
+  const OUTBOX_RETRY_DELAYS = [2000, 5000, 10000, 20000, 30000];
+
   const flushOutbox = async () => {
-    if (!socket || !socket.connected) return;
+    const conn = socketRef.current;
+    if (!conn || !conn.connected) return;
     if (outboxFlushingRef.current) return;
     outboxFlushingRef.current = true;
     try {
       const queue = await getOutbox();
-      if (queue.length === 0) return;
+      if (queue.length === 0) {
+        outboxAttemptRef.current = 0;
+        return;
+      }
       console.log(`[Offline] Отправка ${queue.length} накопленных сообщений...`);
       for (const msg of queue) {
-        if (!socket.connected) break;
+        if (!conn.connected) break;
         const ok = await new Promise((resolve) => {
           let settled = false;
           const timer = setTimeout(() => {
             if (!settled) { settled = true; resolve(false); }
           }, 10000);
-          socket.emit('send_message', msg, (resp) => {
+          conn.emit('send_message', msg, (resp) => {
             if (settled) return;
             settled = true;
             clearTimeout(timer);
@@ -4881,13 +5209,64 @@ function App() {
         if (!ok) break;
         await removeFromOutbox(msg.id);
       }
-      console.log('[Offline] Очередь отправлена');
+      const left = await getOutbox();
+      if (left.length === 0) {
+        outboxAttemptRef.current = 0;
+        console.log('[Offline] Очередь отправлена');
+        return;
+      }
+      // Очередь не опустела: либо сокет отвалился на середине, либо сервер
+      // отверг сообщение. Повторяем с откатом, а не ждём следующего реконнекта.
+      const attempt = outboxAttemptRef.current;
+      if (attempt < OUTBOX_RETRY_DELAYS.length) {
+        const delay = OUTBOX_RETRY_DELAYS[attempt];
+        outboxAttemptRef.current = attempt + 1;
+        console.log(`[Offline] Осталось ${left.length}, повтор через ${delay}мс`);
+        clearTimeout(outboxRetryTimerRef.current);
+        outboxRetryTimerRef.current = setTimeout(() => {
+          outboxRetryTimerRef.current = null;
+          flushOutbox();
+        }, delay);
+        return;
+      }
+      // Попытки исчерпаны. Помечаем застрявшее сообщение и снимаем блокировку:
+      // getOutbox() читает только 'pending', поэтому следующие уйдут свободно.
+      const stuck = left[0];
+      console.warn('[Offline] Сообщение не доставлено после нескольких попыток:', stuck.text);
+      await setOutboxStatus(stuck.id, 'failed');
+      outboxAttemptRef.current = 0;
+      if (stuck._localId) {
+        setMessages(prev => prev.map(m =>
+          m._localId === stuck._localId ? { ...m, _pending: false, _failed: true } : m
+        ));
+      }
+      // Дальше по очереди: планируем следующий проход
+      clearTimeout(outboxRetryTimerRef.current);
+      outboxRetryTimerRef.current = setTimeout(() => {
+        outboxRetryTimerRef.current = null;
+        flushOutbox();
+      }, 1000);
     } catch (err) {
       console.error('[Offline] Ошибка отправки очереди:', err);
     } finally {
       outboxFlushingRef.current = false;
     }
   };
+
+  /** Повтор вручную по клику на «не доставлено». */
+  const retryFailedMessage = async (localId) => {
+    const failed = await getFailedOutbox();
+    const target = failed.find(f => f._localId === localId);
+    if (!target) return;
+    await setOutboxStatus(target.id, 'pending');
+    setMessages(prev => prev.map(m =>
+      m._localId === localId ? { ...m, _pending: true, _failed: false } : m
+    ));
+    flushOutbox();
+  };
+
+  // Таймер повтора не должен пережить размонтирование компонента
+  useEffect(() => () => clearTimeout(outboxRetryTimerRef.current), []);
 
   // Показ in-app уведомления (Telegram-стиль)
   const showInAppNotification = (title, body, icon, chatId) => {
@@ -5013,7 +5392,7 @@ function App() {
   const handleFileSelect = (e) => {
     const files = Array.from(e.target.files || []);
     if (files.length > 0) {
-      setSelectedFiles(files);
+      setSelectedFiles(prev => [...prev, ...files]);
     }
   };
 
@@ -5270,11 +5649,22 @@ function App() {
   };
 
   const openWikiArticleById = async (articleId) => {
-    let article = wikiArticles.find(a => a.id === articleId);
-    if (!article) {
-      await loadWikiData();
-      article = wikiArticles.find(a => a.id === articleId);
-    }
+    // Грузим дерево категорий/статей для сайдбара параллельно с самой статьёй
+    const articlePromise = (async () => {
+      try {
+        const res = await fetch(`${SOCKET_URL}/api/wiki/articles/${articleId}?userId=${currentUser?.id}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.article) return data.article;
+        }
+      } catch (err) {
+        console.error('Ошибка открытия статьи:', err);
+      }
+      return wikiArticles.find(a => a.id === articleId);
+    })();
+
+    const [article] = await Promise.all([articlePromise, loadWikiData()]);
+
     if (article) {
       setActiveView('wiki');
       wikiOpenArticle(article);
@@ -5486,20 +5876,33 @@ function App() {
     // Предотвращаем стандартную вставку изображения в contentEditable
     e.preventDefault();
 
+    // В буфере вместе с картинкой может лежать текст (например, при копировании
+    // с веб-страницы) — preventDefault его погасил бы, поэтому вставляем вручную
+    const clipboardText = typeof e.clipboardData?.getData === 'function'
+      ? (e.clipboardData.getData('text/plain') || '').trim()
+      : '';
+    if (clipboardText && messageInputRef.current) {
+      const input = messageInputRef.current;
+      const needsSpace = input.textContent.length > 0 && !/\s$/.test(input.textContent);
+      if (needsSpace) input.appendChild(document.createTextNode(' '));
+      clipboardText.split('\n').forEach((line, idx) => {
+        if (idx > 0) input.appendChild(document.createElement('br'));
+        if (line) input.appendChild(document.createTextNode(line));
+      });
+      setInputText(input.textContent);
+    }
+
     // Конвертируем Blob в File с именем по умолчанию
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const ext = imageType.split('/')[1] || 'png';
     const fileName = `pasted-image-${timestamp}.${ext}`;
     const pastedFile = new File([imageBlob], fileName, { type: imageType });
 
-    // Устанавливаем как выбранный файл (аналогично прикреплению через кнопку)
-    setSelectedFiles([pastedFile]);
+    // Добавляем к уже прикреплённым, а не заменяем их
+    setSelectedFiles(prev => [...prev, pastedFile]);
 
-    // Очищаем поле ввода от вставленного изображения
-    if (messageInputRef.current) {
-      messageInputRef.current.innerHTML = '';
-    }
-    setInputText('');
+    // Возвращаем фокус в поле ввода для набора сопроводительного текста
+    setTimeout(() => messageInputRef.current?.focus(), 0);
   };
 
   // Drag-and-drop обработчики файлов
@@ -5528,7 +5931,7 @@ function App() {
   const attachDroppedFile = (e) => {
     const files = Array.from(e.dataTransfer.files || []);
     if (files.length > 0) {
-      setSelectedFiles(files);
+      setSelectedFiles(prev => [...prev, ...files]);
       // Возвращаем фокус в поле ввода для набора сопроводительного текста
       setTimeout(() => messageInputRef.current?.focus(), 0);
     }
@@ -5584,62 +5987,16 @@ function App() {
     }, 1000);
   };
 
-  // Функция для конвертации emoji в unified code
-  const emojiToUnified = (emoji) => {
-    if (!emoji) return '';
-    try {
-      // Разбиваем emoji на code points и конвертируем в hex
-      const codePoints = [...emoji].map(char => {
-        const code = char.codePointAt(0);
-        // Исключаем variation selectors (FE00-FE0F)
-        if (code >= 0xFE00 && code <= 0xFE0F) return null;
-        // Исключаем Combining Enclosing Keycap
-        if (code === 0x20E3) return null;
-        // Исключаем skin tone modifiers
-        if (code >= 0x1F3FB && code <= 0x1F3FF) return null;
-        return code.toString(16); // lowercase для emoji-datasource
-      }).filter(Boolean); // Убираем null значения
-
-      let result = codePoints.join('-');
-
-      // Для символов из диапазонов Miscellaneous Symbols (U+2600–U+26FF)
-      // и Dingbats (U+2700–U+27BF), которые не являются полноценными emoji,
-      // требуется добавление Variation Selector-16 (-fe0f) для корректного
-      // отображения в стиле Apple. Без VS16 файл не существует в CDN.
-      if (codePoints.length === 1) {
-        const code = parseInt(codePoints[0], 16);
-        if ((code >= 0x2600 && code <= 0x26FF) || (code >= 0x2700 && code <= 0x27BF)) {
-          result += '-fe0f';
-        }
-      }
-
-      return result;
-    } catch (e) {
-      console.warn('Failed to convert emoji to unified:', e);
-      return '';
-    }
-  };
-
   // Функция для рендеринга emoji как изображения (стиль Apple)
   const renderEmoji = (emoji, className = '', size = 20) => {
     if (!emoji) return null;
 
-    // Конвертируем emoji в unified format
-    const unified = emojiToUnified(emoji);
-    const emojiUrl = `https://cdn.jsdelivr.net/npm/emoji-datasource-apple@15.0.1/img/apple/64/${unified}.png`;
-
     return (
-      <img
-        src={emojiUrl}
-        alt={emoji}
+      <EmojiImg
+        cluster={emoji}
+        size={size}
         className={className}
-        style={{
-          width: `${size}px`,
-          height: `${size}px`,
-          display: 'inline-block',
-          verticalAlign: 'middle',
-          objectFit: 'contain',
-        }}
+        alt={emoji}
         loading="lazy"
       />
     );
@@ -5772,23 +6129,12 @@ return parts.length > 0 ? parts : text;
     // Единственный эмодзи без текста — крупный смайл, чтобы выделялся (как в Telegram)
     if (isSingleEmojiMessage(text)) {
       const singleEmoji = text.trim();
-      const unified = emojiToUnified(singleEmoji);
       return (
-        <img
+        <EmojiImg
+          cluster={singleEmoji}
           className="emoji emoji-big"
-          src={`https://cdn.jsdelivr.net/npm/emoji-datasource-apple@15.0.1/img/apple/64/${unified}.png`}
           alt={singleEmoji}
-          style={{ width: 'var(--message-emoji-big-size, 48px)', height: 'var(--message-emoji-big-size, 48px)',
-                   objectFit: 'contain', verticalAlign: 'middle', display: 'inline-block' }}
-          onError={(e) => {
-            // Если картинка не загрузилась — показываем нативный символ тем же размером
-            const span = document.createElement('span');
-            span.className = 'emoji-big-fallback';
-            span.textContent = singleEmoji;
-            span.style.fontSize = 'var(--message-emoji-big-size, 48px)';
-            span.style.lineHeight = '1';
-            e.target.parentNode.replaceChild(span, e.target);
-          }}
+          size="var(--message-emoji-big-size, 48px)"
         />
       );
     }
@@ -5830,12 +6176,18 @@ return parts.length > 0 ? parts : text;
 
     // 3. Возвращаем эмодзи-кластеры как картинки Apple (безопасные, свои данные).
     if (emojiMap.length) {
-      html = html.replace(/\u0001E(\d+)\u0001/g, (_, i) => {
+      const cdn = JSON.stringify(EMOJI_CDN);
+      html = html.replace(/E(\d+)/g, (_, i) => {
         const cluster = emojiMap[+i];
-        const variants = emojiUnifiedVariants(cluster);
-        const src = `https://cdn.jsdelivr.net/npm/emoji-datasource-apple@15.0.1/img/apple/64/${variants[0]}.png`;
+        const candidates = emojiUnifiedCandidates(cluster);
         const dim = 'var(--message-emoji-size, 20px)';
-        return `<img class="status-emoji-img emoji" src="${src}" alt="${cluster.replace(/"/g, '&quot;')}" loading="lazy" style="width:${dim};height:${dim};vertical-align:middle;display:inline-block;object-fit:contain;" onerror="this.outerHTML=this.alt;">`;
+        const alt = cluster.replace(/"/g, '&quot;');
+        // Разметка строится строкой, поэтому перебор кандидатов делаем в onerror:
+        // пробуем следующий unified-код, а если не подошёл ни один — нативный глиф.
+        return `<img class="status-emoji-img emoji" src="${EMOJI_CDN}/${candidates[0]}.png"`
+          + ` data-cdn="${cdn.replace(/"/g, '&quot;')}" data-c="${candidates.join(',')}" data-i="0"`
+          + ` alt="${alt}" loading="lazy" style="width:${dim};height:${dim};vertical-align:middle;display:inline-block;object-fit:contain;"`
+          + ` onerror="(function(el){var i=+el.dataset.i+1,c=(el.dataset.c||'').split(',');if(i<c.length){el.dataset.i=i;el.src=el.dataset.cdn+'/'+c[i]+'.png';}else{el.outerHTML=el.alt;}})(this);">`;
       });
     }
 
@@ -5869,12 +6221,120 @@ return parts.length > 0 ? parts : text;
     const urls = detectUrls(cleanText);
     if (urls.length === 0) return null;
 
-    const uniqueUrls = [...new Set(urls.map(u => u.url.startsWith('http') ? u.url : `https://${u.url}`))];
+    // Страховка: почта и упоминания не должны превращаться в превью сайта.
+    // Проверяем исходное совпадение (до обёртки в https://), чтобы не задеть
+    // реальные ссылки вида https://user:pass@host/path.
+    const EMAIL_LIKE_RE = /^(?:mailto:)?[^\s/@]+@[^\s/@]+\.[^\s/@]+$/i;
+    const uniqueUrls = [...new Set(
+      urls
+        .map(u => u.url)
+        .filter(u => !u.startsWith('@') && !EMAIL_LIKE_RE.test(u))
+        .map(u => u.startsWith('http') ? u : `https://${u}`)
+    )];
+    if (uniqueUrls.length === 0) return null;
+    // Не больше двух карточек на сообщение. Без этого вставленный трейсбек или
+    // список релизов превращался в десяток превью, и сервер делал столько же
+    // исходящих запросов на каждую «ссылку», которой на самом деле нет.
+    const shownUrls = uniqueUrls.slice(0, MAX_LINK_PREVIEWS);
     return (
       <div className="message-link-preview-wrapper">
-        {uniqueUrls.map((url, i) => (
+        {shownUrls.map((url, i) => (
           <LinkPreviewCard key={`prev-${i}`} url={url} socketUrl={SOCKET_URL} />
         ))}
+      </div>
+    );
+  };
+
+  // Компактная строка закреплённого сообщения для шапки диалога (под именем/аватаром)
+  const renderPinnedRow = () => {
+    const pinnedList = pinnedMessages[activeChatId] || [];
+    if (pinnedList.length === 0) return null;
+    const idx = Math.min(pinnedIndex, pinnedList.length - 1);
+    const current = pinnedList[idx];
+    const previewText = stripStickerMarkers(current?.text || '').replace(/\s+/g, ' ').trim();
+    const hasFile = !previewText && current?.file_data;
+    return (
+      <div className="chat-header-pinned">
+        <div className="pinned-bar">
+          <div
+            className="pinned-bar-main"
+            onClick={() => { scrollToMessage(current.id); setPinnedIndex(idx); }}
+            title="Перейти к сообщению"
+          >
+            <span className="pinned-bar-icon" title="Закреплённое сообщение"><PinIcon /></span>
+            <div className="pinned-bar-text">
+              {pinnedList.length > 1 && (
+                <span className="pinned-bar-counter">{idx + 1}/{pinnedList.length}</span>
+              )}
+              <span className="pinned-bar-preview">
+                <span className="pinned-bar-sender">{current?.senderName}:</span>{' '}
+                {previewText || (hasFile ? 'Вложение' : 'Сообщение')}
+              </span>
+            </div>
+          </div>
+          <div className="pinned-bar-actions">
+            {pinnedList.length > 1 && (
+              <>
+                <button className="pinned-bar-btn" title="Предыдущее" onClick={(e) => { e.stopPropagation(); goToPinnedMessage(idx - 1); }}>
+                  <ChevronUpIcon />
+                </button>
+                <button className="pinned-bar-btn" title="Следующее" onClick={(e) => { e.stopPropagation(); goToPinnedMessage(idx + 1); }}>
+                  <ChevronDownIcon />
+                </button>
+              </>
+            )}
+            <button
+              className={`pinned-bar-btn${showPinnedList ? ' active' : ''}`}
+              title="Все закреплённые"
+              onClick={(e) => { e.stopPropagation(); setShowPinnedList(v => !v); }}
+            >
+              <ListIcon />
+            </button>
+            <button className="pinned-bar-btn danger" title="Открепить" onClick={(e) => { e.stopPropagation(); handleUnpinWithConfirm(current.id); }}>
+              <XIcon />
+            </button>
+          </div>
+
+          {showPinnedList && (
+            <div className="pinned-list-dropdown">
+              <div className="pinned-list-header">Закреплённые сообщения</div>
+              {pinnedList.map((pm, i) => {
+                const pmPreview = stripStickerMarkers(pm.text || '').replace(/\s+/g, ' ').trim();
+                return (
+                  <div
+                    key={pm.id}
+                    className={`pinned-list-item${i === idx ? ' active' : ''}`}
+                    onClick={() => { setPinnedIndex(i); scrollToMessage(pm.id); setShowPinnedList(false); }}
+                  >
+                    <img
+                      src={normalizeFileUrl(pm.senderAvatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(pm.senderName || 'U')}`)}
+                      alt={pm.senderName}
+                      className="pinned-list-avatar"
+                      onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || 'U')}`; }}
+                    />
+                    <div className="pinned-list-body">
+                      <div className="pinned-list-meta">
+                        <span className="pinned-list-sender">{pm.senderName}</span>
+                        <span className="pinned-list-time">{formatTime(pm.timestamp)}</span>
+                      </div>
+                      <div className="pinned-list-text">{pmPreview || (pm.file_data ? 'Вложение' : 'Сообщение')}</div>
+                      {pm.pinnedByName && (
+                        <div className="pinned-list-pinnedby">Закрепил(а): {pm.pinnedByName}</div>
+                      )}
+                    </div>
+                    <button
+                      className="pinned-list-unpin"
+                      title="Открепить"
+                      onClick={(e) => { e.stopPropagation(); handleUnpinWithConfirm(pm.id); }}
+                    >
+                      <XIcon />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
     );
   };
@@ -5927,12 +6387,11 @@ return parts.length > 0 ? parts : text;
           messageInputRef.current.focus();
         }
       } else {
-        const unified = emojiToUnified(emoji);
-        // Обычный эмодзи — как <img> из Apple CDN
-        const emojiUrl = `https://cdn.jsdelivr.net/npm/emoji-datasource-apple@15.0.1/img/apple/64/${unified}.png`;
-
+        // Обычный эмодзи — как <img> из Apple CDN.
+        // Здесь нельзя React-компонент: узел вставляется напрямую в contentEditable,
+        // поэтому перебор вариантов unified делаем через onerror.
         const img = document.createElement('img');
-        img.src = emojiUrl;
+        img.src = emojiUnifiedUrl(emoji);
         img.alt = emoji;
         img.className = 'emoji';
         img.style.width = '20px';
@@ -5940,6 +6399,23 @@ return parts.length > 0 ? parts : text;
         img.style.verticalAlign = 'middle';
         img.style.display = 'inline-block';
         img.style.margin = '0 2px';
+
+        let variant = 0;
+        img.onerror = () => {
+          variant += 1;
+          const next = emojiUnifiedUrl(emoji, variant);
+          if (next) {
+            img.src = next;
+            return;
+          }
+          // Ни один файл не подошёл — показываем нативный символ
+          const span = document.createElement('span');
+          span.className = 'emoji emoji-fallback';
+          span.textContent = emoji;
+          span.style.fontSize = '20px';
+          span.style.verticalAlign = 'middle';
+          img.replaceWith(span);
+        };
 
         // Вставляем на позицию курсора (если она внутри contentEditable)
         const sel = window.getSelection();
@@ -6177,6 +6653,16 @@ return parts.length > 0 ? parts : text;
       y = margin;
     }
 
+    // Текст, выделенный внутри текста сообщения (для пункта «Скопировать выделенное»).
+    // currentTarget есть у обычного ПКМ, но отсутствует при long-press (заглушка события),
+    // поэтому проверка принадлежности выделения — только когда узел доступен.
+    const getSelectedTextInMessage = (e) => {
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0 || !sel.toString().trim()) return '';
+      if (e.currentTarget && !e.currentTarget.contains(sel.anchorNode)) return '';
+      return sel.toString();
+    };
+
     setContextMenu({
       visible: true,
       x,
@@ -6189,13 +6675,34 @@ return parts.length > 0 ? parts : text;
       messageSenderId: senderId,
       messageSenderName: senderName || '',
       reactionsExpanded: false,
+      selectedText: getSelectedTextInMessage(e),
     });
   };
 
   // Закрытие контекстного меню
   const closeContextMenu = () => {
-    setContextMenu({ visible: false, x: 0, y: 0, rawX: 0, rawY: 0, messageId: null, messageText: '', messageChatId: null, messageSenderId: null, reactionsExpanded: false });
+    setContextMenu({ visible: false, x: 0, y: 0, rawX: 0, rawY: 0, messageId: null, messageText: '', messageChatId: null, messageSenderId: null, reactionsExpanded: false, selectedText: '' });
     setReactionPickerOpen(false);
+  };
+
+  // Long-press по сообщению (мобильные): открывает то же меню, что и ПКМ
+  const startMessageLongPress = (e, message) => {
+    if (e.pointerType && e.pointerType !== 'touch' && e.pointerType !== 'pen') return;
+    if (e.touches && e.touches.length > 1) return; // мультитач (зум) — не меню
+    const touch = e.touches && e.touches[0];
+    const clientX = touch ? touch.clientX : e.clientX;
+    const clientY = touch ? touch.clientY : e.clientY;
+    clearTimeout(longPressTimerRef.current);
+    longPressTimerRef.current = setTimeout(() => {
+      handleContextMenu(
+        { preventDefault() {}, clientX, clientY },
+        message.id, message.text, message.chatId, message.senderId, message.senderName
+      );
+    }, 500);
+  };
+
+  const cancelMessageLongPress = () => {
+    clearTimeout(longPressTimerRef.current);
   };
 
   // --- Контекстное меню чата (правый клик по строке в списке чатов) ---
@@ -6712,6 +7219,42 @@ return parts.length > 0 ? parts : text;
       }
     }
     closeContextMenu();
+  };
+
+  // Копирование выделенного фрагмента сообщения.
+  // Текст берём из состояния меню: клик по пункту уже сбросил живое выделение.
+  const handleCopySelectedText = async () => {
+    const text = contextMenu.selectedText;
+    closeContextMenu();
+    if (!text) return;
+
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        throw new Error('clipboard API недоступен');
+      }
+      showInAppNotification('Копирование', 'Выделенный текст скопирован', null, activeChatIdRef.current);
+    } catch (err) {
+      console.warn('Не удалось скопировать выделение через clipboard API:', err);
+      // Fallback для Electron/file:// и браузеров без разрешения на Clipboard API
+      try {
+        const textArea = document.createElement('textarea');
+        textArea.value = text;
+        textArea.setAttribute('readonly', '');
+        textArea.style.position = 'fixed';
+        textArea.style.opacity = '0';
+        document.body.appendChild(textArea);
+        textArea.select();
+        const ok = document.execCommand('copy');
+        document.body.removeChild(textArea);
+        if (!ok) throw new Error('execCommand вернул false');
+        showInAppNotification('Копирование', 'Выделенный текст скопирован', null, activeChatIdRef.current);
+      } catch (err2) {
+        console.warn('Не удалось скопировать выделение:', err2);
+        showInAppNotification('Копирование', 'Не удалось скопировать выделенный текст', null, activeChatIdRef.current);
+      }
+    }
   };
 
   // Вырезание текста из поля ввода
@@ -7247,6 +7790,233 @@ return parts.length > 0 ? parts : text;
     setShowTaskModal(true);
   };
 
+  // ── Напоминание о сообщении (ПКМ по сообщению → «Напомнить») ──
+  const openMessageReminder = () => {
+    const rawText = stripStickerMarkers(contextMenu.messageText || '').replace(/\s+/g, ' ').trim();
+    const target = {
+      chatId: contextMenu.messageChatId,
+      messageId: contextMenu.messageId,
+      senderName: contextMenu.messageSenderName || '',
+      preview: rawText.slice(0, 200)
+    };
+    closeContextMenu();
+    if (!target.chatId || !target.messageId) return;
+
+    const parts = localDateTimeParts(new Date(Date.now() + 60 * 60 * 1000));
+    setEditingReminderTask(null);
+    setReminderTarget(target);
+    setReminderForm({ date: parts.date, time: parts.time, note: '' });
+    setShowReminderModal(true);
+  };
+
+  // Открыть существующее напоминание из календаря (редактирование времени/заметки)
+  const openReminderFromCalendar = (task) => {
+    let d;
+    if (task.reminder_time) {
+      // reminder_time хранится в UTC (ISO без Z) — добавляем Z для корректного перевода в локальное
+      d = new Date(task.reminder_time + 'Z');
+      if (isNaN(d.getTime())) d = new Date(Date.now() + 60 * 60 * 1000);
+    } else {
+      d = new Date(Date.now() + 60 * 60 * 1000);
+    }
+    const parts = localDateTimeParts(d);
+    setReminderTarget({
+      chatId: task.source_chat_id || null,
+      messageId: task.source_message_id || null,
+      senderName: '',
+      preview: task.source_message_preview || ''
+    });
+    setEditingReminderTask(task);
+    setReminderForm({ date: parts.date, time: parts.time, note: task.description || '' });
+    setShowReminderModal(true);
+  };
+
+  const refreshCalendarTasks = () => {
+    const startOfMonth = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1);
+    const endOfMonth = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0);
+    fetchCalendarTasks(startOfMonth, endOfMonth);
+  };
+
+  const handleSaveMessageReminder = async () => {
+    if (!currentUser) return;
+    const { date, time, note } = reminderForm;
+    if (!date || !time) { alert('Укажите дату и время напоминания'); return; }
+
+    const when = new Date(`${date}T${time}`);
+    if (isNaN(when.getTime()) || when.getTime() <= Date.now()) {
+      alert('Время напоминания должно быть в будущем');
+      return;
+    }
+
+    // reminderAt — в UTC (сервер хранит UTC и сравнивает с datetime('now'))
+    const reminderAtUtc = when.toISOString();
+
+    try {
+      if (editingReminderTask) {
+        const resp = await fetch(`${SOCKET_URL}/api/calendar/tasks/${editingReminderTask.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: editingReminderTask.title,
+            description: note?.trim() || editingReminderTask.description || '',
+            taskDate: date,
+            taskTime: time,
+            color: editingReminderTask.color || '#f39c12',
+            reminderAt: reminderAtUtc
+          })
+        });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          alert('Ошибка: ' + (err.error || 'не удалось сохранить напоминание'));
+          return;
+        }
+      } else {
+        const chatName = chats.find(c => c.id === reminderTarget?.chatId)?.name || '';
+        const title = chatName ? `Напоминание: ${chatName}` : 'Напоминание о сообщении';
+        const description = note?.trim()
+          ? note.trim()
+          : `Напоминание о сообщении${reminderTarget?.senderName ? ` от ${reminderTarget.senderName}` : ''}`;
+        const resp = await fetch(`${SOCKET_URL}/api/calendar/tasks`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId: currentUser.id,
+            title,
+            description,
+            taskDate: date,
+            taskTime: time,
+            color: '#f39c12',
+            kind: 'message_reminder',
+            reminderAt: reminderAtUtc,
+            sourceChatId: reminderTarget?.chatId || null,
+            sourceMessageId: reminderTarget?.messageId || null,
+            sourceMessagePreview: reminderTarget?.preview || title
+          })
+        });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          alert('Ошибка: ' + (err.error || 'не удалось создать напоминание'));
+          return;
+        }
+      }
+
+      setShowReminderModal(false);
+      setReminderTarget(null);
+      setEditingReminderTask(null);
+      refreshCalendarTasks();
+      showInAppNotification('Напоминание создано', `${date} ${time}`, '⏰', reminderTarget?.chatId);
+    } catch (err) {
+      console.error('Ошибка сохранения напоминания:', err);
+      alert('Ошибка сети');
+    }
+  };
+
+  const handleDeleteMessageReminder = async () => {
+    if (!editingReminderTask) return;
+    if (!confirm('Удалить напоминание?')) return;
+    try {
+      const resp = await fetch(`${SOCKET_URL}/api/calendar/tasks/${editingReminderTask.id}`, { method: 'DELETE' });
+      if (resp.ok) {
+        setShowReminderModal(false);
+        setEditingReminderTask(null);
+        refreshCalendarTasks();
+      }
+    } catch (err) {
+      console.error('Ошибка удаления напоминания:', err);
+    }
+  };
+
+  // ── Отложенная отправка сообщения ──
+  const loadScheduledMessages = async () => {
+    if (!currentUser) return;
+    try {
+      const resp = await fetch(`${SOCKET_URL}/api/scheduled-messages?userId=${currentUser.id}`);
+      if (resp.ok) {
+        const data = await resp.json();
+        setScheduledMessages(data.items || []);
+      }
+    } catch (err) {
+      console.error('Ошибка загрузки отложенных сообщений:', err);
+    }
+  };
+
+  const openScheduleMessage = () => {
+    setShowAddMenu(false);
+    const rawText = getMessageText();
+    if (!rawText || !rawText.trim()) {
+      alert('Введите текст сообщения, которое нужно отправить позже');
+      messageInputRef.current?.focus();
+      return;
+    }
+    const parts = localDateTimeParts(new Date(Date.now() + 60 * 60 * 1000));
+    setSchedulePreview(stripStickerMarkers(rawText).replace(/\s+/g, ' ').trim().slice(0, 200));
+    setScheduleForm({ date: parts.date, time: parts.time });
+    setShowScheduleModal(true);
+  };
+
+  const handleCreateScheduledMessage = async () => {
+    if (!currentUser || !activeChatId) return;
+    const { date, time } = scheduleForm;
+    if (!date || !time) { alert('Укажите дату и время отправки'); return; }
+
+    const when = new Date(`${date}T${time}`);
+    if (isNaN(when.getTime()) || when.getTime() <= Date.now()) {
+      alert('Время отправки должно быть в будущем');
+      return;
+    }
+
+    const rawText = getMessageText();
+    if (!rawText || !rawText.trim()) { alert('Пустое сообщение'); return; }
+
+    try {
+      const e2eePrepared = await prepareE2EEMessage(activeChatId, rawText);
+      const resp = await fetch(`${SOCKET_URL}/api/scheduled-messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: currentUser.id,
+          chatId: activeChatId,
+          text: e2eePrepared.text,
+          scheduledAt: when.toISOString(),
+          ...(replyToMessage ? { replyTo: { messageId: replyToMessage.id, text: replyToMessage.text, senderName: replyToMessage.senderName } } : {}),
+          ...(e2eePrepared.e2ee ? { e2ee: true, e2ee_nonce: e2eePrepared.e2ee_nonce, e2ee_ephemeral: e2eePrepared.e2ee_ephemeral } : {})
+        })
+      });
+
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        alert('Ошибка: ' + (err.error || 'не удалось запланировать отправку'));
+        return;
+      }
+
+      // Очищаем поле ввода и черновик
+      setInputText('');
+      if (messageInputRef.current) messageInputRef.current.innerHTML = '';
+      setReplyToMessage(null);
+      setMessageDrafts(prev => { const nd = { ...prev }; delete nd[activeChatId]; return nd; });
+      setShowScheduleModal(false);
+      loadScheduledMessages();
+      showInAppNotification('Сообщение запланировано', `${date} ${time}`, '🕐', activeChatId);
+    } catch (err) {
+      console.error('Ошибка планирования сообщения:', err);
+      alert('Ошибка сети');
+    }
+  };
+
+  const cancelScheduledMessage = async (id) => {
+    if (!currentUser) return;
+    try {
+      const resp = await fetch(`${SOCKET_URL}/api/scheduled-messages/${id}?userId=${currentUser.id}`, { method: 'DELETE' });
+      if (resp.ok) {
+        setScheduledMessages(prev => prev.filter(m => m.id !== id));
+      }
+    } catch (err) {
+      console.error('Ошибка отмены отложенного сообщения:', err);
+    }
+  };
+
+  const chatScheduledMessages = scheduledMessages.filter(m => m.chatId === activeChatId);
+
   const handleCreateTask = async (e) => {
     e.preventDefault();
     if (!currentUser || !taskForm.title || !taskForm.taskDate) return;
@@ -7729,47 +8499,99 @@ return parts.length > 0 ? parts : text;
     socket.emit('unpin_message', { messageId });
   };
 
-  // Открытие панели закреплённых сообщений
-  const handleOpenPinnedModal = () => {
-    setShowPinnedModal(true);
+  // Переход к закреплённому сообщению по индексу (навигация в полосе)
+  const goToPinnedMessage = (index) => {
+    const list = pinnedMessages[activeChatIdRef.current] || [];
+    if (list.length === 0) return;
+    const safeIndex = ((index % list.length) + list.length) % list.length;
+    setPinnedIndex(safeIndex);
+    scrollToMessage(list[safeIndex].id);
   };
 
-  const confirmDeleteMessage = async () => {
-    if (!messageToDelete) return;
+  const handleUnpinWithConfirm = (messageId) => {
+    if (!confirm('Открепить это сообщение?')) return;
+    handleUnpinMessage(messageId);
+  };
 
-    // Валидация: проверяем что messageToDelete.id и currentUser.id определены
-    if (!messageToDelete?.id) {
-      alert('Невозможно удалить сообщение: отсутствует ID сообщения');
-      setShowDeleteConfirm(false);
-      setMessageToDelete(null);
-      return;
-    }
-    if (!currentUser?.id) {
-      alert('Невозможно удалить сообщение: пользователь не авторизован');
-      setShowDeleteConfirm(false);
-      setMessageToDelete(null);
-      return;
-    }
+// Автор может удалить своё сообщение у всех только в течение этого срока.
+// Администратор ограничением не связан (проверка продублирована на сервере).
+const DELETE_FOR_EVERYONE_HOURS = 2;
 
-    try {
-      const response = await fetch(`${SOCKET_URL}/api/admin/messages/${messageToDelete.id}?userId=${currentUser.id}`, {
-        method: 'DELETE'
+const canDeleteMessageForEveryone = (message) => {
+  if (!message || !currentUser) return false;
+  if (message.deleted_at) return false;
+  if (currentUser.is_admin === 1) return true;
+  if (message.senderId !== currentUser.id) return false;
+  const sentAt = new Date(message.timestamp).getTime();
+  if (!Number.isFinite(sentAt)) return false;
+  return Date.now() - sentAt <= DELETE_FOR_EVERYONE_HOURS * 60 * 60 * 1000;
+};
+
+// Сколько осталось времени на удаление «у обоих» (null — уже нельзя)
+const getDeleteForEveryoneLeftMs = (message) => {
+  if (!message || !currentUser || currentUser.is_admin === 1) return null;
+  if (message.senderId !== currentUser.id) return null;
+  const sentAt = new Date(message.timestamp).getTime();
+  if (!Number.isFinite(sentAt)) return null;
+  const left = sentAt + DELETE_FOR_EVERYONE_HOURS * 60 * 60 * 1000 - Date.now();
+  return left > 0 ? left : null;
+};
+
+// «1 ч 20 мин» для подсказки в окне удаления
+const formatDeleteForEveryoneLeft = (ms) => {
+  const totalMin = Math.max(1, Math.round(ms / 60000));
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  if (h > 0) return m > 0 ? `${h} ч ${m} мин` : `${h} ч`;
+  return `${m} мин`;
+};
+
+const confirmDeleteMessage = async (mode = 'everyone') => {
+  if (!messageToDelete) return;
+
+  // Валидация: проверяем что messageToDelete.id и currentUser.id определены
+  if (!messageToDelete?.id) {
+    alert('Невможно удалить сообщение: отсутствует ID сообщения');
+    setShowDeleteConfirm(false);
+    setMessageToDelete(null);
+    return;
+  }
+  if (!currentUser?.id) {
+    alert('Невможно удалить сообщение: пользователь не авторизован');
+    setShowDeleteConfirm(false);
+    setMessageToDelete(null);
+    return;
+  }
+
+  try {
+    const response = await fetch(
+      `${SOCKET_URL}/api/admin/messages/${messageToDelete.id}?userId=${currentUser.id}&mode=${mode}`,
+      { method: 'DELETE' }
+    );
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      console.error('Ошибка удаления сообщения:', errorData.error);
+      alert('Ошибка: ' + (errorData.error || 'Не удалось удалить сообщение'));
+    }
+    // «У себя» — сообщение убираем сразу локально, не дожидаясь события
+    if (mode === 'me') {
+      setMessages(prev => prev.filter(m => m.id !== messageToDelete.id));
+      setReadMessages(prev => {
+        const next = { ...prev };
+        delete next[messageToDelete.id];
+        return next;
       });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        console.error('Ошибка удаления сообщения:', errorData.error);
-        alert('Ошибка: ' + (errorData.error || 'Не удалось удалить сообщение'));
-      }
-      // Сообщение будет удалено из списка через socket событие message_deleted
-    } catch (err) {
-      console.error('Ошибка удаления сообщения:', err);
-      alert('Ошибка при удалении сообщения');
-    } finally {
-      setShowDeleteConfirm(false);
-      setMessageToDelete(null);
     }
-  };
+    // «У обоих» придёт событие message_deleted — оно сохранит сообщение с заглушкой
+  } catch (err) {
+    console.error('Ошибка удаления сообщения:', err);
+    alert('Ошибка при удалении сообщения');
+  } finally {
+    setShowDeleteConfirm(false);
+    setMessageToDelete(null);
+  }
+};
 
   const handleDeleteChat = (chat) => {
     setChatToDelete(chat || null);
@@ -8229,6 +9051,7 @@ return parts.length > 0 ? parts : text;
         if (showMediaViewer) setShowMediaViewer(false);
         if (contextMenu.visible) closeContextMenu();
         if (chatContextMenu.visible) closeChatContextMenu();
+        if (showAvatarCrop) closeAvatarCrop();
         if (showEmojiPicker) {
           setShowEmojiPicker(false);
           setEmojiPickerPinned(false);
@@ -8249,6 +9072,9 @@ return parts.length > 0 ? parts : text;
       if (showAddMenu && addMenuRef.current && !addMenuRef.current.contains(e.target)) {
         setShowAddMenu(false);
       }
+      if (showPinnedList && !e.target.closest('.pinned-bar')) {
+        setShowPinnedList(false);
+      }
     };
 
     document.addEventListener('keydown', handleEscKey);
@@ -8257,7 +9083,7 @@ return parts.length > 0 ? parts : text;
       document.removeEventListener('keydown', handleEscKey);
       document.removeEventListener('mousedown', handleClickOutside);
     };
-  }, [showImagePreview, showChatMenu, showAddMenu, showMediaViewer, contextMenu.visible, chatContextMenu.visible, showEmojiPicker, emojiPickerPinned]);
+  }, [showImagePreview, showChatMenu, showAddMenu, showMediaViewer, contextMenu.visible, chatContextMenu.visible, showEmojiPicker, emojiPickerPinned, showPinnedList]);
 
   // Обновляем список пользователей при открытии модалки создания чата
   useEffect(() => {
@@ -8347,6 +9173,14 @@ return parts.length > 0 ? parts : text;
     return `${date.toLocaleDateString('ru-RU', { day: 'numeric', month: '2-digit' })}, ${timeStr}`;
   };
 
+  // Сниппет текста статьи базы знаний для результатов поиска
+  const wikiSnippet = (content, maxLen = 120) => {
+    if (!content) return '';
+    const plain = String(content).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+    if (plain.length <= maxLen) return plain;
+    return plain.substring(0, maxLen).trim() + '…';
+  };
+
   // Отображение статуса доставки сообщения
   const showReadByPopup = async (messageId, e) => {
     e.stopPropagation();
@@ -8363,11 +9197,27 @@ return parts.length > 0 ? parts : text;
   };
 
   const renderMessageStatus = (message) => {
-    void readStatusVersion;
-
     if (message.senderId !== currentUser?.id) return null;
 
-    const isRead = message.read_at || (readByChatRef.current.get(message.chatId)?.size > 0);
+    // Сообщение из очереди отправки: сервер его ещё не принял.
+    if (message._failed) {
+      return (
+        <span
+          className="message-status failed"
+          title="Не доставлено — нажмите, чтобы отправить повторно"
+          onClick={(e) => { e.stopPropagation(); retryFailedMessage(message._localId); }}
+        >
+          !
+        </span>
+      );
+    }
+    if (message._pending) {
+      return <span className="message-status pending" title="Ожидает отправки">…</span>;
+    }
+
+    // Только факт прочтения конкретного сообщения: read_at проставляется
+    // сервером, когда читатель реально смотрит на чат (окно видно и в фокусе).
+    const isRead = !!message.read_at;
 
     if (isRead) {
       return (
@@ -8577,7 +9427,17 @@ return parts.length > 0 ? parts : text;
 
   // Обработка клика по кнопке бота
   const handleBotButtonClick = (action) => {
-    if (!activeChatId) return;
+    if (!activeChatId && !(typeof action === 'string' && action.startsWith('jump:'))) return;
+
+    // Кнопка-переход к сообщению (напоминание о сообщении бота)
+    if (typeof action === 'string' && action.startsWith('jump:')) {
+      const [, chatId, messageId] = action.split(':');
+      if (chatId && messageId) jumpToMessage(chatId, messageId);
+      if (windowWidth <= 1600) {
+        setShowChatMenu(false);
+      }
+      return;
+    }
 
     // Отправляем команду боту (через надёжную отправку с офлайн-очередью)
     sendOrQueueMessage({
@@ -8985,8 +9845,11 @@ return parts.length > 0 ? parts : text;
 
       {/* Модальное окно установки обновления */}
       {updateStatus === 'ready' && electronUpdateInfo && window.electronAPI && (
-        <div className="modal-overlay">
-          <div className="modal-content update-install-modal" onClick={e => e.stopPropagation()}>
+        <Dialog
+          open
+          closeOnOverlayClick={false}
+          className="update-install-modal"
+        >
             <div className="modal-header">
               <h3>📦 Обновление готово</h3>
             </div>
@@ -9002,12 +9865,14 @@ return parts.length > 0 ? parts : text;
                 Установить сейчас
               </button>
             </div>
-          </div>
-        </div>
+        </Dialog>
       )}
       {updateStatus === 'installing' && window.electronAPI && (
-        <div className="modal-overlay">
-          <div className="modal-content update-install-modal" onClick={e => e.stopPropagation()}>
+        <Dialog
+          open
+          closeOnOverlayClick={false}
+          className="update-install-modal"
+        >
             <div className="modal-header">
               <h3>⏳ Подготовка к установке...</h3>
             </div>
@@ -9016,8 +9881,7 @@ return parts.length > 0 ? parts : text;
               <p className="update-hint">Пожалуйста, подождите — установка начнётся автоматически.</p>
               <div className="update-spinner" style={{ margin: '16px auto' }}></div>
             </div>
-          </div>
-        </div>
+        </Dialog>
       )}
       {updateStatus === 'downloading' && electronUpdateInfo && window.electronAPI && (
         <div className="update-progress-toast">
@@ -9168,24 +10032,6 @@ return parts.length > 0 ? parts : text;
             <span className="nav-btn-label">Календарь</span>
           </button>
 
-          {/* Показатели */}
-          {canViewKpi && (
-            <button
-              className={`nav-sidebar-btn ${activeView === 'kpi' ? 'active' : ''}`}
-              onClick={handleOpenKpi}
-              title="Показатели"
-            >
-              <div className="nav-btn-icon">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <line x1="18" y1="20" x2="18" y2="10"/>
-                  <line x1="12" y1="20" x2="12" y2="4"/>
-                  <line x1="6" y1="20" x2="6" y2="14"/>
-                </svg>
-              </div>
-              <span className="nav-btn-label">Показатели</span>
-            </button>
-          )}
-
           {/* База знаний */}
           <button
             className={`nav-sidebar-btn ${activeView === 'wiki' ? 'active' : ''}`}
@@ -9260,11 +10106,14 @@ return parts.length > 0 ? parts : text;
 
       {/* Модальное окно подтверждения выхода */}
       {showLogoutConfirm && (
-        <div className="modal-overlay" onClick={() => setShowLogoutConfirm(false)}>
-          <div className="modal-content confirm-modal" onClick={e => e.stopPropagation()}>
+        <Dialog
+          open
+          onClose={() => setShowLogoutConfirm(false)}
+          className="confirm-modal"
+        >
             <div className="modal-header">
               <h3>⚠️ Выход из аккаунта</h3>
-              <button onClick={() => setShowLogoutConfirm(false)}>✕</button>
+              <button type="button" aria-label="Закрыть" onClick={() => setShowLogoutConfirm(false)}>✕</button>
             </div>
 
             <div className="modal-body">
@@ -9281,17 +10130,19 @@ return parts.length > 0 ? parts : text;
                 Выйти
               </button>
             </div>
-          </div>
-        </div>
+        </Dialog>
       )}
 
       {/* Модальное окно уведомлений */}
       {showNotifications && (
-        <div className="modal-overlay" onClick={() => setShowNotifications(false)}>
-          <div className="modal-content notifications-modal" onClick={e => e.stopPropagation()}>
+        <Dialog
+          open
+          onClose={() => setShowNotifications(false)}
+          className="notifications-modal"
+        >
             <div className="modal-header">
               <h3>🔔 Уведомления</h3>
-              <button onClick={() => setShowNotifications(false)}>✕</button>
+              <button type="button" aria-label="Закрыть" onClick={() => setShowNotifications(false)}>✕</button>
             </div>
 
             <div className="notifications-filter">
@@ -9453,8 +10304,7 @@ return parts.length > 0 ? parts : text;
                 📅 Открыть календарь
               </button>
             </div>
-          </div>
-        </div>
+        </Dialog>
       )}
 
       {/* Вкладка админ-панели */}
@@ -9465,7 +10315,7 @@ return parts.length > 0 ? parts : text;
               <button className="back-to-chats-btn white" onClick={handleOpenChats} title="Вернуться к чатам">
                 ← Чаты
               </button>
-              <h2>⚙️ Панель администратора</h2>
+              <h2><GearIcon /> Панель администратора</h2>
             </div>
           </div>
 
@@ -9475,43 +10325,43 @@ return parts.length > 0 ? parts : text;
                 className={`admin-tab ${activeAdminTab === 'dashboard' ? 'active' : ''}`}
                 onClick={() => handleAdminTabChange('dashboard')}
               >
-                📊 Главная
+                <DashboardIcon /> Главная
               </button>
               <button
                 className={`admin-tab ${activeAdminTab === 'users' ? 'active' : ''}`}
                 onClick={() => handleAdminTabChange('users')}
               >
-                👥 Пользователи
+                <UsersIcon /> Пользователи
               </button>
               <button
                 className={`admin-tab ${activeAdminTab === 'sessions' ? 'active' : ''}`}
                 onClick={() => { setActiveAdminTab('sessions'); handleOpenSessions(); }}
               >
-                💻 Сессии
+                <MonitorIcon /> Сессии
               </button>
               <button
                 className={`admin-tab ${activeAdminTab === 'files' ? 'active' : ''}`}
                 onClick={() => { setActiveAdminTab('files'); handleOpenFileManager(); }}
               >
-                📁 Файлы
+                <FolderIcon /> Файлы
               </button>
               <button
                 className={`admin-tab ${activeAdminTab === 'security' ? 'active' : ''}`}
                 onClick={() => { setActiveAdminTab('security'); handleOpenSecurityLogs(); }}
               >
-                🛡️ Безопасность
+                <ShieldIcon /> Безопасность
               </button>
               <button
                 className={`admin-tab ${activeAdminTab === 'bot' ? 'active' : ''}`}
-                onClick={() => { setActiveAdminTab('bot'); loadBotAnalytics(); loadBotSettings(); }}
+                onClick={() => { setActiveAdminTab('bot'); loadBotAnalytics(); loadBotSettings(); loadBroadcastRecipients(); }}
               >
-                🤖 Бот
+                <BotIcon /> Бот
               </button>
               <button
                 className={`admin-tab ${activeAdminTab === 'support' ? 'active' : ''}`}
                 onClick={() => { setActiveAdminTab('support'); loadSupportRequests('open'); }}
               >
-                📞 Поддержка
+                <PhoneIcon /> Поддержка
               </button>
             </div>
 
@@ -9520,35 +10370,35 @@ return parts.length > 0 ? parts : text;
                   <>
                   <div className="admin-dashboard">
                     <div className="admin-stat-card">
-                      <div className="stat-icon">👥</div>
+                      <div className="stat-icon"><UsersIcon /></div>
                       <div className="stat-info">
                         <div className="stat-value">{adminStats.totalUsers}</div>
                         <div className="stat-label">Пользователей</div>
                       </div>
                     </div>
                     <div className="admin-stat-card">
-                      <div className="stat-icon">📝</div>
+                      <div className="stat-icon"><FileTextIcon /></div>
                       <div className="stat-info">
                         <div className="stat-value">{adminStats.totalMessages}</div>
                         <div className="stat-label">Сообщений</div>
                       </div>
                     </div>
                     <div className="admin-stat-card">
-                      <div className="stat-icon">📁</div>
+                      <div className="stat-icon"><FolderIcon /></div>
                       <div className="stat-info">
                         <div className="stat-value">{adminStats.totalFiles}</div>
                         <div className="stat-label">Файлов</div>
                       </div>
                     </div>
                     <div className="admin-stat-card">
-                      <div className="stat-icon">🟢</div>
+                      <div className="stat-icon online"><DotIcon /></div>
                       <div className="stat-info">
                         <div className="stat-value">{adminStats.onlineUsers}</div>
                         <div className="stat-label">Онлайн</div>
                       </div>
                     </div>
                     <div className="admin-stat-card">
-                      <div className="stat-icon">💾</div>
+                      <div className="stat-icon"><DatabaseIcon /></div>
                       <div className="stat-info">
                         <div className="stat-value">{(adminStats.uploadsSize / 1024 / 1024).toFixed(2)} МБ</div>
                         <div className="stat-label">Файлы</div>
@@ -9559,7 +10409,7 @@ return parts.length > 0 ? parts : text;
                   <div className="admin-chart-card">
                     <div className="admin-chart-header">
                       <div className="admin-chart-title">
-                        <span className="admin-chart-icon">📊</span>
+                        <span className="admin-chart-icon"><ChartIcon /></span>
                         Сообщения по дням
                       </div>
                       <div className="admin-chart-period-tabs">
@@ -9587,11 +10437,11 @@ return parts.length > 0 ? parts : text;
                         className="btn-primary"
                         onClick={() => setShowCreateUserModal(true)}
                       >
-                        ➕ Создать пользователя
+                        <UserPlusIcon /> Создать пользователя
                       </button>
                     </div>
                     <div className="host-warning">
-                      <strong>⚠️ Подозрительные компьютеры:</strong>{' '}
+                      <strong><AlertTriangleIcon /> Подозрительные компьютеры:</strong>{' '}
                       {Object.entries(hostCounts)
                         .filter(([_, count]) => count > 3)
                         .map(([host, count]) => (
@@ -9615,7 +10465,6 @@ return parts.length > 0 ? parts : text;
                           <th>Версия</th>
                           <th>Бронирование</th>
                           <th>База знаний</th>
-                          <th>Показатели</th>
                           <th>Действия</th>
                         </tr>
                       </thead>
@@ -9630,7 +10479,7 @@ return parts.length > 0 ? parts : text;
                                   <span>{user.username}</span>
                                   {userHostCount > 3 && (
                                     <span className="suspicious-badge" title={`Этот компьютер создал ${userHostCount} учётных записей`}>
-                                      ⚠️ {userHostCount}
+                                      <AlertTriangleIcon /> {userHostCount}
                                     </span>
                                   )}
                                 </div>
@@ -9638,12 +10487,12 @@ return parts.length > 0 ? parts : text;
                               <td>{user.email || '-'}</td>
                               <td>
                                 <span className={`status-badge ${user.status}`}>
-                                  {user.status === 'online' ? '🟢 Онлайн' : '⚫ Офлайн'}
+                                  <DotIcon /> {user.status === 'online' ? 'Онлайн' : 'Офлайн'}
                                 </span>
                               </td>
                               <td>
                                 {user.is_admin === 1 ? (
-                                  <span className="admin-badge">👑 Админ</span>
+                                  <span className="admin-badge"><CrownIcon /> Админ</span>
                                 ) : (
                                   <span>Пользователь</span>
                                 )}
@@ -9690,43 +10539,27 @@ return parts.length > 0 ? parts : text;
                               )}
                             </td>
                             <td>
-                              {user.is_admin === 1 ? (
-                                <span style={{fontSize: '12px'}}>Полный</span>
-                              ) : (
-                                <label className="toggle-switch">
-                                  <input
-                                    type="checkbox"
-                                    checked={user.can_view_kpi === 1}
-                                    onChange={() => handleToggleKpiRights(user.id, user.can_view_kpi)}
-                                    disabled={user.username === 'Root'}
-                                    title={user.can_view_kpi === 1 ? 'Запретить просмотр показателей' : 'Разрешить просмотр показателей'}
-                                  />
-                                  <span className="toggle-slider"></span>
-                                </label>
-                              )}
-                            </td>
-                            <td>
                               <div className="action-buttons">
                                   <button
                                     className="action-btn edit"
                                     onClick={() => handleToggleAdminRights(user.id, user.is_admin)}
                                     title={user.is_admin === 1 ? 'Снять права админа' : 'Дать права админа'}
                                   >
-                                    {user.is_admin === 1 ? '👤' : '👑'}
+                                    {user.is_admin === 1 ? <UserIcon /> : <CrownIcon />}
                                   </button>
                                   <button
                                     className="action-btn reset"
                                     onClick={() => handleOpenResetPassword(user)}
                                     title="Сбросить пароль"
                                   >
-                                    🔑
+                                    <KeyIcon />
                                   </button>
                                   <button
                                     className="action-btn delete"
                                     onClick={() => handleDeleteUser(user.id)}
                                     title="Удалить"
                                   >
-                                    🗑️
+                                    <TrashIcon />
                                   </button>
                                 </div>
                               </td>
@@ -9740,7 +10573,7 @@ return parts.length > 0 ? parts : text;
 
                 {activeAdminTab === 'sessions' && (
                   <div className="admin-sessions-list">
-                    <h4>💻 Активные сессии</h4>
+                    <h4><MonitorIcon /> Активные сессии</h4>
                     <table className="admin-table">
                       <thead>
                         <tr>
@@ -9769,7 +10602,7 @@ return parts.length > 0 ? parts : text;
                                 onClick={() => handleTerminateSession(session.id)}
                                 title="Завершить сессию"
                               >
-                                ⏹️
+                                <StopIcon />
                               </button>
                             </td>
                           </tr>
@@ -9786,15 +10619,15 @@ return parts.length > 0 ? parts : text;
 
                 {activeAdminTab === 'files' && (
                   <div className="admin-files-list">
-                    <h4>📁 Загруженные файлы</h4>
+                    <h4><FolderIcon /> Загруженные файлы</h4>
                     <div className="files-grid">
                       {uploadedFiles.map(file => (
                         <div key={file.id} className="file-card">
                           <div className="file-icon">
-                            {file.mime_type?.startsWith('image/') ? '🖼️' : 
-                             file.mime_type?.startsWith('video/') ? '🎬' :
-                             file.mime_type?.startsWith('audio/') ? '🎵' :
-                             file.mime_type?.includes('pdf') ? '📄' : '📁'}
+                            {file.mime_type?.startsWith('image/') ? <ImageIcon /> :
+                             file.mime_type?.startsWith('video/') ? <VideoIcon /> :
+                             file.mime_type?.startsWith('audio/') ? <MusicIcon /> :
+                             file.mime_type?.includes('pdf') ? <FileTextIcon /> : <FolderIcon />}
                           </div>
                           <div className="file-name">{file.name}</div>
                           <div className="file-info">
@@ -9806,7 +10639,7 @@ return parts.length > 0 ? parts : text;
                             onClick={() => handleDeleteFile(file)}
                             title="Удалить файл"
                           >
-                            🗑️
+                            <TrashIcon />
                           </button>
                         </div>
                       ))}
@@ -9819,7 +10652,7 @@ return parts.length > 0 ? parts : text;
 
                 {activeAdminTab === 'security' && (
                   <div className="admin-security-logs">
-                    <h4>🛡️ Журнал безопасности</h4>
+                    <h4><ShieldIcon /> Журнал безопасности</h4>
                     <table className="admin-table">
                       <thead>
                         <tr>
@@ -9836,19 +10669,19 @@ return parts.length > 0 ? parts : text;
                             <td>{new Date(log.timestamp).toLocaleString('ru-RU')}</td>
                             <td>
                               <span className={`log-event ${log.event_type}`}>
-                                {log.event_type === 'failed_login' && '🔴 '}
-                                {log.event_type === 'success_login' && '🟢 '}
-                                {log.event_type === 'password_reset' && '🔑 '}
-                                {log.event_type === 'session_terminated' && '⏹️ '}
-                                {log.event_type === 'user_blocked' && '🚫 '}
-                                {log.event}
+                                {log.event_type === 'failed_login' && <XCircleIcon />}
+                                {log.event_type === 'success_login' && <CheckCircleIcon />}
+                                {log.event_type === 'password_reset' && <KeyIcon />}
+                                {log.event_type === 'session_terminated' && <StopIcon />}
+                                {log.event_type === 'user_blocked' && <BanIcon />}
+                                {' '}{log.event}
                               </span>
                             </td>
                             <td>{log.username || '-'}</td>
                             <td>{log.ip_address || '-'}</td>
                             <td>
                               <span className={`status-badge ${log.status === 'success' ? 'success' : 'warning'}`}>
-                                {log.status === 'success' ? '✓' : '⚠'}
+                                {log.status === 'success' ? <CheckIcon /> : <AlertTriangleIcon />}
                               </span>
                             </td>
                           </tr>
@@ -9865,25 +10698,74 @@ return parts.length > 0 ? parts : text;
 
                 {activeAdminTab === 'bot' && (
                   <div className="admin-bot-section">
-                    <h4>🤖 Аналитика бота Помощник</h4>
+                    {/* Рассылка от Помощника — только для Root */}
+                    {currentUser?.username === 'Root' && (
+                      <div className="admin-section broadcast-section">
+                        <h4><MessageIcon /> Рассылка от Помощника</h4>
+                        <p className="broadcast-hint">
+                          Сообщение придёт всем пользователям в личный чат с Помощником
+                          {broadcastRecipients != null ? ` (получателей: ${broadcastRecipients})` : ''}.
+                          Поддерживаются заголовки <code>### </code>, списки <code>- </code>, <code>**жирный**</code> и ссылки.
+                        </p>
+                        <div className="form-group">
+                          <textarea
+                            className="broadcast-textarea"
+                            value={broadcastText}
+                            onChange={(e) => setBroadcastText(e.target.value)}
+                            placeholder="Текст рассылки…"
+                            rows={7}
+                            maxLength={4000}
+                          />
+                          <div className="broadcast-counter">{broadcastText.length} / 4000</div>
+                        </div>
+                        <div className="form-group">
+                          <label>Кнопки (необязательно)</label>
+                          <textarea
+                            className="broadcast-textarea broadcast-buttons-input"
+                            value={broadcastButtons}
+                            onChange={(e) => setBroadcastButtons(e.target.value)}
+                            placeholder={'Каждая строка: Текст кнопки | /команда\nНапример: 📅 Календарь | /календарь'}
+                            rows={3}
+                          />
+                          <div className="broadcast-hint">Максимум 6 кнопок, формат: <code>Текст | /команда</code></div>
+                        </div>
+                        <button
+                          type="button"
+                          className="btn-primary"
+                          onClick={handleSendBroadcast}
+                          disabled={broadcastSending || !broadcastText.trim()}
+                        >
+                          <MessageIcon /> {broadcastSending ? 'Отправка…' : 'Отправить всем'}
+                        </button>
+                        {broadcastResult && (
+                          <div className={`broadcast-result ${broadcastResult.ok ? 'ok' : 'error'}`}>
+                            {broadcastResult.ok
+                              ? `✅ Отправлено ${broadcastResult.sent} из ${broadcastResult.total} получателей`
+                              : `⚠ Ошибка: ${broadcastResult.error}`}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    <h4><BotIcon /> Аналитика бота Помощник</h4>
                     {botAnalyticsData ? (
                       <div className="admin-dashboard">
                         <div className="admin-stat-card">
-                          <div className="stat-icon">💬</div>
+                          <div className="stat-icon"><MessageIcon /></div>
                           <div className="stat-info">
                             <div className="stat-value">{botAnalyticsData.totalInteractions}</div>
                             <div className="stat-label">Всего взаимодействий</div>
                           </div>
                         </div>
                         <div className="admin-stat-card">
-                          <div className="stat-icon">❌</div>
+                          <div className="stat-icon"><XCircleIcon /></div>
                           <div className="stat-info">
                             <div className="stat-value">{botAnalyticsData.fallbackCount}</div>
                             <div className="stat-label">Нераспознанных запросов</div>
                           </div>
                         </div>
                         <div className="admin-stat-card">
-                          <div className="stat-icon">📊</div>
+                          <div className="stat-icon"><ChartIcon /></div>
                           <div className="stat-info">
                             <div className="stat-value">{botAnalyticsData.fallbackRate}</div>
                             <div className="stat-label">% нераспознанных</div>
@@ -9896,7 +10778,7 @@ return parts.length > 0 ? parts : text;
 
                     {botAnalyticsData && botAnalyticsData.topCommands && botAnalyticsData.topCommands.length > 0 && (
                       <div className="admin-section">
-                        <h4>🏆 Популярные команды</h4>
+                        <h4><TrophyIcon /> Популярные команды</h4>
                         <table className="admin-table">
                           <thead>
                             <tr>
@@ -9918,7 +10800,7 @@ return parts.length > 0 ? parts : text;
 
                     {botAnalyticsData && botAnalyticsData.recentFallbacks && botAnalyticsData.recentFallbacks.length > 0 && (
                       <div className="admin-section">
-                        <h4>❌ Последние нераспознанные запросы</h4>
+                        <h4><XCircleIcon /> Последние нераспознанные запросы</h4>
                         <ul className="fallback-list">
                           {botAnalyticsData.recentFallbacks.map((phrase, i) => (
                             <li key={i} className="fallback-item">{phrase}</li>
@@ -9944,11 +10826,11 @@ return parts.length > 0 ? parts : text;
                       }}
                       style={{ marginTop: '16px' }}
                     >
-                      🗑️ Сбросить аналитику
+                      <TrashIcon /> Сбросить аналитику
                     </button>
 
                     <div className="admin-section" style={{ marginTop: '24px' }}>
-                      <h4>⚙️ Настройки функций бота</h4>
+                      <h4><GearIcon /> Настройки функций бота</h4>
                       {botSettings ? (
                         <div className="settings-form">
                           <div className="form-group">
@@ -10009,7 +10891,7 @@ return parts.length > 0 ? parts : text;
                               }
                             }}
                           >
-                            💾 Сохранить настройки
+                            <SaveIcon /> Сохранить настройки
                           </button>
                         </div>
                       ) : (
@@ -10022,7 +10904,7 @@ return parts.length > 0 ? parts : text;
                 {activeAdminTab === 'support' && (
                   <div className="admin-support-section">
                     <div className="admin-users-header">
-                      <h4>📞 Обращения в поддержку</h4>
+                      <h4><PhoneIcon /> Обращения в поддержку</h4>
                       <div>
                         <button
                           className={`admin-tab ${supportActiveFilter === 'open' ? 'active' : ''}`}
@@ -10069,7 +10951,7 @@ return parts.length > 0 ? parts : text;
                               <td style={{ maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis' }}>{req.problem}</td>
                               <td>
                                 <span className={`status-badge ${req.status === 'open' ? 'status-open' : 'status-closed'}`}>
-                                  {req.status === 'open' ? '🟢 Открыто' : '🔴 Закрыто'}
+                                  <DotIcon /> {req.status === 'open' ? 'Открыто' : 'Закрыто'}
                                 </span>
                               </td>
                               <td>{new Date(req.created_at).toLocaleString('ru-RU')}</td>
@@ -10090,7 +10972,7 @@ return parts.length > 0 ? parts : text;
                                       }
                                     }}
                                   >
-                                    ✅ Закрыть
+                                    <CheckIcon /> Закрыть
                                   </button>
                                 )}
                               </td>
@@ -10108,11 +10990,13 @@ return parts.length > 0 ? parts : text;
 
       {/* Модальное окно создания пользователя */}
       {showCreateUserModal && (
-        <div className="modal-overlay" onClick={() => setShowCreateUserModal(false)}>
-          <div className="modal-content" onClick={e => e.stopPropagation()}>
+        <Dialog
+          open
+          onClose={() => setShowCreateUserModal(false)}
+        >
             <div className="modal-header">
-              <h3>➕ Создать пользователя</h3>
-              <button onClick={() => setShowCreateUserModal(false)}>✕</button>
+              <h3><UserPlusIcon /> Создать пользователя</h3>
+              <button type="button" aria-label="Закрыть" onClick={() => setShowCreateUserModal(false)}>✕</button>
             </div>
             <div className="modal-body">
               <div className="form-group">
@@ -10165,17 +11049,18 @@ return parts.length > 0 ? parts : text;
                 {isCreatingUser ? 'Создание...' : 'Создать'}
               </button>
             </div>
-          </div>
-        </div>
+        </Dialog>
       )}
 
       {/* Модальное окно сброса пароля */}
       {showResetPasswordModal && (
-        <div className="modal-overlay" onClick={() => setShowResetPasswordModal(false)}>
-          <div className="modal-content" onClick={e => e.stopPropagation()}>
+        <Dialog
+          open
+          onClose={() => setShowResetPasswordModal(false)}
+        >
             <div className="modal-header">
-              <h3>🔑 Сброс пароля</h3>
-              <button onClick={() => setShowResetPasswordModal(false)}>✕</button>
+              <h3><KeyIcon /> Сброс пароля</h3>
+              <button type="button" aria-label="Закрыть" onClick={() => setShowResetPasswordModal(false)}>✕</button>
             </div>
             <div className="modal-body">
               <p className="reset-password-info">
@@ -10204,16 +11089,17 @@ return parts.length > 0 ? parts : text;
                 Сбросить пароль
               </button>
             </div>
-          </div>
-        </div>
+        </Dialog>
       )}
 
       {/* Боковая панель со списком чатов */}
       {activeView === 'chats' && (
       <aside className={`sidebar ${!showChatList ? 'hidden-mobile' : ''}`}>
-        {searchResults.length > 0 && (
+        {(searchResults.length > 0 || wikiResults.length > 0 || fileResults.length > 0) && (
           <div className="chats-search-results-header">
-            <span className="chats-search-results-count">Найдено: {searchResults.length}</span>
+            <span className="chats-search-results-count">
+              Найдено: {userSearchResults.length + searchMessagesTotal + wikiResults.length + fileResults.length}
+            </span>
             <button className="search-clear-btn" onClick={handleCloseSearch}>✕</button>
           </div>
         )}
@@ -10233,7 +11119,7 @@ return parts.length > 0 ? parts : text;
             <input
               type="text"
               className="chats-search-input"
-              placeholder="Поиск сообщений..."
+              placeholder="Поиск"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyPress={(e) => e.key === 'Enter' && handleSearchMessages()}
@@ -10241,34 +11127,98 @@ return parts.length > 0 ? parts : text;
             {isSearching && <span className="chats-search-loading">🔍</span>}
           </div>
 
-          {(searchResults.length > 0 || fileResults.length > 0) ? (
+          {(searchResults.length > 0 || wikiResults.length > 0 || fileResults.length > 0) && (
+            <div className="search-tabs" onWheel={handleSearchTabsWheel}>
+              <button
+                className={`search-tab ${searchTab === 'all' ? 'active' : ''}`}
+                onClick={() => setSearchTab('all')}
+              >
+                Все · {userSearchResults.length + searchMessagesTotal + wikiResults.length + fileResults.length}
+              </button>
+              {userSearchResults.length > 0 && (
+                <button
+                  className={`search-tab ${searchTab === 'users' ? 'active' : ''}`}
+                  onClick={() => setSearchTab('users')}
+                >
+                  👤 Пользователи · {userSearchResults.length}
+                </button>
+              )}
+              {searchResults.some(r => r.type === 'message') && (
+                <button
+                  className={`search-tab ${searchTab === 'messages' ? 'active' : ''}`}
+                  onClick={() => setSearchTab('messages')}
+                >
+                  💬 Сообщения · {searchResults.filter(r => r.type === 'message').length}
+                </button>
+              )}
+              {wikiResults.length > 0 && (
+                <button
+                  className={`search-tab ${searchTab === 'wiki' ? 'active' : ''}`}
+                  onClick={() => setSearchTab('wiki')}
+                >
+                  📚 База знаний · {wikiResults.length}
+                </button>
+              )}
+              {fileResults.length > 0 && (
+                <button
+                  className={`search-tab ${searchTab === 'files' ? 'active' : ''}`}
+                  onClick={() => setSearchTab('files')}
+                >
+                  📁 Файлы · {fileResults.length}
+                </button>
+              )}
+            </div>
+          )}
+
+          {(searchResults.length > 0 || wikiResults.length > 0 || fileResults.length > 0) ? (
             <div className="chats-list">
-              {searchResults.length > 0 && (
-                <>
-                  {searchResults.map((result, idx) => (
+              {userSearchResults.length > 0 && (searchTab === 'all' || searchTab === 'users') && (
+                <div className="file-search-section">
+                  {searchTab === 'all' && <div className="file-search-header">👤 Пользователи</div>}
+                  {userSearchResults.map((result, idx) => (
+                    <div
+                      key={`user-${result.id || idx}`}
+                      className={`chat-item ${currentSearchIndex === idx ? 'active' : ''}`}
+                      onClick={() => handleSearchResultClick(result)}
+                    >
+                      <div className="chat-item-left" style={{ cursor: 'pointer' }}>
+                        <span className="file-search-icon">👤</span>
+                        <div className="chat-info">
+                          <div className="chat-name-row">
+                            <span className="chat-name">{result.username}</span>
+                          </div>
+                          <div className="chat-preview-row">
+                            <span className="chat-preview">{result.fullName || result.email || ''}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {searchResults.some(r => r.type === 'message') && (searchTab === 'all' || searchTab === 'messages') && (
+                <div className="file-search-section">
+                  {searchTab === 'all' && <div className="file-search-header">💬 Сообщения</div>}
+                  {searchResults.map((result, idx) => result.type === 'message' && (
                     <div
                       key={result.id || idx}
                       className={`chat-item ${currentSearchIndex === idx ? 'active' : ''}`}
                       onClick={() => handleSearchResultClick(result)}
                     >
                       <div className="chat-item-left" style={{ cursor: 'pointer' }}>
-                        {result.type === 'message' ? (
-                          result.senderAvatar ? (
-                            <img src={result.senderAvatar} alt="" className="chat-avatar-img" onError={(e) => { e.target.style.display = 'none'; }} />
-                          ) : (
-                            <div className="chat-icon chat-avatar-fallback">{(result.senderName || '?')[0].toUpperCase()}</div>
-                          )
-                        ) : result.type === 'user' ? '👤' : getChatIcon(result)}
+                        {result.senderAvatar ? (
+                          <img src={result.senderAvatar} alt="" className="chat-avatar-img" onError={(e) => { e.target.style.display = 'none'; }} />
+                        ) : (
+                          <div className="chat-icon chat-avatar-fallback">{(result.senderName || '?')[0].toUpperCase()}</div>
+                        )}
                         <div className="chat-info">
                           <div className="chat-name-row">
-                            <span className="chat-name">
-                              {result.type === 'user' ? result.username : result.chatName || result.senderName || 'Чат'}
-                            </span>
+                            <span className="chat-name">{result.chatName || result.senderName || 'Чат'}</span>
                             <span className="chat-time">{result.timestamp ? formatSearchTime(result.timestamp) : ''}</span>
                           </div>
                           <div className="chat-preview-row">
                             <span className="chat-preview">
-                              {result.type === 'user' ? result.fullName || result.email || '' : result.senderName ? `${result.senderName}: ` : ''}{result.text || ''}
+                              {result.senderName ? `${result.senderName}: ` : ''}{result.text || ''}
                             </span>
                           </div>
                         </div>
@@ -10280,11 +11230,32 @@ return parts.length > 0 ? parts : text;
                     <span className="search-count">{currentSearchIndex + 1} / {searchResults.length}</span>
                     <button className="search-nav-btn" onClick={handleSearchNext}>↓</button>
                   </div>
-                </>
+                </div>
               )}
-              {fileResults.length > 0 && (
+              {wikiResults.length > 0 && (searchTab === 'all' || searchTab === 'wiki') && (
                 <div className="file-search-section">
-                  <div className="file-search-header">📁 Файлы</div>
+                  {searchTab === 'all' && <div className="file-search-header">📚 База знаний</div>}
+                  {wikiResults.map((a, idx) => (
+                    <div
+                      key={`wiki-${a.id}-${idx}`}
+                      className="file-search-item"
+                      onClick={() => { handleCloseSearch(); openWikiArticleById(a.id); }}
+                    >
+                      <span className="file-search-icon">📄</span>
+                      <div className="file-search-info">
+                        <span className="file-search-name">{a.title}</span>
+                        <span className="file-search-source">
+                          {a.category_name ? `Категория · ${a.category_name}` : 'Без категории'}
+                        </span>
+                        <span className="file-search-preview">{wikiSnippet(a.content)}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {fileResults.length > 0 && (searchTab === 'all' || searchTab === 'files') && (
+                <div className="file-search-section">
+                  {searchTab === 'all' && <div className="file-search-header">📁 Файлы</div>}
                   {fileResults.map((f, idx) => (
                     <div
                       key={`${f.type}-${f.messageId || f.id}-${idx}`}
@@ -10475,6 +11446,7 @@ return parts.length > 0 ? parts : text;
         {activeChat ? (
           <div className="chat-view-container">
             <header className="chat-header-main">
+              <div className="chat-header-top">
               {/* Кнопка «назад к списку чатов» — только на мобильных */}
               {windowWidth <= 768 && showChatList === false && (
                 <button
@@ -10664,8 +11636,14 @@ return parts.length > 0 ? parts : text;
                   ⋮
                 </button>
               </div>
+              </div>
+              {/* Строка закреплённого сообщения — под именем/аватаром */}
+              {renderPinnedRow()}
             </header>
 
+            {/* Строка поиска по чату — отдельной полосой под шапкой */}
+            {chatSearchActive && (
+            <div className="chat-top-panels">
             {/* Per-chat search bar */}
             {chatSearchActive && (
               <div className="chat-search-bar">
@@ -10684,24 +11662,30 @@ return parts.length > 0 ? parts : text;
                     autoFocus
                   />
                   {chatSearchQuery && (
-                    <button className="chat-search-clear" onClick={() => { setChatSearchQuery(''); setChatSearchResults([]); setChatSearchIndex(-1); }}>✕</button>
+                    <button className="chat-search-clear" onClick={() => { setChatSearchQuery(''); setChatSearchResults([]); setChatSearchTotal(0); setChatSearchIndex(-1); }}>✕</button>
                   )}
                 </div>
                 {chatSearchResults.length > 0 && (
                   <div className="chat-search-meta">
-                    <span className="chat-search-count">{chatSearchIndex + 1} / {chatSearchResults.length}</span>
+                    <span className="chat-search-count">
+                      {chatSearchIndex + 1} / {chatSearchResults.length}
+                      {chatSearchTotal > chatSearchResults.length && ` · найдено ${chatSearchTotal}`}
+                    </span>
                     <button className="chat-search-nav" onClick={handleChatSearchPrev} disabled={chatSearchResults.length <= 1}>↑</button>
                     <button className="chat-search-nav" onClick={handleChatSearchNext} disabled={chatSearchResults.length <= 1}>↓</button>
                     <button className="chat-search-close" onClick={toggleChatSearch}>✕</button>
                   </div>
                 )}
-                {chatSearchQuery && chatSearchResults.length === 0 && chatSearchActive && (
+                {chatSearchQuery.trim().length >= 2 && chatSearchResults.length === 0 && chatSearchActive && (
                   <div className="chat-search-meta">
                     <span className="chat-search-count">Нет результатов</span>
-                    <button className="chat-search-close" onClick={() => { setChatSearchActive(false); setChatSearchQuery(''); setChatSearchResults([]); setChatSearchIndex(-1); }}>✕</button>
+                    <button className="chat-search-close" onClick={() => { setChatSearchActive(false); setChatSearchQuery(''); setChatSearchResults([]); setChatSearchTotal(0); setChatSearchIndex(-1); }}>✕</button>
                   </div>
                 )}
               </div>
+            )}
+
+            </div>
             )}
 
             <div className="messages-area-wrapper">
@@ -10717,30 +11701,6 @@ return parts.length > 0 ? parts : text;
               {!historyUi.hasMore && !historyUi.loadingMore && (
                 <div className="history-start">— Начало переписки —</div>
               )}
-              {/* Панель закреплённых сообщений */}
-              {showPinnedBar && pinnedMessages[activeChatIdRef.current] && pinnedMessages[activeChatIdRef.current].length > 0 && (
-                <>
-                  {pinnedBarCollapsed ? (
-                    <div className="pinned-messages-bar collapsed" onClick={() => setPinnedBarCollapsed(false)}>
-                      <span className="pinned-icon">📌</span>
-                    </div>
-                  ) : (
-                    <div className="pinned-messages-bar" onClick={handleOpenPinnedModal}>
-                      <div className="pinned-messages-bar-content">
-                        <span className="pinned-icon">📌</span>
-                        <span className="pinned-text">
-                          {pinnedMessages[activeChatIdRef.current].length === 1
-                            ? 'Закреплённое сообщение'
-                            : `${pinnedMessages[activeChatIdRef.current].length} закреплённых сообщения(й)`}
-                        </span>
-                        <button className="pinned-collapse-btn" onClick={(e) => { e.stopPropagation(); setPinnedBarCollapsed(true); }} title="Свернуть">
-                          ▲
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </>
-              )}
               {activeChat?.type === 'group' && activeChat.announcement && (
                 <div className={`group-announcement-bar${['creator', 'admin'].includes(getMyGroupRole()) ? ' editable' : ''}`}>
                   <span className="group-announcement-icon">📌</span>
@@ -10753,13 +11713,23 @@ return parts.length > 0 ? parts : text;
                   )}
                 </div>
               )}
-              {messages.filter(m => m.id).map((message, index) => {
+              {(() => {
+              const pinnedIdSet = new Set((pinnedMessages[activeChatId] || []).map(pm => String(pm.id)));
+              return messages.filter(m => m.id).map((message, index) => {
                 // Определяем, является ли сообщение частью группы (предыдущее от того же пользователя)
                 const prevMessage = index > 0 ? messages[index - 1] : null;
                 const isGrouped = prevMessage && prevMessage.senderId === message.senderId;
 
                 // Определяем текущую сторону
                 const isOwn = message.senderId === currentUser?.id;
+
+                // ФИО над сообщением — только в группах и Общем чате, один раз на серию
+                const isGroupOrGeneral = activeChat?.type === 'group' || activeChat?.type === 'general';
+                const showSenderName = isGroupOrGeneral && !isGrouped && !!message.senderName;
+
+                // Вложение рисуется внутри пузыря сообщения (как в Telegram)
+                const bubbleFile = (!message.deleted_at && !isBotMessage(message) && message.file) ? message.file : null;
+                const bubbleFileIsImage = !!(bubbleFile && bubbleFile.mimetype?.startsWith('image/'));
 
                 // Определяем смену стороны (разделитель между входящими и исходящими)
                 let sideChanged = false;
@@ -10797,6 +11767,9 @@ return parts.length > 0 ? parts : text;
                   key={message.id}
                   className={`message-main ${message.senderId === currentUser?.id ? 'own' : ''} ${isBotMessage(message) ? 'message-bot' : ''} ${isGrouped ? 'message-grouped' : ''} ${sideChanged ? 'side-changed' : ''}`}
                   onContextMenu={(e) => handleContextMenu(e, message.id, message.text, message.chatId, message.senderId, message.senderName)}
+                  onTouchStart={(e) => startMessageLongPress(e, message)}
+                  onTouchEnd={cancelMessageLongPress}
+                  onTouchMove={cancelMessageLongPress}
                 >
                   {isOwn && <div className="message-avatar-spacer" />}
                   {!isOwn && (
@@ -10812,18 +11785,51 @@ return parts.length > 0 ? parts : text;
                       className={`message-bubble-wrapper${selectionMode && selectedMessageIds.includes(message.id) ? ' selection-selected' : ''}`}
                       onClick={selectionMode ? () => toggleMessageSelection(message.id) : undefined}
                     >
+                      {showSenderName && (
+                        <div className="message-sender-name" title={message.senderName}>{message.senderName}</div>
+                      )}
                       {selectionMode && (
                         <span className={`message-select-checkbox${selectedMessageIds.includes(message.id) ? ' checked' : ''}`}>
                           {selectedMessageIds.includes(message.id) ? '✓' : ''}
                         </span>
                       )}
-                      {!isBotMessage(message) && message.forwarded_from && (
+                      {/* Удалено у всех — вместо содержимого показываем отметку об удалении */}
+                      {message.deleted_at && (
+                        <div className="message-text-wrapper message-deleted-wrapper">
+                          <div className="message-text-content">
+                            <p className="message-deleted-text">
+                              {message.deletedByName
+                                ? `Пользователь ${message.deletedByName} удалил сообщение`
+                                : 'Сообщение удалено'}
+                            </p>
+                            <div className="message-time-inline">
+                              <span className="message-time-main">{formatTime(message.timestamp)}</span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                      {!message.deleted_at && !isBotMessage(message) && pinnedIdSet.has(String(message.id)) && (
+                        <span
+                          className="message-pin-badge"
+                          title="Закреплённое сообщение"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const pl = pinnedMessages[activeChatId] || [];
+                            const pi = pl.findIndex(p => String(p.id) === String(message.id));
+                            if (pi >= 0) setPinnedIndex(pi);
+                            setShowPinnedList(true);
+                          }}
+                        >
+                          <PinIcon />
+                        </span>
+                      )}
+                      {!message.deleted_at && !isBotMessage(message) && message.forwarded_from && (
                         <span className="forwarded-badge">
                           ↗️ Переслано от {message.forwarded_from.sender_name}
                         </span>
                       )}
                       {/* Цитата ответа (reply) — кликабельная для прокрутки к оригиналу */}
-                      {!isBotMessage(message) && message.reply_to && (
+                      {!message.deleted_at && !isBotMessage(message) && message.reply_to && (
                         <div 
                           className="reply-quote-preview" 
                           onClick={() => scrollToMessage(message.reply_to.messageId)}
@@ -10835,13 +11841,62 @@ return parts.length > 0 ? parts : text;
                           </div>
                         </div>
                       )}
-                      {message.text && !message.poll && (
-                        <div className="message-text-wrapper">
+                      {/* Обсуждение: ответы хранятся отдельной веткой и в ленте не видны */}
+                      {!message.deleted_at && !isBotMessage(message) && message.threadReplyCount > 0 && (
+                        <button
+                          type="button"
+                          className="thread-replies-badge"
+                          onClick={(e) => { e.stopPropagation(); openThread(message.id); }}
+                          title="Открыть обсуждение"
+                        >
+                          <IconMessage />
+                          <span>{message.threadReplyCount} {message.threadReplyCount === 1 ? 'ответ' : 'ответа'}</span>
+                        </button>
+                      )}
+                      {!message.poll && (message.text || bubbleFile) && (
+                        <div className={`message-text-wrapper${bubbleFileIsImage ? ' has-image' : ''}`}>
+                          {bubbleFileIsImage && (
+                            <div className="message-file-main">
+                              <img
+                                src={normalizeFileUrl(bubbleFile.url)}
+                                alt={bubbleFile.filename}
+                                onClick={() => handleImageClick(normalizeFileUrl(bubbleFile.url), bubbleFile.filename)}
+                                className="message-image-clickable"
+                              />
+                            </div>
+                          )}
+                          {bubbleFile && !bubbleFileIsImage && (
+                            <div className="message-file-main">
+                              {bubbleFile.mimetype?.startsWith('audio/') ? (
+                                <VoiceMessagePlayer src={normalizeFileUrl(bubbleFile.url)} />
+                              ) : bubbleFile.mimetype?.startsWith('video/') ? (
+                                <div className="message-video-wrapper">
+                                  <video
+                                    src={normalizeFileUrl(bubbleFile.url)}
+                                    className="message-video"
+                                    controls
+                                    preload="metadata"
+                                    playsInline
+                                  />
+                                </div>
+                              ) : (
+                                <a href={`${SOCKET_URL}/api/download/${extractFileUuidFromUrl(bubbleFile.url)}`} className="file-link-main" title={bubbleFile.filename} download>
+                                  <span className="file-icon-main">{getFileIcon(bubbleFile.mimetype)}</span>
+                                  <div className="file-info-main">
+                                    <span className="file-name-main">{bubbleFile.filename}</span>
+                                    <span className="file-size-main">{(bubbleFile.size / 1024).toFixed(1)} KB</span>
+                                  </div>
+                                </a>
+                              )}
+                            </div>
+                          )}
                           <div className="message-text-content">
-                            <p className={`message-text-main${isStickerOnlyMessage(message.text) ? ' sticker-message' : ''}`} onContextMenu={(e) => handleContextMenu(e, message.id, message.text, message.chatId, message.senderId, message.senderName)}>
-                              {isBotMessage(message) ? formatBotText(message.text) : renderMessageContent(message.text)}
-                            </p>
-                            {!isBotMessage(message) && renderLinkPreviews(message.text)}
+                            {message.text && (
+                              <p className={`message-text-main${isStickerOnlyMessage(message.text) ? ' sticker-message' : ''}`} onContextMenu={(e) => handleContextMenu(e, message.id, message.text, message.chatId, message.senderId, message.senderName)}>
+                                {isBotMessage(message) ? formatBotText(message.text) : renderMessageContent(message.text)}
+                              </p>
+                            )}
+                            {message.text && !isBotMessage(message) && renderLinkPreviews(message.text)}
                             <div className="message-time-inline">
                               <span className="message-time-main">{formatTime(message.timestamp)}</span>
                               {message.edited && <span className="message-edited-indicator" title="Отредактировано">ред.</span>}
@@ -10850,7 +11905,7 @@ return parts.length > 0 ? parts : text;
                             </div>
                           </div>
                           {/* Реакции под текстом внутри пузыря сообщения */}
-                          {!isBotMessage(message) && messageReactions[message.id]?.reactions && Object.keys(messageReactions[message.id].reactions).length > 0 && (
+                          {!message.deleted_at && !isBotMessage(message) && messageReactions[message.id]?.reactions && Object.keys(messageReactions[message.id].reactions).length > 0 && (
                             <div className="message-reactions-inline">
                               {Object.entries(messageReactions[message.id].reactions).map(([emoji, users]) => {
                                 const hasCurrentUserReaction = users.some(u => u.userId === currentUser?.id);
@@ -10932,7 +11987,7 @@ return parts.length > 0 ? parts : text;
                       )}
                     </div>
                     {/* Кнопки бота */}
-                    {isBotMessage(message) && message.buttons && message.buttons.length > 0 && (
+                    {!message.deleted_at && isBotMessage(message) && message.buttons && message.buttons.length > 0 && (
                       <div className="bot-buttons">
                         {message.buttons.map((btn, idx) => (
                           <button
@@ -10945,8 +12000,8 @@ return parts.length > 0 ? parts : text;
                         ))}
                       </div>
                     )}
-                    {/* Файлы только для обычных сообщений (не бота) */}
-                    {!isBotMessage(message) && message.file && (
+                    {/* Файл у сообщения с опросом: в пузырь он не влезает, поэтому отдельным блоком */}
+                    {message.poll && !message.deleted_at && !isBotMessage(message) && message.file && (
                       <div className="message-file-main">
                         {message.file.mimetype?.startsWith('image/') ? (
                           <img
@@ -10991,7 +12046,8 @@ return parts.length > 0 ? parts : text;
                 </div>
                 </>
               );
-            })}
+            });
+              })()}
               <div ref={messagesEndRef} />
             </div>
 
@@ -11121,6 +12177,50 @@ return parts.length > 0 ? parts : text;
                 serverUrl={SOCKET_URL}
               />
 
+              {/* Запланированные сообщения в активном чате */}
+              {activeChatId && chatScheduledMessages.length > 0 && (
+                <div className="scheduled-chip-wrap">
+                  <button
+                    type="button"
+                    className={`scheduled-chip ${showScheduledPanel ? 'open' : ''}`}
+                    onClick={(e) => { e.preventDefault(); setShowScheduledPanel(v => !v); }}
+                    title="Отложенные сообщения"
+                  >
+                    <ClockIcon />
+                    <span>Запланировано: {chatScheduledMessages.length}</span>
+                  </button>
+                  {showScheduledPanel && (
+                    <div className="scheduled-panel">
+                      {chatScheduledMessages
+                        .slice()
+                        .sort((a, b) => (a.scheduledAtMs || 0) - (b.scheduledAtMs || 0))
+                        .map(item => {
+                          const d = new Date(item.scheduledAt);
+                          const whenLabel = isNaN(d.getTime())
+                            ? ''
+                            : d.toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+                          return (
+                            <div key={item.id} className="scheduled-panel-item">
+                              <div className="scheduled-panel-main">
+                                <div className="scheduled-panel-time"><ClockIcon /> {whenLabel}</div>
+                                <div className="scheduled-panel-preview">{item.preview || 'Сообщение'}</div>
+                              </div>
+                              <button
+                                type="button"
+                                className="scheduled-panel-cancel"
+                                onClick={(e) => { e.preventDefault(); cancelScheduledMessage(item.id); }}
+                                title="Отменить отправку"
+                              >
+                                <XIcon />
+                              </button>
+                            </div>
+                          );
+                        })}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Индикатор режима редактирования */}
               {isEditMode && (
                 <div className="edit-mode-indicator">
@@ -11161,12 +12261,16 @@ return parts.length > 0 ? parts : text;
                 {showAddMenu && (
                   <div className="add-menu-dropdown">
                     <div className="chat-menu-item" onClick={(e) => { e.preventDefault(); fileInputRef.current?.click(); setShowAddMenu(false); }}>
-                      <span className="menu-icon">📎</span>
+                      <span className="menu-icon"><PaperclipIcon /></span>
                       Прикрепить файл
                     </div>
                     <div className="chat-menu-item" onClick={(e) => { e.preventDefault(); setShowPollModal(true); setShowAddMenu(false); }}>
-                      <span className="menu-icon">📊</span>
+                      <span className="menu-icon"><ChartIcon /></span>
                       Создать опрос
+                    </div>
+                    <div className="chat-menu-item" onClick={(e) => { e.preventDefault(); openScheduleMessage(); }} title="Отправить сообщение в указанное время">
+                      <span className="menu-icon"><ClockIcon /></span>
+                      Отправить позже
                     </div>
                   </div>
                 )}
@@ -11735,11 +12839,13 @@ return parts.length > 0 ? parts : text;
                           <p className="no-tasks-message">Нет задач на этот день</p>
                         ) : (
                           <>
-                            {selectedDayTasks.map(task => (
+                            {selectedDayTasks.map(task => {
+                              const isReminder = task.kind === 'message_reminder';
+                              return (
                           <div
                             key={task.id}
-                            className="calendar-task-item"
-                            onClick={() => handleEditTask(task)}
+                            className={`calendar-task-item${isReminder ? ' is-reminder' : ''}`}
+                            onClick={() => isReminder ? openReminderFromCalendar(task) : handleEditTask(task)}
                           >
                             {(task.task_time || task.task_end_time) && (
                               <div className="calendar-task-time-block">
@@ -11748,7 +12854,10 @@ return parts.length > 0 ? parts : text;
                             )}
                             <div className="calendar-task-content">
                               <div className="calendar-task-title-row">
-                                <div className="calendar-task-title">{task.title}</div>
+                                <div className="calendar-task-title">
+                                  {isReminder && <BellIcon />}
+                                  {task.title}
+                                </div>
                                 <div className="calendar-task-actions">
                                   {task.source_message_id && task.source_chat_id && (
                                     <button
@@ -11762,6 +12871,7 @@ return parts.length > 0 ? parts : text;
                                       </svg>
                                     </button>
                                   )}
+                                  {!isReminder && (
                                   <button
                                     className="task-action-btn share"
                                     onClick={(e) => { e.stopPropagation(); handleShareTask(task); }}
@@ -11773,9 +12883,10 @@ return parts.length > 0 ? parts : text;
                                       <line x1="12" y1="2" x2="12" y2="15"/>
                                     </svg>
                                   </button>
+                                  )}
                                   <button
                                     className="task-action-btn edit"
-                                    onClick={(e) => { e.stopPropagation(); handleEditTask(task); }}
+                                    onClick={(e) => { e.stopPropagation(); isReminder ? openReminderFromCalendar(task) : handleEditTask(task); }}
                                     title="Редактировать"
                                   >
                                     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -11799,7 +12910,8 @@ return parts.length > 0 ? parts : text;
                               )}
                             </div>
                           </div>
-                        ))}
+                              );
+                            })}
                       </>
                     )}
                   </>
@@ -11942,283 +13054,6 @@ return parts.length > 0 ? parts : text;
             </div>
           </div>
         </main>
-      )}
-
-      {activeView === 'kpi' && (
-        <div className="kpi-view">
-          <div className="kpi-topbar">
-            <div className="kpi-topbar-left">
-              <h2 className="kpi-title">Ключевые показатели</h2>
-              {kpiData?.date && <span className="kpi-date-badge">{kpiData.date.replace(/-/g, '.')}</span>}
-              {kpiData && Object.values(kpiData.groups).flat().some(i => i.updated_at) && (
-                <span className="kpi-updated-badge" title="Последнее обновление">
-                  обновлено {Object.values(kpiData.groups).flat().filter(i => i.updated_at).sort((a,b) => b.updated_at?.localeCompare(a.updated_at || ''))[0]?.updated_at?.slice(11,16) || ''}
-                </span>
-              )}
-            </div>
-            <div className="kpi-topbar-right">
-              {isAdmin && !kpiEditMode && (
-                <button className="kpi-btn kpi-btn-refresh" onClick={handleKpiRefresh} disabled={kpiRefreshing}>
-                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
-                  {kpiRefreshing ? 'Обновление...' : 'Обновить из БД'}
-                </button>
-              )}
-              {isAdmin && !kpiEditMode && (
-                <button className="kpi-btn kpi-btn-edit" onClick={handleKpiEdit}>
-                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-                  Редактировать
-                </button>
-              )}
-              {isAdmin && kpiEditMode && (
-                <>
-                  <button className="kpi-btn kpi-btn-save" onClick={handleKpiSave}>
-                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
-                    Сохранить
-                  </button>
-                  <button className="kpi-btn kpi-btn-cancel" onClick={() => setKpiEditMode(false)}>Отмена</button>
-                </>
-              )}
-              <button className="kpi-btn kpi-btn-close" onClick={() => setActiveView('chats')}>
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-              </button>
-            </div>
-          </div>
-
-          {!kpiData ? (
-            <div className="kpi-loading-state">
-              <div className="kpi-loading-spinner" />
-              <span>Загрузка показателей...</span>
-            </div>
-          ) : (
-            <div className="kpi-dashboard">
-              {/* Period tabs */}
-              <div className="kpi-period-tabs">
-                {PERIOD_TABS.map(tab => (
-                  <button key={tab.key}
-                    className={`kpi-period-tab ${kpiPeriod === tab.key ? 'active' : ''}`}
-                    onClick={() => setKpiPeriod(tab.key)}>
-                    {tab.label}
-                  </button>
-                ))}
-              </div>
-              {/* Summary cards */}
-              <div className="kpi-summary">
-                <div className="kpi-summary-cards">
-                  {(() => {
-                    const topItems = [];
-                    const sales = kpiData.groups['Продажи'];
-                    if (sales) topItems.push((sales.filter(kpiPeriodFilter))[0]);
-                    const frs = kpiData.groups['ФРС Контур'];
-                    if (frs) topItems.push((frs.filter(kpiPeriodFilter))[0]);
-                    const opt = kpiData.groups['Опт (PBI)'];
-                    if (opt) topItems.push((opt.filter(kpiPeriodFilter))[0]);
-                    const retail = kpiData.groups['Розница (PBI)'];
-                    if (retail) topItems.push((retail.filter(kpiPeriodFilter))[0]);
-                    return topItems.filter(Boolean).map((item, idx) => {
-                      const colors = ['#4f8cff','#1abc9c','#f39c12','#e74c3c','#9b59b6'];
-                      const c = colors[idx % colors.length];
-                      const pct = item.value != null && item.plan_value > 0 ? (item.value / item.plan_value) * 100 : null;
-                      return (
-                        <div key={item.id} className="kpi-summary-card" style={{'--card-accent':c}}>
-                          <div className="kpi-summary-card-top">
-                            <span className="kpi-summary-card-label">{item.name}</span>
-                            {pct != null && (
-                              <span className={`kpi-summary-card-badge ${pct >= 100 ? 'badge-ok' : 'badge-warn'}`}>
-                                {pct >= 100 ? '✓' : '✗'} {Math.round(pct)}%
-                              </span>
-                            )}
-                          </div>
-                          <div className="kpi-summary-card-main">
-                            {kpiEditMode ? (
-                              <div className="kpi-summary-edit-row">
-                                <input type="number" className="kpi-input kpi-input-sm" value={kpiDraft[item.id]?.value ?? ''}
-                                  onChange={e => setKpiDraft(p => ({ ...p, [item.id]: { ...p[item.id], value: e.target.value } }))}
-                                  placeholder="Факт" />
-                                <input type="number" className="kpi-input kpi-input-sm" value={kpiDraft[item.id]?.plan_value ?? ''}
-                                  onChange={e => setKpiDraft(p => ({ ...p, [item.id]: { ...p[item.id], plan_value: e.target.value } }))}
-                                  placeholder="План" />
-                              </div>
-                            ) : (
-                              <span className="kpi-summary-card-val">
-                                {item.value != null ? Number(item.value).toLocaleString('ru-RU') : <span className="kpi-na">—</span>}
-                                <span className="kpi-summary-card-unit">{item.unit}</span>
-                              </span>
-                            )}
-                          </div>
-                          {pct != null && !kpiEditMode && (
-                            <div className="kpi-summary-card-bar">
-                              <div className="kpi-summary-card-bar-track">
-                                <div className="kpi-summary-card-bar-fill" style={{width: Math.min(pct, 100)+'%', background: pct >= 100 ? '#2ecc71' : pct >= 70 ? '#f39c12' : '#e74c3c'}} />
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    });
-                  })()}
-                </div>
-              </div>
-
-              {/* Detailed groups */}
-              <div className="kpi-groups">
-                {Object.entries(kpiData.groups).map(([groupName, items]) => {
-                  const groupIcons = {
-                    'Продажи': <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>,
-                    'ФРС Контур': <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><path d="M12 18V6"/></svg>
-                  };
-                  const groupColors = {
-                    'Продажи': '#4f8cff',
-                    'ФРС Контур': '#1abc9c'
-                  };
-                  const gc = groupColors[groupName] || '#666';
-                  const factTotal = items.reduce((s, i) => s + (i.value || 0), 0);
-                  const planTotal = items.reduce((s, i) => s + (i.plan_value || 0), 0);
-                  const filteredItems = items.filter(kpiPeriodFilter);
-                  if (filteredItems.length === 0) return null;
-                  return (
-                    <div key={groupName} className="kpi-group-block">
-                      <div className="kpi-group-block-header" style={{borderLeftColor: gc}}>
-                        <div className="kpi-group-block-title">
-                          {groupIcons[groupName] || null}
-                          <h3>{groupName}</h3>
-                          {groupName === 'ФРС Контур' && kpiData?.date && (
-                            <span className="kpi-group-data-label">данные за {kpiData.date.replace(/-/g, '.')}</span>
-                          )}
-                        </div>
-                        {planTotal > 0 && (
-                          <span className={`kpi-group-block-total ${(factTotal/planTotal) >= 1 ? 'total-ok' : 'total-warn'}`}>
-                            {Math.round((factTotal/planTotal)*100)}%
-                          </span>
-                        )}
-                      </div>
-                      <div className="kpi-group-block-cards">
-                        {filteredItems.map(item => {
-                          const pct = item.value != null && item.plan_value > 0 ? (item.value / item.plan_value) * 100 : null;
-                          return (
-                            <div key={item.id} className="kpi-card" style={{'--card-accent': gc}}>
-                              <div className="kpi-card-header">
-                                <span className="kpi-card-name">{item.name}</span>
-                                {KPI_PERIODS[item.id] && (
-                                  <span className={`kpi-period-badge kpi-period-${KPI_PERIODS[item.id]}`}>
-                                    {PERIOD_TABS.find(t => t.key === KPI_PERIODS[item.id])?.label || ''}
-                                  </span>
-                                )}
-                                {pct != null && !kpiEditMode && (
-                                  <span className="kpi-card-badge" style={{
-                                    background: pct >= 100 ? 'rgba(46,204,113,0.12)' : 'rgba(231,76,60,0.12)',
-                                    color: pct >= 100 ? '#27ae60' : '#c0392b'
-                                  }}>
-                                    {pct >= 100 ? '↑' : '↓'} {Math.round(pct)}%
-                                  </span>
-                                )}
-                              </div>
-                              <div className="kpi-card-body">
-                                {kpiEditMode ? (
-                                  <div className="kpi-card-edit">
-                                    <div className="kpi-card-edit-field">
-                                      <span className="kpi-card-edit-label">Факт</span>
-                                      <input type="number" className="kpi-input" value={kpiDraft[item.id]?.value ?? ''}
-                                        onChange={e => setKpiDraft(p => ({ ...p, [item.id]: { ...p[item.id], value: e.target.value } }))} />
-                                    </div>
-                                    <div className="kpi-card-edit-field">
-                                      <span className="kpi-card-edit-label">План</span>
-                                      <input type="number" className="kpi-input" value={kpiDraft[item.id]?.plan_value ?? ''}
-                                        onChange={e => setKpiDraft(p => ({ ...p, [item.id]: { ...p[item.id], plan_value: e.target.value } }))} />
-                                    </div>
-                                  </div>
-                                ) : (
-                                  <div className="kpi-card-values">
-                                    <div className="kpi-card-value-row">
-                                      <span className="kpi-card-value-num">
-                                        {item.value != null ? Number(item.value).toLocaleString('ru-RU') : <span className="kpi-na">—</span>}
-                                      </span>
-                                      <span className="kpi-card-value-unit">{item.unit}</span>
-                                    </div>
-                                    {item.plan_value != null && (
-                                      <div className="kpi-card-plan-row">
-                                        <span className="kpi-card-plan-label">план</span>
-                                        <span className="kpi-card-plan-val">{Number(item.plan_value).toLocaleString('ru-RU')}</span>
-                                        <span className="kpi-card-value-unit">{item.unit}</span>
-                                      </div>
-                                    )}
-                                  </div>
-                                )}
-                              </div>
-                              {pct != null && !kpiEditMode && (
-                                <div className="kpi-card-bar">
-                                  <div className="kpi-card-bar-track">
-                                    <div className="kpi-card-bar-fill" style={{
-                                      width: Math.min(pct, 100) + '%',
-                                      background: pct >= 100 ? '#2ecc71' : pct >= 70 ? '#e67e22' : '#e74c3c'
-                                    }} />
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {selectedReport && (
-        <div className="report-viewer-overlay" onClick={() => setSelectedReport(null)}>
-          <div className="report-viewer-modal" onClick={e => e.stopPropagation()}>
-            <div className="report-viewer-header">
-              <h3>{selectedReport.name}</h3>
-              <div className="report-viewer-actions">
-                <a className="report-viewer-download" href={`${SOCKET_URL}/api/pbi-reports/${selectedReport.id}/pdf`} download title="Скачать PDF">
-                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                    <polyline points="7 10 12 15 17 10"/>
-                    <line x1="12" y1="15" x2="12" y2="3"/>
-                  </svg>
-                  PDF
-                </a>
-                {isAdmin && (
-                  <button className="report-viewer-perm-btn" onClick={() => setShowReportPermEditor(p => !p)} title="Настроить доступ">
-                    ⚙️ Доступ
-                  </button>
-                )}
-                <button className="close-btn" onClick={() => setSelectedReport(null)}>✕</button>
-              </div>
-            </div>
-            {showReportPermEditor && isAdmin && (
-              <div className="report-perm-editor">
-                <h4>Кому доступен отчёт</h4>
-                <div className="report-perm-list">
-                  {users.filter(u => u.id !== currentUser?.id).map(user => (
-                    <label key={user.id} className="report-perm-item">
-                      <input type="checkbox" checked={reportPermissions.includes(user.id)} onChange={async (e) => {
-                        const newPerms = e.target.checked
-                          ? [...reportPermissions, user.id]
-                          : reportPermissions.filter(id => id !== user.id);
-                        setReportPermissions(newPerms);
-                        await fetch(`${SOCKET_URL}/api/pbi-reports/${selectedReport.id}/permissions`, {
-                          method: 'PUT',
-                          headers: { 'Content-Type': 'application/json', 'X-User-Id': currentUser?.id || '' },
-                          body: JSON.stringify({ userIds: newPerms })
-                        });
-                      }} />
-                      <span>{user.username}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-            )}
-            <iframe
-              className="report-viewer-iframe"
-              src={`${SOCKET_URL}/api/pbi-reports/${selectedReport.id}/view`}
-              title={selectedReport.name}
-            />
-          </div>
-        </div>
       )}
 
       {/* Вкладка wiki */}
@@ -12667,11 +13502,13 @@ return parts.length > 0 ? parts : text;
 
       {/* Modal for creating/editing wiki category */}
       {showWikiCategoryModal && (
-        <div className="modal-overlay" onClick={() => { setShowWikiCategoryModal(false); setWikiEditingCategory(null); setWikiCategoryName(''); setWikiCategoryDesc(''); setWikiCategoryParent(''); setWikiCategoryEditorIds([]); setWikiCategoryEditorSearch(''); }}>
-          <div className="modal-content" style={{ maxWidth: 400 }} onClick={e => e.stopPropagation()}>
+        <Dialog
+          open
+          onClose={() => { setShowWikiCategoryModal(false); setWikiEditingCategory(null); setWikiCategoryName(''); setWikiCategoryDesc(''); setWikiCategoryParent(''); setWikiCategoryEditorIds([]); setWikiCategoryEditorSearch(''); }}
+        >
             <div className="modal-header">
               <h3>{wikiEditingCategory ? '✏️ Редактировать категорию' : '📂 Новая категория'}</h3>
-              <button onClick={() => { setShowWikiCategoryModal(false); setWikiEditingCategory(null); setWikiCategoryName(''); setWikiCategoryDesc(''); setWikiCategoryParent(''); setWikiCategoryEditorIds([]); setWikiCategoryEditorSearch(''); }}>✕</button>
+              <button type="button" aria-label="Закрыть" onClick={() => { setShowWikiCategoryModal(false); setWikiEditingCategory(null); setWikiCategoryName(''); setWikiCategoryDesc(''); setWikiCategoryParent(''); setWikiCategoryEditorIds([]); setWikiCategoryEditorSearch(''); }}>✕</button>
             </div>
             <div className="modal-body">
               <div className="ann-form-group">
@@ -12737,8 +13574,7 @@ return parts.length > 0 ? parts : text;
               <button className="cancel-btn" onClick={() => { setShowWikiCategoryModal(false); setWikiEditingCategory(null); setWikiCategoryName(''); setWikiCategoryDesc(''); setWikiCategoryParent(''); setWikiCategoryEditorIds([]); setWikiCategoryEditorSearch(''); setWikiCategoryEditorSearch(''); }}>Отмена</button>
               <button className="save-btn" onClick={wikiEditingCategory ? wikiUpdateCategory : wikiCreateCategory} disabled={!wikiCategoryName.trim()}>{wikiEditingCategory ? 'Сохранить' : 'Создать'}</button>
             </div>
-          </div>
-        </div>
+        </Dialog>
       )}
 
       {activeView === 'settings' && (
@@ -13429,11 +14265,13 @@ return parts.length > 0 ? parts : text;
 
       {/* Модальное окно создания чата */}
       {showNewChatModal && (
-        <div className="modal-overlay" onClick={() => setShowNewChatModal(false)}>
-          <div className="modal-content" onClick={e => e.stopPropagation()}>
+        <Dialog
+          open
+          onClose={() => setShowNewChatModal(false)}
+        >
             <div className="modal-header">
               <h3>Создать новый чат</h3>
-              <button onClick={() => setShowNewChatModal(false)}>✕</button>
+              <button type="button" aria-label="Закрыть" onClick={() => setShowNewChatModal(false)}>✕</button>
             </div>
 
             <div className="modal-body">
@@ -13541,17 +14379,19 @@ return parts.length > 0 ? parts : text;
                 Создать
               </button>
             </div>
-          </div>
-        </div>
+        </Dialog>
       )}
 
       {/* Модальное окно профиля */}
       {showProfileModal && (
-        <div className="modal-overlay" onClick={() => setShowProfileModal(false)}>
-          <div className="modal-content profile-modal" onClick={e => e.stopPropagation()}>
+        <Dialog
+          open
+          onClose={() => setShowProfileModal(false)}
+          className="profile-modal"
+        >
             <div className="modal-header">
               <h3>Редактировать профиль</h3>
-              <button onClick={() => setShowProfileModal(false)}>✕</button>
+              <button type="button" aria-label="Закрыть" onClick={() => setShowProfileModal(false)}>✕</button>
             </div>
 
             <div className="modal-body">
@@ -13566,7 +14406,7 @@ return parts.length > 0 ? parts : text;
                   id="avatar-upload"
                   type="file"
                   accept="image/*"
-                  onChange={handleUploadAvatar}
+                  onChange={handleAvatarFileSelected}
                   style={{ display: 'none' }}
                 />
                 {(profileData.avatar || currentUser?.avatar) && !(profileData.avatar || currentUser?.avatar).includes('ui-avatars.com') && (
@@ -13640,17 +14480,130 @@ return parts.length > 0 ? parts : text;
                 </div>
               </form>
             </div>
-          </div>
-        </div>
+        </Dialog>
       )}
+
+      {/* Модальное окно кругового кропа аватара */}
+      {showAvatarCrop && avatarCropSrc && (() => {
+        const { w, h } = avatarCropImageSize;
+        const s = avatarCropStageSize;
+        const scaleToFit = s / Math.max(w, h);
+        const dispW = w * scaleToFit;
+        const dispH = h * scaleToFit;
+        const zoom = Math.max(avatarCropZoom, getAvatarCropMinZoom());
+        const finalW = dispW * zoom;
+        const finalH = dispH * zoom;
+        const maxOffsetX = Math.max(0, (finalW - s) / 2);
+        const maxOffsetY = Math.max(0, (finalH - s) / 2);
+        const ox = Math.min(Math.max(avatarCropOffset.x, -maxOffsetX), maxOffsetX);
+        const oy = Math.min(Math.max(avatarCropOffset.y, -maxOffsetY), maxOffsetY);
+
+        const handleCropPointerDown = (e) => {
+          e.preventDefault();
+          avatarCropDragRef.current = { startX: e.clientX, startY: e.clientY, offsetX: ox, offsetY: oy };
+          e.currentTarget.setPointerCapture(e.pointerId);
+        };
+        const handleCropPointerMove = (e) => {
+          const d = avatarCropDragRef.current;
+          if (!d) return;
+          const dx = e.clientX - d.startX;
+          const dy = e.clientY - d.startY;
+          setAvatarCropOffset({ x: d.offsetX + dx, y: d.offsetY + dy });
+        };
+        const handleCropPointerUp = (e) => {
+          avatarCropDragRef.current = null;
+          try { e.currentTarget.releasePointerCapture(e.pointerId); } catch (err) {}
+        };
+        const handleCropWheel = (e) => {
+          e.preventDefault();
+          const delta = e.deltaY < 0 ? 0.1 : -0.1;
+          setAvatarCropZoom(z => Math.max(getAvatarCropMinZoom(), z + delta));
+        };
+
+        const srcX = (w / finalW) * (maxOffsetX - ox);
+        const srcY = (h / finalH) * (maxOffsetY - oy);
+        const srcSize = (w / finalW) * s;
+        const previewSize = 96;
+
+        return (
+          <Dialog
+            open
+            onClose={closeAvatarCrop}
+            className="avatar-crop-modal"
+          >
+              <div className="modal-header">
+                <h3>Обрезать фото</h3>
+                <button type="button" aria-label="Закрыть" onClick={closeAvatarCrop}>✕</button>
+              </div>
+              <div className="modal-body">
+                <p className="avatar-crop-hint">Перемещайте изображение и меняйте масштаб, чтобы выбрать область</p>
+                <div
+                  className="avatar-crop-stage"
+                  style={{ width: s, height: s }}
+                  onPointerDown={handleCropPointerDown}
+                  onPointerMove={handleCropPointerMove}
+                  onPointerUp={handleCropPointerUp}
+                  onPointerCancel={handleCropPointerUp}
+                  onWheel={handleCropWheel}
+                >
+                  <img
+                    src={avatarCropSrc}
+                    alt=""
+                    draggable={false}
+                    className="avatar-crop-image"
+                    style={{ width: finalW, height: finalH, transform: `translate(calc(-50% + ${ox}px), calc(-50% + ${oy}px))` }}
+                    onDragStart={(e) => e.preventDefault()}
+                  />
+                  <div className="avatar-crop-mask" />
+                  <div className="avatar-crop-ring" />
+                </div>
+
+                <div className="avatar-crop-controls">
+                  <span>🔍</span>
+                  <input
+                    type="range"
+                    min={Math.round(getAvatarCropMinZoom() * 100)}
+                    max={400}
+                    step={1}
+                    value={Math.round(zoom * 100)}
+                    onChange={(e) => setAvatarCropZoom(Number(e.target.value) / 100)}
+                  />
+                  <span>🔍</span>
+                </div>
+
+                <div className="avatar-crop-preview-row">
+                  <div className="avatar-crop-preview-label">Предпросмотр:</div>
+                  <div
+                    className="avatar-crop-preview"
+                    style={{
+                      width: previewSize,
+                      height: previewSize,
+                      backgroundImage: `url('${avatarCropSrc}')`,
+                      backgroundSize: `${(w / srcSize) * previewSize}px ${(h / srcSize) * previewSize}px`,
+                      backgroundPosition: `${-(srcX / srcSize) * previewSize}px ${-(srcY / srcSize) * previewSize}px`
+                    }}
+                  />
+                </div>
+
+                <div className="modal-footer avatar-crop-footer">
+                  <button className="cancel-btn" onClick={closeAvatarCrop}>Отмена</button>
+                  <button className="create-btn" onClick={confirmAvatarCrop}>Сохранить</button>
+                </div>
+              </div>
+          </Dialog>
+        );
+      })()}
 
       {/* Модальное окно просмотра профиля другого пользователя */}
       {viewingUserProfile && viewUserProfileData && (
-        <div className="modal-overlay" onClick={() => setViewingUserProfile(false)}>
-          <div className="modal-content view-profile-modal" onClick={e => e.stopPropagation()}>
+        <Dialog
+          open
+          onClose={() => setViewingUserProfile(false)}
+          className="view-profile-modal"
+        >
             <div className="modal-header">
               <h3>Профиль пользователя</h3>
-              <button onClick={() => setViewingUserProfile(false)}>✕</button>
+              <button type="button" aria-label="Закрыть" onClick={() => setViewingUserProfile(false)}>✕</button>
             </div>
 
             <div className="modal-body">
@@ -13831,8 +14784,7 @@ return parts.length > 0 ? parts : text;
                 Закрыть
               </button>
             </div>
-          </div>
-        </div>
+        </Dialog>
       )}
 
       {/* Модальное окно просмотра аватара в полном размере */}
@@ -13847,11 +14799,14 @@ return parts.length > 0 ? parts : text;
 
       {/* Модальное окно создания/редактирования задачи */}
       {showTaskModal && (
-        <div className="modal-overlay" onClick={() => setShowTaskModal(false)}>
-          <div className="modal-content task-modal" onClick={e => e.stopPropagation()} style={{ maxHeight: '85vh', overflowY: 'auto' }}>
+        <Dialog
+          open
+          onClose={() => setShowTaskModal(false)}
+          className="task-modal"
+        >
             <div className="modal-header">
               <h3>{editingTask ? 'Редактировать задачу' : 'Новая задача'}</h3>
-              <button onClick={() => setShowTaskModal(false)}>✕</button>
+              <button type="button" aria-label="Закрыть" onClick={() => setShowTaskModal(false)}>✕</button>
             </div>
 
             <form onSubmit={editingTask ? handleUpdateTask : handleCreateTask}>
@@ -13979,17 +14934,150 @@ return parts.length > 0 ? parts : text;
                 </button>
               </div>
             </form>
-          </div>
-        </div>
+        </Dialog>
+      )}
+
+      {/* Модальное окно напоминания о сообщении */}
+      {showReminderModal && (
+        <Dialog
+          open
+          onClose={() => { setShowReminderModal(false); setEditingReminderTask(null); }}
+          className="reminder-modal"
+        >
+            <div className="modal-header">
+              <h3><BellIcon /> {editingReminderTask ? 'Напоминание о сообщении' : 'Напомнить о сообщении'}</h3>
+              <button type="button" aria-label="Закрыть" onClick={() => { setShowReminderModal(false); setEditingReminderTask(null); }}>✕</button>
+            </div>
+            <div className="modal-body">
+              {reminderTarget?.preview && (
+                <div className="reminder-preview">
+                  {reminderTarget.senderName && <div className="reminder-preview-author">{reminderTarget.senderName}</div>}
+                  <div className="reminder-preview-text">{reminderTarget.preview}</div>
+                </div>
+              )}
+              <div className="form-group">
+                <label>Дата</label>
+                <input
+                  type="date"
+                  value={reminderForm.date}
+                  onChange={(e) => setReminderForm(prev => ({ ...prev, date: e.target.value }))}
+                />
+              </div>
+              <div className="form-group">
+                <label>Время</label>
+                <input
+                  type="time"
+                  value={reminderForm.time}
+                  onChange={(e) => setReminderForm(prev => ({ ...prev, time: e.target.value }))}
+                />
+              </div>
+              <div className="form-group">
+                <label>Заметка (необязательно)</label>
+                <input
+                  type="text"
+                  value={reminderForm.note}
+                  onChange={(e) => setReminderForm(prev => ({ ...prev, note: e.target.value }))}
+                  placeholder="Например: ответить коллеге"
+                />
+              </div>
+              <p className="reminder-hint">Помощник пришлёт напоминание в указанное время. Оно также появится в календаре.</p>
+            </div>
+            <div className="modal-footer">
+              {editingReminderTask && (
+                <button type="button" className="delete-btn" onClick={handleDeleteMessageReminder}>
+                  <TrashIcon /> Удалить
+                </button>
+              )}
+              <button type="button" className="cancel-btn" onClick={() => { setShowReminderModal(false); setEditingReminderTask(null); }}>
+                Отмена
+              </button>
+              <button type="button" className="create-btn" onClick={handleSaveMessageReminder}>
+                <BellIcon /> {editingReminderTask ? 'Сохранить' : 'Напомнить'}
+              </button>
+            </div>
+        </Dialog>
+      )}
+
+      {/* Модальное окно отложенной отправки */}
+      {showScheduleModal && (
+        <Dialog
+          open
+          onClose={() => setShowScheduleModal(false)}
+          className="reminder-modal"
+        >
+            <div className="modal-header">
+              <h3><ClockIcon /> Отправить позже</h3>
+              <button type="button" aria-label="Закрыть" onClick={() => setShowScheduleModal(false)}>✕</button>
+            </div>
+            <div className="modal-body">
+              {schedulePreview && (
+                <div className="reminder-preview">
+                  <div className="reminder-preview-text">{schedulePreview}</div>
+                </div>
+              )}
+              <div className="form-group">
+                <label>Дата</label>
+                <input
+                  type="date"
+                  value={scheduleForm.date}
+                  onChange={(e) => setScheduleForm(prev => ({ ...prev, date: e.target.value }))}
+                />
+              </div>
+              <div className="form-group">
+                <label>Время</label>
+                <input
+                  type="time"
+                  value={scheduleForm.time}
+                  onChange={(e) => setScheduleForm(prev => ({ ...prev, time: e.target.value }))}
+                />
+              </div>
+              <div className="schedule-presets">
+                {(() => {
+                  const now = Date.now();
+                  const evening = new Date(); evening.setHours(19, 0, 0, 0);
+                  if (evening.getTime() <= now) evening.setDate(evening.getDate() + 1);
+                  const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1); tomorrow.setHours(9, 0, 0, 0);
+                  return [
+                    ['+30 минут', new Date(now + 30 * 60 * 1000)],
+                    ['+1 час', new Date(now + 60 * 60 * 1000)],
+                    ['Вечером, 19:00', evening],
+                    ['Завтра, 9:00', tomorrow]
+                  ].map(([label, d]) => (
+                    <button
+                      key={label}
+                      type="button"
+                      className="schedule-preset"
+                      onClick={() => setScheduleForm(localDateTimeParts(d))}
+                    >
+                      {label}
+                    </button>
+                  ));
+                })()}
+              </div>
+              <p className="reminder-hint">Сообщение отправится в указанное время, даже если приложение закрыто.</p>
+            </div>
+            <div className="modal-footer">
+              <button type="button" className="cancel-btn" onClick={() => setShowScheduleModal(false)}>
+                Отмена
+              </button>
+              <button type="button" className="create-btn" onClick={handleCreateScheduledMessage}>
+                <ClockIcon /> Запланировать
+              </button>
+            </div>
+        </Dialog>
       )}
 
       {/* Модальное окно бронирования переговорной */}
       {showMeetingModal && (
-        <div key={modalKey} className="modal-overlay" onClick={() => { setShowMeetingModal(false); setMeetingForm({ title: '', description: '', meetingDate: '', startTime: '', endTime: '', organizer: '', reminderMinutes: '15' }); setSelectedMeetingParticipants([]); setParticipantSearchText(''); }}>
-          <div className="modal-content task-modal" onClick={e => e.stopPropagation()} style={{ maxHeight: '85vh', height: '85vh' }}>
+        <Dialog
+          key={modalKey}
+          open
+          onClose={() => { setShowMeetingModal(false); setMeetingForm({ title: '', description: '', meetingDate: '', startTime: '', endTime: '', organizer: '', reminderMinutes: '15' }); setSelectedMeetingParticipants([]); setParticipantSearchText(''); }}
+          className="task-modal"
+        >
             <div className="modal-header">
               <h3>🏢 Забронировать переговорную</h3>
-              <button onClick={() => { setShowMeetingModal(false); setMeetingForm({ title: '', description: '', meetingDate: '', startTime: '', endTime: '', organizer: '', reminderMinutes: '15' }); setSelectedMeetingParticipants([]); setParticipantSearchText(''); }}>✕</button>
+              <button type="button" aria-label="Закрыть" onClick={() => { setShowMeetingModal(false); setMeetingForm({ title: '', description: '', meetingDate: '', startTime: '', endTime: '', organizer: '', reminderMinutes: '15' }); setSelectedMeetingParticipants([]); setParticipantSearchText(''); }}>✕</button>
             </div>
 
             <form style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }} onSubmit={async (e) => {
@@ -14176,17 +15264,18 @@ return parts.length > 0 ? parts : text;
                 </button>
               </div>
             </form>
-          </div>
-        </div>
+        </Dialog>
       )}
 
       {/* Модальное окно выбора участников */}
       {showParticipantModal && (
-        <div className="modal-overlay" onClick={() => setShowParticipantModal(false)}>
-          <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxHeight: '80vh', height: '80vh', display: 'flex', flexDirection: 'column' }}>
+        <Dialog
+          open
+          onClose={() => setShowParticipantModal(false)}
+        >
             <div className="modal-header">
               <h3>👥 Выберите участников</h3>
-              <button onClick={() => setShowParticipantModal(false)}>✕</button>
+              <button type="button" aria-label="Закрыть" onClick={() => setShowParticipantModal(false)}>✕</button>
             </div>
 
             <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
@@ -14340,17 +15429,19 @@ return parts.length > 0 ? parts : text;
                 ✅ Готово
               </button>
             </div>
-          </div>
-        </div>
+        </Dialog>
       )}
 
       {/* Модальное окно редактирования бронирования */}
       {showEditMeetingModal && (
-        <div className="modal-overlay" onClick={() => { setShowEditMeetingModal(false); setEditingBooking(null); setMeetingForm({ title: '', description: '', meetingDate: '', startTime: '', endTime: '', organizer: '', reminderMinutes: '15' }); setSelectedMeetingParticipants([]); setParticipantSearchText(''); }}>
-          <div className="modal-content task-modal" onClick={e => e.stopPropagation()} style={{ maxHeight: '85vh', height: '85vh' }}>
+        <Dialog
+          open
+          onClose={() => { setShowEditMeetingModal(false); setEditingBooking(null); setMeetingForm({ title: '', description: '', meetingDate: '', startTime: '', endTime: '', organizer: '', reminderMinutes: '15' }); setSelectedMeetingParticipants([]); setParticipantSearchText(''); }}
+          className="task-modal"
+        >
             <div className="modal-header">
               <h3>✏️ Редактировать бронирование</h3>
-              <button onClick={() => { setShowEditMeetingModal(false); setEditingBooking(null); setMeetingForm({ title: '', description: '', meetingDate: '', startTime: '', endTime: '', organizer: '', reminderMinutes: '15' }); setSelectedMeetingParticipants([]); setParticipantSearchText(''); }}>✕</button>
+              <button type="button" aria-label="Закрыть" onClick={() => { setShowEditMeetingModal(false); setEditingBooking(null); setMeetingForm({ title: '', description: '', meetingDate: '', startTime: '', endTime: '', organizer: '', reminderMinutes: '15' }); setSelectedMeetingParticipants([]); setParticipantSearchText(''); }}>✕</button>
             </div>
 
             <form style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }} onSubmit={handleUpdateBooking}>
@@ -14486,17 +15577,19 @@ return parts.length > 0 ? parts : text;
                 </button>
               </div>
             </form>
-          </div>
-        </div>
+        </Dialog>
       )}
 
       {/* Модальное окно просмотра медиафайлов */}
       {showMediaViewer && (
-        <div className="modal-overlay" onClick={() => setShowMediaViewer(false)}>
-          <div className="modal-content media-viewer-modal" onClick={e => e.stopPropagation()}>
+        <Dialog
+          open
+          onClose={() => setShowMediaViewer(false)}
+          className="media-viewer-modal"
+        >
             <div className="modal-header">
               <h3>🖼️ Медиафайлы чата</h3>
-              <button onClick={() => setShowMediaViewer(false)}>✕</button>
+              <button type="button" aria-label="Закрыть" onClick={() => setShowMediaViewer(false)}>✕</button>
             </div>
 
             <div className="modal-body">
@@ -14530,17 +15623,19 @@ return parts.length > 0 ? parts : text;
                 Закрыть
               </button>
             </div>
-          </div>
-        </div>
+        </Dialog>
       )}
 
       {/* Модальное окно просмотра документов */}
       {showDocuments && (
-        <div className="modal-overlay" onClick={() => setShowDocuments(false)}>
-          <div className="modal-content documents-modal" onClick={e => e.stopPropagation()}>
+        <Dialog
+          open
+          onClose={() => setShowDocuments(false)}
+          className="documents-modal"
+        >
             <div className="modal-header">
               <h3>📄 Документы чата</h3>
-              <button onClick={() => setShowDocuments(false)}>✕</button>
+              <button type="button" aria-label="Закрыть" onClick={() => setShowDocuments(false)}>✕</button>
             </div>
 
             <div className="modal-body">
@@ -14589,25 +15684,55 @@ return parts.length > 0 ? parts : text;
                 Закрыть
               </button>
             </div>
-          </div>
-        </div>
+        </Dialog>
       )}
 
       {/* Модальное окно подтверждения удаления */}
       {showDeleteConfirm && (
-        <div className="modal-overlay" onClick={() => setShowDeleteConfirm(false)}>
-          <div className="modal-content confirm-modal" onClick={e => e.stopPropagation()}>
+        <Dialog
+          open
+          onClose={() => setShowDeleteConfirm(false)}
+          className="confirm-modal"
+        >
             <div className="modal-header">
               <h3>⚠️ Подтверждение</h3>
-              <button onClick={() => setShowDeleteConfirm(false)}>✕</button>
+              <button type="button" aria-label="Закрыть" onClick={() => setShowDeleteConfirm(false)}>✕</button>
             </div>
 
             <div className="modal-body">
-              <p className="confirm-message">
-                {messageToDelete
-                  ? 'Вы уверены, что хотите удалить это сообщение?'
-                  : `Чат "${(chatToDelete || activeChat)?.name}" будет удалён только у вас — у собеседника чат и его история останутся без изменений.`}
-              </p>
+              {(() => {
+                if (!messageToDelete) {
+                  return (
+                    <p className="confirm-message">
+                      Чат "{chatToDelete?.name || activeChat?.name}" будет удалён только у вас — у собеседника чат и его история останутся без изменений.
+                    </p>
+                  );
+                }
+                // Из контекстного меню приходит только { id }, поэтому ищем полное сообщение
+                const target = messages.find(m => m.id === messageToDelete.id) || messageToDelete;
+                const canForEveryone = canDeleteMessageForEveryone(target);
+                const leftMs = getDeleteForEveryoneLeftMs(target);
+                return (
+                  <>
+                    <p className="confirm-message">Удалить это сообщение?</p>
+                    <div className="delete-mode-hint">
+                      {canForEveryone ? (
+                        <span className="delete-mode-hint-ok">
+                          Удалить у всех можно{leftMs != null ? ` ещё ${formatDeleteForEveryoneLeft(leftMs)}` : ''}.
+                        </span>
+                      ) : target.senderId !== currentUser?.id ? (
+                        <span className="delete-mode-hint-muted">
+                          Сообщение другого человека нельзя удалить у всех — доступно только удаление у себя.
+                        </span>
+                      ) : (
+                        <span className="delete-mode-hint-muted">
+                          Двухчасовой срок истёк — удалить у всех больше нельзя, доступно только удаление у себя.
+                        </span>
+                      )}
+                    </div>
+                  </>
+                );
+              })()}
             </div>
 
             <div className="modal-footer">
@@ -14615,9 +15740,27 @@ return parts.length > 0 ? parts : text;
                 Отмена
               </button>
               {messageToDelete ? (
-                <button className="delete-btn" onClick={confirmDeleteMessage}>
-                  Удалить
-                </button>
+                <>
+                  <button
+                    className="cancel-btn"
+                    onClick={() => confirmDeleteMessage('me')}
+                    title="Сообщение исчезнет только у вас"
+                  >
+                    Удалить у себя
+                  </button>
+                  {(() => {
+                    const target = messages.find(m => m.id === messageToDelete.id) || messageToDelete;
+                    return canDeleteMessageForEveryone(target) ? (
+                      <button
+                        className="delete-btn"
+                        onClick={() => confirmDeleteMessage('everyone')}
+                        title="Сообщение исчезнет у всех, вместо него появится отметка об удалении"
+                      >
+                        Удалить у обоих
+                      </button>
+                    ) : null;
+                  })()}
+                </>
               ) : isAdmin ? (
                 <>
                   <button className="cancel-btn" onClick={confirmDeleteChatForMe} title="Чат исчезнет только из вашего списка">
@@ -14633,17 +15776,19 @@ return parts.length > 0 ? parts : text;
                 </button>
               )}
             </div>
-          </div>
-        </div>
+        </Dialog>
       )}
 
       {/* Подтверждение выхода из группы */}
       {showLeaveConfirm && (
-        <div className="modal-overlay" onClick={() => setShowLeaveConfirm(false)}>
-          <div className="modal-content confirm-modal" onClick={e => e.stopPropagation()}>
+        <Dialog
+          open
+          onClose={() => setShowLeaveConfirm(false)}
+          className="confirm-modal"
+        >
             <div className="modal-header">
               <h3>🚪 Выход из группы</h3>
-              <button onClick={() => setShowLeaveConfirm(false)}>✕</button>
+              <button type="button" aria-label="Закрыть" onClick={() => setShowLeaveConfirm(false)}>✕</button>
             </div>
             <div className="modal-body">
               <p className="confirm-message">
@@ -14654,17 +15799,18 @@ return parts.length > 0 ? parts : text;
               <button className="cancel-btn" onClick={() => setShowLeaveConfirm(false)}>Отмена</button>
               <button className="delete-btn" onClick={confirmLeaveGroup}>Выйти</button>
             </div>
-          </div>
-        </div>
+        </Dialog>
       )}
 
       {/* Модальное окно управления участниками */}
       {showManageParticipants && (
-        <div className="modal-overlay" onClick={() => { setShowManageParticipants(false); setShowAddParticipant(false); setParticipantSearch(''); }}>
-          <div className="modal-content" style={{ maxWidth: 420 }} onClick={e => e.stopPropagation()}>
+        <Dialog
+          open
+          onClose={() => { setShowManageParticipants(false); setShowAddParticipant(false); setParticipantSearch(''); }}
+        >
             <div className="modal-header">
               <h3>👥 Участники группы</h3>
-              <button onClick={() => { setShowManageParticipants(false); setShowAddParticipant(false); setParticipantSearch(''); }}>✕</button>
+              <button type="button" aria-label="Закрыть" onClick={() => { setShowManageParticipants(false); setShowAddParticipant(false); setParticipantSearch(''); }}>✕</button>
             </div>
             <div className="modal-body">
               {activeChat?.participantsDetails?.map(p => (
@@ -14730,17 +15876,18 @@ return parts.length > 0 ? parts : text;
                 Закрыть
               </button>
             </div>
-          </div>
-        </div>
+        </Dialog>
       )}
 
       {/* Модальное окно настроек группы */}
       {showGroupSettings && (
-        <div className="modal-overlay" onClick={() => setShowGroupSettings(false)}>
-          <div className="modal-content" style={{ maxWidth: 440 }} onClick={e => e.stopPropagation()}>
+        <Dialog
+          open
+          onClose={() => setShowGroupSettings(false)}
+        >
             <div className="modal-header">
               <h3>⚙️ Настройки группы</h3>
-              <button onClick={() => setShowGroupSettings(false)}>✕</button>
+              <button type="button" aria-label="Закрыть" onClick={() => setShowGroupSettings(false)}>✕</button>
             </div>
             <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               <label className="modal-label">Название группы</label>
@@ -14756,17 +15903,19 @@ return parts.length > 0 ? parts : text;
               <button className="cancel-btn" onClick={() => setShowGroupSettings(false)}>Отмена</button>
               <button className="create-btn" onClick={handleSaveGroupSettings}>Сохранить</button>
             </div>
-          </div>
-        </div>
+        </Dialog>
       )}
 
       {/* Карточка группы (Информация о группе) */}
       {showGroupInfo && activeChat?.type === 'group' && (
-        <div className="modal-overlay" onClick={() => setShowGroupInfo(false)}>
-          <div className="modal-content group-info-modal" onClick={e => e.stopPropagation()}>
+        <Dialog
+          open
+          onClose={() => setShowGroupInfo(false)}
+          className="group-info-modal"
+        >
             <div className="modal-header">
               <h3>👥 {activeChat.name}</h3>
-              <button onClick={() => setShowGroupInfo(false)}>✕</button>
+              <button type="button" aria-label="Закрыть" onClick={() => setShowGroupInfo(false)}>✕</button>
             </div>
             <div className="modal-body group-info-body">
               <div className="group-info-avatar-wrap">
@@ -14816,17 +15965,18 @@ return parts.length > 0 ? parts : text;
                 )}
               </div>
             </div>
-          </div>
-        </div>
+        </Dialog>
       )}
 
       {/* Редактор объявления группы */}
       {showAnnouncementEditor && (
-        <div className="modal-overlay" onClick={() => setShowAnnouncementEditor(false)}>
-          <div className="modal-content" style={{ maxWidth: 440 }} onClick={e => e.stopPropagation()}>
+        <Dialog
+          open
+          onClose={() => setShowAnnouncementEditor(false)}
+        >
             <div className="modal-header">
               <h3>📌 Объявление группы</h3>
-              <button onClick={() => setShowAnnouncementEditor(false)}>✕</button>
+              <button type="button" aria-label="Закрыть" onClick={() => setShowAnnouncementEditor(false)}>✕</button>
             </div>
             <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               <textarea
@@ -14843,8 +15993,7 @@ return parts.length > 0 ? parts : text;
               {activeChat?.announcement && <button className="delete-btn" onClick={handleClearAnnouncement}>Удалить</button>}
               <button className="create-btn" onClick={handleSaveAnnouncement}>Сохранить</button>
             </div>
-          </div>
-        </div>
+        </Dialog>
       )}
 
       {/* Модальное окно предпросмотра изображения */}
@@ -14859,11 +16008,14 @@ return parts.length > 0 ? parts : text;
 
       {/* Модальное окно выбора статуса */}
       {showStatusPicker && (
-        <div className="modal-overlay" onClick={() => setShowStatusPicker(false)}>
-          <div className="modal-content status-picker-modal" onClick={e => e.stopPropagation()}>
+        <Dialog
+          open
+          onClose={() => setShowStatusPicker(false)}
+          className="status-picker-modal"
+        >
             <div className="modal-header">
               <h3>😊 Мой статус</h3>
-              <button onClick={() => setShowStatusPicker(false)}>✕</button>
+              <button type="button" aria-label="Закрыть" onClick={() => setShowStatusPicker(false)}>✕</button>
             </div>
 
             <div className="modal-body">
@@ -15000,17 +16152,19 @@ return parts.length > 0 ? parts : text;
                 Сохранить
               </button>
             </div>
-          </div>
-        </div>
+        </Dialog>
       )}
 
       {/* Модальное окно обмена задачами */}
       {showShareTaskModal && taskToShare && (
-        <div className="modal-overlay" onClick={() => setShowShareTaskModal(false)}>
-          <div className="modal-content share-task-modal" onClick={e => e.stopPropagation()}>
+        <Dialog
+          open
+          onClose={() => setShowShareTaskModal(false)}
+          className="share-task-modal"
+        >
             <div className="modal-header">
               <h3>📤 Поделиться задачей</h3>
-              <button onClick={() => setShowShareTaskModal(false)}>✕</button>
+              <button type="button" aria-label="Закрыть" onClick={() => setShowShareTaskModal(false)}>✕</button>
             </div>
 
             <div className="modal-body">
@@ -15055,17 +16209,19 @@ return parts.length > 0 ? parts : text;
                 Отправить
               </button>
             </div>
-          </div>
-        </div>
+        </Dialog>
       )}
 
       {/* Модальное окно полученных задач */}
       {showSharedTasksModal && (
-        <div className="modal-overlay" onClick={() => setShowSharedTasksModal(false)}>
-          <div className="modal-content shared-tasks-modal" onClick={e => e.stopPropagation()}>
+        <Dialog
+          open
+          onClose={() => setShowSharedTasksModal(false)}
+          className="shared-tasks-modal"
+        >
             <div className="modal-header">
               <h3>📥 Полученные задачи</h3>
-              <button onClick={() => setShowSharedTasksModal(false)}>✕</button>
+              <button type="button" aria-label="Закрыть" onClick={() => setShowSharedTasksModal(false)}>✕</button>
             </div>
 
             <div className="modal-body">
@@ -15120,8 +16276,7 @@ return parts.length > 0 ? parts : text;
                 Закрыть
               </button>
             </div>
-          </div>
-        </div>
+        </Dialog>
       )}
 
       {/* Контекстное меню чата (в списке чатов) */}
@@ -15136,7 +16291,11 @@ return parts.length > 0 ? parts : text;
         <div
           ref={chatMenuRef}
           className="chat-context-menu"
-          style={{ top: chatContextMenu.y, left: chatContextMenu.x }}
+          style={{
+            top: chatContextMenu.y,
+            left: chatContextMenu.x,
+            transformOrigin: menuTransformOrigin(chatContextMenu.x, chatContextMenu.y, chatContextMenu.rawX, chatContextMenu.rawY)
+          }}
           onClick={closeChatContextMenu}
         >
           <div className="context-menu-items">
@@ -15220,7 +16379,11 @@ return parts.length > 0 ? parts : text;
             const submenuWidth = reactionPickerOpen ? 340 : 50;
             return submenuWidth > 0 && contextMenu.x + 224 + 10 + submenuWidth > window.innerWidth - 8 ? ' reaction-picker-left' : '';
           })()}`}
-          style={{ top: contextMenu.y, left: contextMenu.x }}
+          style={{
+            top: contextMenu.y,
+            left: contextMenu.x,
+            transformOrigin: menuTransformOrigin(contextMenu.x, contextMenu.y, contextMenu.rawX, contextMenu.rawY)
+          }}
           onClick={closeContextMenu}
         >
           {/* Выбор произвольной реакции — эмодзи-пикер (справа от меню) */}
@@ -15268,10 +16431,20 @@ return parts.length > 0 ? parts : text;
             <button className="context-menu-item" onClick={(e) => { e.stopPropagation(); openReply(contextMenu.messageId, contextMenu.messageText, contextMenu.messageSenderName); }}>
               <IconCornerUpLeft /> <span>Ответить</span>
             </button>
+            {/* Обсуждение — ответы уходят в отдельную ветку и не засоряют ленту */}
+            <button className="context-menu-item" onClick={(e) => { e.stopPropagation(); closeContextMenu(); openThread(contextMenu.messageId); }}>
+              <IconMessage /> <span>Обсуждение</span>
+            </button>
             <div className="context-menu-divider"></div>
             <button className="context-menu-item" onClick={(e) => { e.stopPropagation(); handleCopyMessage(); }}>
               <IconCopy /> <span>Копировать</span>
             </button>
+            {/* Копировать выделенное — только если в сообщении есть выделение */}
+            {contextMenu.selectedText && (
+              <button className="context-menu-item" onClick={(e) => { e.stopPropagation(); handleCopySelectedText(); }} title="Скопировать только выделенный фрагмент">
+                <IconCopy /> <span>Скопировать выделенное</span>
+              </button>
+            )}
             {/* Редактировать: только свои сообщения */}
             {contextMenu.messageSenderId === currentUser?.id && (
               <button className="context-menu-item" onClick={(e) => { e.stopPropagation(); openEditMessage(contextMenu.messageId, contextMenu.messageText, contextMenu.messageSenderName); }}>
@@ -15283,6 +16456,9 @@ return parts.length > 0 ? parts : text;
             </button>
             <button className="context-menu-item" onClick={(e) => { e.stopPropagation(); createTaskFromMessage(); }} title="Создать задачу в календаре на основе этого сообщения">
               <IconCalendar /> <span>Создать задачу</span>
+            </button>
+            <button className="context-menu-item" onClick={(e) => { e.stopPropagation(); openMessageReminder(); }} title="Напомнить об этом сообщении в указанное время">
+              <IconBell /> <span>Напомнить</span>
             </button>
             <button className="context-menu-item" onClick={(e) => { e.stopPropagation(); enterSelectionMode(contextMenu.messageId); }} title="Выбрать несколько сообщений для пересылки">
               <IconCheckSquare /> <span>Выбрать сообщения</span>
@@ -15331,7 +16507,11 @@ return parts.length > 0 ? parts : text;
         <div
           ref={inputMenuRef}
           className="message-context-menu input-context-menu"
-          style={{ top: inputContextMenu.y, left: inputContextMenu.x }}
+          style={{
+            top: inputContextMenu.y,
+            left: inputContextMenu.x,
+            transformOrigin: menuTransformOrigin(inputContextMenu.x, inputContextMenu.y, inputContextMenu.rawX, inputContextMenu.rawY)
+          }}
           onClick={closeInputContextMenu}
         >
           <div className="context-menu-items">
@@ -15371,11 +16551,14 @@ return parts.length > 0 ? parts : text;
 
       {/* Модальное окно пересылки сообщения */}
       {showForwardModal && (
-        <div className="modal-overlay" onClick={() => setShowForwardModal(false)}>
-          <div className="modal-content forward-modal" onClick={e => e.stopPropagation()}>
+        <Dialog
+          open
+          onClose={() => setShowForwardModal(false)}
+          className="forward-modal"
+        >
             <div className="modal-header">
               <h3>➤ Переслать сообщение</h3>
-              <button onClick={() => setShowForwardModal(false)}>✕</button>
+              <button type="button" aria-label="Закрыть" onClick={() => setShowForwardModal(false)}>✕</button>
             </div>
 
             <div className="modal-body">
@@ -15453,16 +16636,18 @@ return parts.length > 0 ? parts : text;
                 Переслать
               </button>
             </div>
-          </div>
-        </div>
+        </Dialog>
       )}
 
       {previewAvatar && (
-        <div className="modal-overlay" onClick={() => setPreviewAvatar(null)}>
-          <div className="modal-content avatar-preview-modal" onClick={e => e.stopPropagation()}>
+        <Dialog
+          open
+          onClose={() => setPreviewAvatar(null)}
+          className="avatar-preview-modal"
+        >
             <div className="modal-header">
               <h3>🖼️ Аватар группы</h3>
-              <button onClick={() => setPreviewAvatar(null)}>✕</button>
+              <button type="button" aria-label="Закрыть" onClick={() => setPreviewAvatar(null)}>✕</button>
             </div>
             <div className="modal-body" style={{ textAlign: 'center', padding: '20px' }}>
               <img src={previewAvatar.src} alt="Аватар" className="avatar-preview-img" onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || previewAvatar.alt || 'U')}`; }} />
@@ -15472,16 +16657,18 @@ return parts.length > 0 ? parts : text;
                 </button>
               </div>
             </div>
-          </div>
-        </div>
+        </Dialog>
       )}
 
       {showWikiShareModal && (
-        <div className="modal-overlay" onClick={() => setShowWikiShareModal(false)}>
-          <div className="modal-content forward-modal" onClick={e => e.stopPropagation()}>
+        <Dialog
+          open
+          onClose={() => setShowWikiShareModal(false)}
+          className="forward-modal"
+        >
             <div className="modal-header">
               <h3>📤 Поделиться статьёй</h3>
-              <button onClick={() => setShowWikiShareModal(false)}>✕</button>
+              <button type="button" aria-label="Закрыть" onClick={() => setShowWikiShareModal(false)}>✕</button>
             </div>
 
             <div className="modal-body">
@@ -15558,17 +16745,19 @@ return parts.length > 0 ? parts : text;
                 Отправить
               </button>
             </div>
-          </div>
-        </div>
+        </Dialog>
       )}
 
       {/* Модальное окно редактирования сообщения */}
       {showEditModal && (
-        <div className="modal-overlay" onClick={handleCancelEdit}>
-          <div className="modal-content edit-message-modal" onClick={e => e.stopPropagation()}>
+        <Dialog
+          open
+          onClose={handleCancelEdit}
+          className="edit-message-modal"
+        >
             <div className="modal-header">
               <h3>✏️ Редактировать сообщение</h3>
-              <button onClick={handleCancelEdit}>✕</button>
+              <button type="button" aria-label="Закрыть" onClick={handleCancelEdit}>✕</button>
             </div>
 
             <div className="modal-body">
@@ -15595,17 +16784,19 @@ return parts.length > 0 ? parts : text;
                 Сохранить
               </button>
             </div>
-          </div>
-        </div>
+        </Dialog>
       )}
 
       {/* Модальное окно создания объявления (admin) */}
       {showCreateAnnouncement && (
-        <div className="modal-overlay" onClick={() => { if (!announcementLoading) setShowCreateAnnouncement(false); }}>
-          <div className="modal-content announcement-create-modal" onClick={e => e.stopPropagation()}>
+        <Dialog
+          open
+          onClose={() => { if (!announcementLoading) setShowCreateAnnouncement(false); }}
+          className="announcement-create-modal"
+        >
             <div className="modal-header">
               <h3>📢 Создать объявление</h3>
-              <button onClick={() => setShowCreateAnnouncement(false)} disabled={announcementLoading}>✕</button>
+              <button type="button" aria-label="Закрыть" onClick={() => setShowCreateAnnouncement(false)} disabled={announcementLoading}>✕</button>
             </div>
             <div className="modal-body">
               <div className="ann-form-group">
@@ -15637,17 +16828,19 @@ return parts.length > 0 ? parts : text;
                 {announcementLoading ? '⏳ Публикация...' : '📢 Опубликовать'}
               </button>
             </div>
-          </div>
-        </div>
+        </Dialog>
       )}
 
       {/* Модальное окно списка объявлений */}
       {showAnnouncements && (
-        <div className="modal-overlay" onClick={() => setShowAnnouncements(false)}>
-          <div className="modal-content announcements-modal" onClick={e => e.stopPropagation()}>
+        <Dialog
+          open
+          onClose={() => setShowAnnouncements(false)}
+          className="announcements-modal"
+        >
             <div className="modal-header">
               <h3>📢 Объявления</h3>
-              <button onClick={() => setShowAnnouncements(false)}>✕</button>
+              <button type="button" aria-label="Закрыть" onClick={() => setShowAnnouncements(false)}>✕</button>
             </div>
             <div className="modal-body announcements-body">
               {isAdmin && (
@@ -15686,17 +16879,19 @@ return parts.length > 0 ? parts : text;
                 ))
               )}
             </div>
-          </div>
-        </div>
+        </Dialog>
       )}
 
       {/* Модальное окно заявлений */}
       {showHR && (
-        <div className="modal-overlay" onClick={() => setShowHR(false)}>
-          <div className="modal-content hr-modal" onClick={e => e.stopPropagation()}>
+        <Dialog
+          open
+          onClose={() => setShowHR(false)}
+          className="hr-modal"
+        >
             <div className="modal-header">
               <h3>📋 Заявления</h3>
-              <button onClick={() => setShowHR(false)}>✕</button>
+              <button type="button" aria-label="Закрыть" onClick={() => setShowHR(false)}>✕</button>
             </div>
             <div className="modal-body hr-body">
               {isAdmin && (
@@ -15748,17 +16943,18 @@ return parts.length > 0 ? parts : text;
                 ))
               )}
             </div>
-          </div>
-        </div>
+        </Dialog>
       )}
 
       {/* Модальное окно создания заявления */}
       {showHRCreate && (
-        <div className="modal-overlay" onClick={() => { if (!hrLoading) setShowHRCreate(false); }}>
-          <div className="modal-content" style={{ maxWidth: 450 }} onClick={e => e.stopPropagation()}>
+        <Dialog
+          open
+          onClose={() => { if (!hrLoading) setShowHRCreate(false); }}
+        >
             <div className="modal-header">
               <h3>📋 Новое заявление</h3>
-              <button onClick={() => setShowHRCreate(false)} disabled={hrLoading}>✕</button>
+              <button type="button" aria-label="Закрыть" onClick={() => setShowHRCreate(false)} disabled={hrLoading}>✕</button>
             </div>
             <div className="modal-body">
               <div className="ann-form-group">
@@ -15788,18 +16984,20 @@ return parts.length > 0 ? parts : text;
                 {hrLoading ? '⏳ Отправка...' : '📋 Отправить'}
               </button>
             </div>
-          </div>
-        </div>
+        </Dialog>
       )}
 
       {/* Модальное окно закреплённых сообщений */}
       {/* Модальное окно создания опроса */}
       {showPollModal && (
-        <div className="modal-overlay" onClick={() => { if (!pollLoading) setShowPollModal(false); }}>
-          <div className="modal-content poll-modal" onClick={e => e.stopPropagation()}>
+        <Dialog
+          open
+          onClose={() => { if (!pollLoading) setShowPollModal(false); }}
+          className="poll-modal"
+        >
             <div className="modal-header">
               <h3>📊 Создать опрос</h3>
-              <button onClick={() => setShowPollModal(false)} disabled={pollLoading}>✕</button>
+              <button type="button" aria-label="Закрыть" onClick={() => setShowPollModal(false)} disabled={pollLoading}>✕</button>
             </div>
             <div className="modal-body">
               <div className="poll-form-group">
@@ -15856,58 +17054,26 @@ return parts.length > 0 ? parts : text;
                 {pollLoading ? '⏳ Создание...' : '📊 Создать опрос'}
               </button>
             </div>
-          </div>
-        </div>
+      </Dialog>
       )}
 
-      {showPinnedModal && (
-        <div className="modal-overlay" onClick={() => setShowPinnedModal(false)}>
-          <div className="modal-content pinned-modal" onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3>📌 Закреплённые сообщения</h3>
-              <button onClick={() => setShowPinnedModal(false)}>✕</button>
-            </div>
-            <div className="modal-body pinned-modal-body">
-              {pinnedMessages[activeChatIdRef.current] && pinnedMessages[activeChatIdRef.current].length > 0 ? (
-                pinnedMessages[activeChatIdRef.current].map((pinnedMsg) => (
-                  <div key={pinnedMsg.id} className="pinned-message-item">
-                    <div className="pinned-message-header">
-                      <img
-                        src={normalizeFileUrl(pinnedMsg.senderAvatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(pinnedMsg.senderName || 'U')}`)}
-                        alt={pinnedMsg.senderName}
-                        className="pinned-message-avatar"
-                        onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(e.target.alt || 'U')}`; }}
-                      />
-                      <div className="pinned-message-meta">
-                        <span className="pinned-message-sender">{pinnedMsg.senderName}</span>
-                        <span className="pinned-message-time">{formatTime(pinnedMsg.timestamp)}</span>
-                      </div>
-                      <button
-                        className="pinned-message-unpin-btn"
-                        onClick={() => handleUnpinMessage(pinnedMsg.id)}
-                        title="Открепить"
-                      >
-                        ✕
-                      </button>
-                    </div>
-                    <div className="pinned-message-text">
-                      {renderMessageContent(pinnedMsg.text || '')}
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <div className="pinned-empty">
-                  <span className="pinned-empty-icon">📌</span>
-                  <p>Нет закреплённых сообщений</p>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Окно обсуждения */}
+      <ThreadModal
+        open={threadModal.open}
+        messageId={threadModal.messageId}
+        serverUrl={SOCKET_URL}
+        currentUser={currentUser}
+        onClose={closeThread}
+        formatTime={formatTime}
+        renderMessageContent={renderMessageContent}
+        refreshTick={threadRefreshTick}
+        onReplySent={(rootId, count) => {
+          setMessages(prev => prev.map(m => (m.id === rootId ? { ...m, threadReplyCount: count } : m)));
+        }}
+      />
 
-      {/* Конфетти на праздничные сообщения */}
-        {confettiKey > 0 && <ConfettiOverlay key={confettiKey} />}
+      {/* Ск��рые"��'��'�� ��?�� ���?�����?�?�� ���� ��? ���? ��'��'��'��'� ��'��'?? */}
+          {confettiKey > 0 && <ConfettiOverlay key={confettiKey} />}
 
         {/* Оверлей звонка (аудио/видео 1:1) */}
         <CallOverlay

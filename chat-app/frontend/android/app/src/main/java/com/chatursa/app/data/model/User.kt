@@ -14,6 +14,17 @@ data class User(
     val lastSeen: String? = null
 )
 
+data class ChatParticipant(
+    val id: String = "",
+    val username: String = "",
+    val avatar: String? = null,
+    val status: String = "offline",
+    val statusText: String? = null,
+    val fullName: String? = null,
+    val lastSeen: String? = null,
+    val role: String = "member"
+)
+
 data class Chat(
     val id: String = "",
     val type: String = "direct",
@@ -23,10 +34,18 @@ data class Chat(
     val unreadCount: Int = 0,
     val participants: List<String> = emptyList(),
     val participantNames: Map<String, String> = emptyMap(),
+    val participantsDetails: List<ChatParticipant> = emptyList(),
     val lastActivity: String? = null,
     val isOnline: Boolean = false,
     val createdBy: String? = null,
-    val lastSeen: String? = null
+    val lastSeen: String? = null,
+    val pinned: Boolean = false,
+    val muted: Boolean = false,
+    val forceUnread: Boolean = false,
+    val restricted: Boolean = false,
+    val description: String? = null,
+    val announcement: String? = null,
+    val e2ee: Boolean = false
 )
 
 data class Message(
@@ -43,7 +62,12 @@ data class Message(
     val readAt: String? = null,
     val edited: Boolean = false,
     val reactions: List<Reaction> = emptyList(),
-    val isPinned: Boolean = false
+    val isPinned: Boolean = false,
+    val isSystem: Boolean = false,
+    val expiresAt: String? = null,
+    val replyCount: Int = 0,
+    val localId: String? = null,
+    val status: String = "sent"
 )
 
 data class FileData(

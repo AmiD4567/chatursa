@@ -157,6 +157,10 @@ function initDatabase() {
       task_end_time TEXT,
       color TEXT DEFAULT '#667eea',
       reminder_time TEXT,
+      kind TEXT NOT NULL DEFAULT 'task',
+      source_chat_id TEXT,
+      source_message_id TEXT,
+      source_message_preview TEXT,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
     CREATE INDEX IF NOT EXISTS idx_calendar_tasks_user ON calendar_tasks(user_id);
@@ -425,6 +429,15 @@ function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_message_reads_message ON message_reads(message_id);
     CREATE INDEX IF NOT EXISTS idx_message_reads_user ON message_reads(user_id);
 
+    -- Удаление «только у себя»: сообщение остаётся у всех, кроме этого пользователя
+    CREATE TABLE IF NOT EXISTS message_hidden (
+      message_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (message_id, user_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_message_hidden_user ON message_hidden(user_id);
+
     CREATE TABLE IF NOT EXISTS calls (
       id TEXT PRIMARY KEY,
       type TEXT NOT NULL CHECK(type IN ('audio', 'video')),
@@ -437,6 +450,28 @@ function initDatabase() {
     );
     CREATE INDEX IF NOT EXISTS idx_calls_initiator ON calls(initiator_id);
     CREATE INDEX IF NOT EXISTS idx_calls_peer ON calls(peer_id);
+  `);
+
+  // Отложенные сообщения: пользователь планирует отправку на будущее время.
+  // payload — JSON с теми же полями, что у send_message (text, replyTo, e2ee...).
+  // scheduled_at_ms — epoch-мс для надёжного сравнения с текущим временем.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS scheduled_messages (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      chat_id TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      preview TEXT,
+      scheduled_at TEXT NOT NULL,
+      scheduled_at_ms INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      sent_message_id TEXT,
+      error TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_scheduled_status ON scheduled_messages(status, scheduled_at_ms);
+    CREATE INDEX IF NOT EXISTS idx_scheduled_user ON scheduled_messages(user_id);
   `);
 
   // Миграции колонок — ПОСЛЕ создания всех таблиц
@@ -485,10 +520,13 @@ function initDatabase() {
     { table: 'user_device_sessions', column: 'last_seen', type: 'TEXT DEFAULT CURRENT_TIMESTAMP' },
     { table: 'user_device_sessions', column: 'is_current', type: 'INTEGER DEFAULT 0' },
     { table: 'messages', column: 'button_data', type: 'TEXT' },
+    // Мягкое удаление «у обоих»: строка остаётся, чтобы сохранить позицию
+    // в ленте, но содержимое затирается, а клиент рисует заглушку.
+    { table: 'messages', column: 'deleted_at', type: 'TEXT' },
+    { table: 'messages', column: 'deleted_by', type: 'TEXT' },
     { table: 'users', column: 'onboarding_completed', type: 'INTEGER DEFAULT 0' },
     { table: 'wiki_articles', column: 'views', type: 'INTEGER DEFAULT 0' },
     { table: 'wiki_articles', column: 'access_level', type: 'TEXT DEFAULT \'public\'' },
-    { table: 'users', column: 'can_view_kpi', type: 'INTEGER DEFAULT 0' },
     { table: 'users', column: 'app_version', type: 'TEXT DEFAULT \'\'' },
     { table: 'chat_user_settings', column: 'deleted_at', type: 'TEXT' },
     { table: 'calendar_tasks', column: 'source_chat_id', type: 'TEXT' },
@@ -496,7 +534,9 @@ function initDatabase() {
     { table: 'chat_participants', column: 'role', type: "TEXT NOT NULL DEFAULT 'member'" },
     { table: 'chats', column: 'description', type: 'TEXT' },
     { table: 'chats', column: 'restricted', type: 'INTEGER DEFAULT 0' },
-    { table: 'messages', column: 'is_system', type: 'INTEGER DEFAULT 0' }
+    { table: 'messages', column: 'is_system', type: 'INTEGER DEFAULT 0' },
+    { table: 'calendar_tasks', column: 'kind', type: "TEXT NOT NULL DEFAULT 'task'" },
+    { table: 'calendar_tasks', column: 'source_message_preview', type: 'TEXT' }
   ];
 
   migrations.forEach(({ table, column, type }) => {

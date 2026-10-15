@@ -32,14 +32,18 @@ app.get('/api/messages/:chatId', (req, res) => {
 
     const rows = db.prepare(`
       SELECT m.id, m.chat_id, m.sender_id, m.text, m.file_data, m.reply_to, m.timestamp, m.read_at,
-             m.e2ee, m.e2ee_nonce, m.e2ee_ephemeral, m.poll_id,
-             u.username as senderName, u.avatar as senderAvatar
+             m.e2ee, m.e2ee_nonce, m.e2ee_ephemeral, m.poll_id, m.deleted_at, m.deleted_by,
+             u.username as senderName, u.avatar as senderAvatar,
+             d.username as deletedByName
       FROM messages m
       LEFT JOIN users u ON m.sender_id = u.id
+      LEFT JOIN users d ON m.deleted_by = d.id
       WHERE m.chat_id = ?
         AND (? IS NULL OR m.timestamp > ?)
+        AND m.id NOT IN (SELECT message_id FROM message_hidden WHERE user_id = ?)
+        AND (m.reply_to IS NULL OR json_extract(m.reply_to, '$.thread') IS NOT 1)
       ORDER BY m.timestamp ASC
-    `).all(chatId, clearedAt, clearedAt);
+    `).all(chatId, clearedAt, clearedAt, userId || '');
 
     const messages = rows.map(row => {
       const isE2EE = row.e2ee === 1 || row.e2ee === true;
@@ -71,7 +75,11 @@ app.get('/api/messages/:chatId', (req, res) => {
         senderAvatar: row.senderAvatar,
         e2ee: isE2EE ? 1 : 0,
         e2ee_nonce: isE2EE ? (row.e2ee_nonce || '') : undefined,
-        e2ee_ephemeral: isE2EE ? (row.e2ee_ephemeral || '') : undefined
+        e2ee_ephemeral: isE2EE ? (row.e2ee_ephemeral || '') : undefined,
+        // Мягкое удаление «у обоих»
+        deleted_at: row.deleted_at || null,
+        deleted_by: row.deleted_by || null,
+        deletedByName: row.deletedByName || null
       };
     });
 
@@ -83,6 +91,24 @@ app.get('/api/messages/:chatId', (req, res) => {
     }
     for (const msg of messages) {
       msg.replyCount = replyCounts[msg.id] || 0;
+    }
+
+    // Ответы в тредах в ленту не попадают (их отфильтровали выше), поэтому
+    // считаем их отдельным запросом — иначе бейдж «N ответов» всегда был бы 0.
+    // Счёт отдельный, чтобы не смешивать с обычными цитатами.
+    const threadCounts = {};
+    const threadRows = db.prepare(`
+      SELECT json_extract(reply_to, '$.messageId') AS root, COUNT(*) AS c
+      FROM messages
+      WHERE chat_id = ? AND reply_to IS NOT NULL
+        AND json_extract(reply_to, '$.thread') = 1
+      GROUP BY root
+    `).all(chatId);
+    for (const r of threadRows) {
+      if (r.root) threadCounts[r.root] = r.c;
+    }
+    for (const msg of messages) {
+      msg.threadReplyCount = threadCounts[msg.id] || 0;
     }
 
     res.json({ messages });
@@ -156,6 +182,13 @@ app.get('/api/messages/:messageId/read-by', (req, res) => {
   }
 });
 
+// Потолок сканирования — страховка от роста БД, не от длины запроса
+const SEARCH_SCAN_LIMIT = 50000;
+// Сколько совпадений реально отдаём; total считаем по всей истории
+const SEARCH_RESULT_LIMIT = 200;
+// Ниже — расшифровывать историю впустую
+const SEARCH_MIN_LENGTH = 2;
+
 // API для поиска сообщений
 app.get('/api/search/messages', (req, res) => {
   const { userId, query, chatId } = req.query;
@@ -163,10 +196,13 @@ app.get('/api/search/messages', (req, res) => {
     return res.status(400).json({ error: 'userId и query обязательны' });
   }
 
-  try {
-    const searchLower = query.trim().toLowerCase();
+  const searchLower = query.trim().toLowerCase();
+  if (searchLower.length < SEARCH_MIN_LENGTH) {
+    return res.json({ messages: [], total: 0, truncated: false });
+  }
 
-    // Загружаем сообщения из чатов пользователя (без LIKE — текст зашифрован)
+  try {
+    // Загружаем ВСЮ историю чатов пользователя (без LIKE — текст зашифрован)
     let sql = `
       SELECT m.id, m.chat_id, m.sender_id, m.text, m.file_data, m.reply_to, m.timestamp, m.read_at,
              m.e2ee, m.e2ee_nonce, m.e2ee_ephemeral, m.poll_id,
@@ -178,53 +214,63 @@ app.get('/api/search/messages', (req, res) => {
       WHERE m.chat_id IN (
         SELECT chat_id FROM chat_participants WHERE user_id = ?
       )
+        AND m.deleted_at IS NULL
+        AND m.id NOT IN (SELECT message_id FROM message_hidden WHERE user_id = ?)
     `;
-    const params = [userId];
+    const params = [userId, userId];
 
     if (chatId) {
       sql += ` AND m.chat_id = ?`;
       params.push(chatId);
     }
 
-    sql += ` ORDER BY m.timestamp DESC LIMIT 500`;
+    sql += ` ORDER BY m.timestamp DESC LIMIT ?`;
+    params.push(SEARCH_SCAN_LIMIT);
 
     const rows = db.prepare(sql).all(...params);
 
-    // Расшифровываем и фильтруем на уровне JS
-    const messages = rows
-      .map(row => {
-        let file = null;
-        if (row.file_data) {
-          try { file = JSON.parse(row.file_data); } catch (e) { file = null; }
-        }
-        let poll = null;
-        if (row.poll_id) {
-          poll = getPollWithVotes(row.poll_id, userId);
-        }
-        let reply_to = null;
-        if (row.reply_to) {
-          try { reply_to = JSON.parse(row.reply_to); } catch { reply_to = null; }
-        }
-        const decryptedText = decryptText(row.text) || '';
-        return {
-          id: row.id,
-          chatId: row.chat_id,
-          senderId: row.sender_id,
-          text: decryptedText,
-          file,
-          poll,
-          reply_to,
-          timestamp: row.timestamp,
-          read_at: row.read_at || null,
-          senderName: row.senderName,
-          senderAvatar: row.senderAvatar,
-          chatName: row.chatName || 'Чат',
-          e2ee: row.e2ee === 1 ? 1 : 0
-        };
-      })
-      .filter(msg => msg.text.toLowerCase().includes(searchLower));
+    // Сначала расшифровываем и сверяем текст, объект собираем лишь для совпадений:
+    // так не тратимся на JSON.parse и запросы опросов для несовпавших строк
+    const messages = [];
+    let total = 0;
 
-    res.json({ messages });
+    for (const row of rows) {
+      const text = decryptText(row.text) || '';
+      if (!text.toLowerCase().includes(searchLower)) continue;
+
+      total++;
+      if (messages.length >= SEARCH_RESULT_LIMIT) continue;
+
+      let file = null;
+      if (row.file_data) {
+        try { file = JSON.parse(row.file_data); } catch (e) { file = null; }
+      }
+      let poll = null;
+      if (row.poll_id) {
+        poll = getPollWithVotes(row.poll_id, userId);
+      }
+      let reply_to = null;
+      if (row.reply_to) {
+        try { reply_to = JSON.parse(row.reply_to); } catch { reply_to = null; }
+      }
+      messages.push({
+        id: row.id,
+        chatId: row.chat_id,
+        senderId: row.sender_id,
+        text,
+        file,
+        poll,
+        reply_to,
+        timestamp: row.timestamp,
+        read_at: row.read_at || null,
+        senderName: row.senderName,
+        senderAvatar: row.senderAvatar,
+        chatName: row.chatName || 'Чат',
+        e2ee: row.e2ee === 1 ? 1 : 0
+      });
+    }
+
+    res.json({ messages, total, truncated: total > messages.length });
   } catch (err) {
     console.error('Ошибка поиска сообщений:', err);
     res.status(500).json({ error: 'Ошибка при поиске сообщений' });
@@ -403,10 +449,15 @@ app.post('/api/messages', (req, res) => {
   const replyToStr = replyTo ? JSON.stringify(replyTo) : null;
 
   try {
+    // Текст шифруем, как это делает socket-обработчик send_message.
+    // Раньше здесь писался открытый текст, а при чтении к нему применялся
+    // decryptText — ответ в треде получался мусором и лежал незашифрованным.
+    const storedText = encryptText(text);
+
     db.prepare(`
       INSERT INTO messages (id, chat_id, sender_id, text, reply_to, timestamp)
       VALUES (?, ?, ?, ?, ?, ?)
-    `).run(messageId, chatId, senderId, text, replyToStr, timestamp);
+    `).run(messageId, chatId, senderId, storedText, replyToStr, timestamp);
 
     const messageRow = db.prepare(`
       SELECT m.*, u.username as senderName, u.avatar as senderAvatar
@@ -415,13 +466,14 @@ app.post('/api/messages', (req, res) => {
       WHERE m.id = ?
     `).get(messageId);
 
+    // Отправителю отдаём исходный текст, а не зашифрованный
     const newMessage = {
       id: messageRow.id,
       chatId: messageRow.chat_id,
       senderId: messageRow.sender_id,
       senderName: messageRow.senderName,
       senderAvatar: messageRow.senderAvatar,
-      text: messageRow.text || '',
+      text,
       file: null,
       reply_to: messageRow.reply_to ? JSON.parse(messageRow.reply_to) : null,
       replyCount: 0,
@@ -463,20 +515,18 @@ app.get('/api/thread/:messageId', (req, res) => {
       return res.status(404).json({ error: 'Сообщение не найдено' });
     }
 
+    // Фильтруем в базе: раньше вытягивались все ответы чата и отбирались в JS
     const replies = db.prepare(`
       SELECT m.*, u.username as senderName, u.avatar as senderAvatar
       FROM messages m
       JOIN users u ON m.sender_id = u.id
-      WHERE m.chat_id = ? AND m.reply_to IS NOT NULL AND m.id != ?
+      WHERE m.chat_id = ?
+        AND json_extract(m.reply_to, '$.messageId') = ?
+        AND json_extract(m.reply_to, '$.thread') = 1
       ORDER BY m.timestamp ASC
     `).all(original.chat_id, messageId);
 
-    const threadReplies = replies.filter(r => {
-      try {
-        const rt = JSON.parse(r.reply_to);
-        return rt.messageId === messageId;
-      } catch { return false; }
-    }).map(row => {
+    const threadReplies = replies.map(row => {
       const rIsE2EE = row.e2ee === 1 || row.e2ee === true;
       return {
         id: row.id,

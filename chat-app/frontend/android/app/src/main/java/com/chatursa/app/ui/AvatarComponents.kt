@@ -7,7 +7,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -17,7 +20,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import coil.compose.AsyncImagePainter
 import com.chatursa.app.avatarUrl
+import com.chatursa.app.data.model.Chat
 
 private val avatarColors = listOf(
     0xFF6C5CE7, 0xFF00B894, 0xFFE17055, 0xFF0984E3,
@@ -49,6 +54,7 @@ fun ChatAvatar(
 ) {
     val bgColor = remember(name) { colorForName(name) }
     val initialsText = remember(name) { initials(name) }
+    var failed by remember(avatarUrl) { mutableStateOf(false) }
 
     Box(
         modifier = modifier
@@ -57,10 +63,13 @@ fun ChatAvatar(
             .background(bgColor),
         contentAlignment = Alignment.Center
     ) {
-        if (!avatarUrl.isNullOrBlank()) {
+        if (!avatarUrl.isNullOrBlank() && !failed) {
             AsyncImage(
                 model = avatarUrl,
                 contentDescription = name,
+                onState = { state ->
+                    if (state is AsyncImagePainter.State.Error) failed = true
+                },
                 modifier = Modifier
                     .size(size)
                     .clip(CircleShape),
@@ -83,4 +92,10 @@ fun chatAvatarUrl(
     size: Int = 128
 ): String {
     return chatAvatar ?: avatarUrl(chatName ?: "?", size)
+}
+
+fun Chat.avatarOrPeer(size: Int = 128): String? {
+    return avatar?.takeIf { it.isNotBlank() }
+        ?: participantsDetails.firstOrNull { it.avatar?.isNotBlank() == true }?.avatar
+        ?: avatarUrl(name.ifBlank { "?" }, size)
 }

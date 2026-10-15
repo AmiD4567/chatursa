@@ -215,9 +215,56 @@
   color: var(--text-tertiary);
 }
 
+.file-search-preview {
+  font-size: 11px;
+  color: var(--text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
 @keyframes spin {
   from { transform: translateY(-50%) rotate(0deg); }
   to { transform: translateY(-50%) rotate(360deg); }
+}
+
+.search-tabs {
+  display: flex;
+  gap: 6px;
+  padding: 8px 12px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border-glass);
+  flex-shrink: 0;
+  scrollbar-width: none;
+}
+
+.search-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.search-tab {
+  padding: 5px 10px;
+  border-radius: 14px;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid transparent;
+  color: var(--text-secondary);
+  transition: all var(--transition-fast);
+}
+
+.search-tab:hover {
+  background: rgba(102, 126, 234, 0.18);
+  color: var(--text-primary);
+}
+
+.search-tab.active {
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.35) 0%, rgba(118, 75, 162, 0.35) 100%);
+  border-color: rgba(102, 126, 234, 0.5);
+  color: var(--text-primary);
 }
 
 .chats-search-results-header {
@@ -751,6 +798,7 @@
 
 .chat-main {
   flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   background: var(--chat-bg, #0f0f1a);
@@ -806,6 +854,7 @@
   flex-direction: column;
   flex: 1;
   min-height: 0;
+  min-width: 0;
   overflow: hidden;
   position: relative;
   z-index: 1;
@@ -814,14 +863,11 @@
 
 .chat-header-main {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 16px 24px;
+  flex-direction: column;
+  align-items: stretch;
+  padding: 12px 24px;
   min-height: var(--chat-header-height);
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
+  position: relative;
   background: rgba(15, 15, 26, 0.5);
   backdrop-filter: var(--glass-blur);
   -webkit-backdrop-filter: var(--glass-blur);
@@ -830,10 +876,26 @@
   z-index: 25;
 }
 
+.chat-header-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+
 .chat-title {
   display: flex;
   align-items: center;
   gap: 12px;
+  min-width: 0;
+}
+
+/* Обёртка имени/статуса — должна уметь сжиматься, иначе длинное имя
+   распирает шапку и появляется горизонтальное переполнение */
+.chat-title > div {
+  min-width: 0;
 }
 
 .chat-icon-large {
@@ -861,6 +923,9 @@
   color: var(--page-text-primary);
   margin: 0;
   font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .chat-status {
@@ -969,7 +1034,7 @@
 .messages-container-main {
   flex: 1;
   overflow-y: auto;
-  padding: calc(var(--chat-header-height, 72px) + 20px) 24px 160px;
+  padding: 16px 24px 160px;
   z-index: 1;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
@@ -1142,6 +1207,38 @@
   position: relative;
   max-width: 100%;
   min-width: 0;
+}
+
+/* ФИО отправителя над сообщением — только в группах и Общем чате */
+.message-sender-name {
+  display: block;
+  max-width: 100%;
+  padding: 0 4px;
+  margin-bottom: 3px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.message-main.own .message-sender-name {
+  text-align: right;
+}
+
+/* Сообщение, удалённое у всех: остаётся на месте, но без содержимого */
+.message-deleted-wrapper {
+  padding: 10px 14px 8px;
+}
+
+.message-deleted-text {
+  font-size: 14px;
+  font-style: italic;
+  line-height: 1.4;
+  color: var(--text-secondary);
+  word-break: break-word;
 }
 
 /* Wrapper для текста и времени */
@@ -1498,6 +1595,29 @@
   color: #4CAF50 !important;
 }
 
+/* Сообщение из очереди отправки: сервер его ещё не принял */
+.message-status.pending {
+  opacity: 0.65;
+  cursor: default;
+}
+
+/* Не доставилось после нескольких попыток — клик шлёт повторно */
+.message-status.failed {
+  color: #E5484D !important;
+  cursor: pointer;
+  font-weight: 700;
+  animation: message-status-pulse 1.6s ease-in-out infinite;
+}
+
+.message-status.failed:hover {
+  color: #ff6b6f !important;
+}
+
+@keyframes message-status-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
 /* Бейдж пересланного сообщения */
 .forwarded-badge {
   font-size: 11px;
@@ -1647,6 +1767,68 @@
 .message-file-main img:hover {
   transform: scale(1.03);
   box-shadow: var(--shadow-md);
+}
+
+/* Картинка внутри пузыря сообщения: единый блок с подписью, как в Telegram.
+   Обёртка обнуляется, изображение занимает её целиком и обрезается по
+   скруглению пузыря, а отступ переносится в .message-text-content.
+   Селекторы own / :not(.own) продублированы намеренно — иначе правило
+   .message-main:not(.own) .message-text-wrapper вернёт отступы обратно. */
+.message-main.own .message-text-wrapper.has-image,
+.message-main:not(.own) .message-text-wrapper.has-image {
+  padding: 0;
+  overflow: hidden;
+  width: fit-content;
+  max-width: min(420px, 100%);
+  /* Колонку задаёт картинка, а подпись переносится внутри неё — как в Telegram.
+     Раньше ширину пузыря определяла самая длинная строка текста (fit-content),
+     из-за чего длинная подпись растягивала пузырь почти на весь чат, а картинка
+     с потолком 320px оставалась слева с пустым местом справа. */
+  display: grid;
+  grid-template-columns: minmax(0, max-content);
+  justify-content: start;
+}
+
+/* Все блоки (картинка, текст со временем, реакции) — в одну колонку */
+.message-main.own .message-text-wrapper.has-image > *,
+.message-main:not(.own) .message-text-wrapper.has-image > * {
+  grid-column: 1;
+}
+
+/* width:0 убирает вклад подписи в ширину колонки, min-width:100% растягивает её
+   обратно — текст переносится по ширине картинки, но не распирает пузырь */
+.message-text-wrapper.has-image .message-text-content {
+  width: 0;
+  min-width: 100%;
+  padding: 10px 16px 10px;
+}
+
+.message-text-wrapper.has-image .message-file-main {
+  margin: 0;
+  line-height: 0;
+}
+
+.message-text-wrapper.has-image .message-file-main img {
+  display: block;
+  width: 100%;
+  max-width: 420px;
+  max-height: 560px;
+  /* Без object-fit портретное фото сжимается по высоте и растягивается по
+     ширине: max-height наследуется из базового правила .message-file-main img. */
+  object-fit: cover;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+/* Масштаб при наведении обрезался бы краями пузыря */
+.message-text-wrapper.has-image .message-file-main img:hover {
+  transform: none;
+  box-shadow: none;
+}
+
+.message-text-wrapper.has-image .message-text-content {
+  padding: 10px 16px 10px;
 }
 
 /* Встроенный видеоплеер в сообщении */
@@ -1818,6 +2000,7 @@
 .messages-area-wrapper {
   position: relative;
   flex: 1;
+  min-width: 0;
   display: flex;
   min-height: 0;
 }
@@ -1869,7 +2052,6 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  padding-top: var(--chat-header-height, 72px);
   z-index: 3;
 }
 
@@ -2106,6 +2288,8 @@
   flex-direction: column;
   gap: 6px;
   margin-bottom: 8px;
+  transform-origin: bottom left;
+  animation: popupDropIn var(--motion-dur-base) var(--motion-ease-out) both;
 }
 
 .selected-file-main {
@@ -2197,7 +2381,7 @@
   height: var(--app-height, 100vh);
   background: linear-gradient(135deg, #1a1a2e 0%, #0f0f1a 100%);
   box-shadow: -5px 0 20px rgba(0, 0, 0, 0.3);
-  z-index: 9998;
+  z-index: var(--z-emoji-rail);
   transition: right 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   display: flex;
   flex-direction: column;
@@ -2477,7 +2661,7 @@
   border-radius: 12px;
   box-shadow: var(--shadow-lg);
   min-width: 220px;
-  z-index: 1000;
+  z-index: var(--z-dropdown);
   overflow: hidden;
   animation: slideUp 0.2s ease;
 }
@@ -2671,13 +2855,13 @@
 .read-by-overlay {
   position: fixed;
   top: 0; left: 0; right: 0; bottom: 0;
-  z-index: 999;
+  z-index: var(--z-dim);
   background: transparent;
 }
 
 .read-by-popup {
   position: fixed;
-  z-index: 1000;
+  z-index: var(--z-dropdown);
   background: var(--card-bg, #fff);
   border: 1px solid var(--border-color, #e0e0e0);
   border-radius: 10px;
@@ -2686,6 +2870,8 @@
   min-width: 180px;
   max-height: 240px;
   overflow-y: auto;
+  transform-origin: top right;
+  animation: popupFadeIn var(--motion-dur-base) var(--motion-ease-out) both;
 }
 
 .read-by-header {
@@ -2807,7 +2993,7 @@
 /* @Mention dropdown */
 .mention-dropdown {
   position: fixed;
-  z-index: 2000;
+  z-index: var(--z-overlay);
   background: var(--card-bg, #fff);
   border: 1px solid var(--border-color, #e0e0e0);
   border-radius: 10px;
@@ -2815,7 +3001,8 @@
   padding: 4px 0;
   min-width: 180px;
   max-height: 260px;
-  overflow-y: auto;
+  transform-origin: top left;
+  animation: popupFadeIn var(--motion-dur-base) var(--motion-ease-out) both;
 }
 
 .mention-item {
@@ -2857,6 +3044,7 @@
   display: flex;
   align-items: center;
   gap: 2px;
+  flex-shrink: 0;
 }
 
 .chat-search-btn {
@@ -2874,5 +3062,209 @@
 .chat-search-btn.active {
   background: var(--hover-bg, #f0f0f0);
   color: var(--page-text-primary, #333);
+}
+
+/* ===== Отложенная отправка: чип и панель ===== */
+.scheduled-chip-wrap {
+  position: absolute;
+  left: 24px;
+  bottom: calc(100% + 2px);
+  z-index: 30;
+}
+
+.scheduled-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border: 1px solid var(--border-color, rgba(0, 0, 0, 0.12));
+  background: var(--bg-secondary, #f5f5f7);
+  color: var(--page-text-primary, #333);
+  border-radius: 16px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.scheduled-chip:hover,
+.scheduled-chip.open {
+  background: var(--hover-bg, #ececf1);
+  border-color: #667eea;
+}
+
+.scheduled-chip svg {
+  width: 14px;
+  height: 14px;
+  color: #667eea;
+}
+
+.scheduled-panel {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: var(--z-panel);
+  width: 300px;
+  max-width: 90vw;
+  max-height: 280px;
+  overflow-y: auto;
+  background: var(--page-card-bg, #fff);
+  border: 1px solid var(--page-card-border, rgba(0, 0, 0, 0.1));
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
+  padding: 6px;
+}
+
+.scheduled-panel-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+}
+
+.scheduled-panel-item:hover {
+  background: var(--hover-bg, #f2f2f7);
+}
+
+.scheduled-panel-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.scheduled-panel-time {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #667eea;
+}
+
+.scheduled-panel-time svg {
+  width: 12px;
+  height: 12px;
+}
+
+.scheduled-panel-preview {
+  font-size: 12px;
+  color: var(--page-text-primary, #333);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.scheduled-panel-cancel {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary, #888);
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+}
+
+.scheduled-panel-cancel:hover {
+  background: rgba(220, 53, 69, 0.12);
+  color: #dc3545;
+}
+
+.scheduled-panel-cancel svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* ===== Модалки напоминания / отложенной отправки ===== */
+.reminder-modal {
+  max-width: 440px;
+}
+
+.reminder-modal .modal-header h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.reminder-modal .modal-header h3 svg {
+  width: 18px;
+  height: 18px;
+  color: #667eea;
+}
+
+.reminder-preview {
+  background: var(--bg-secondary, #f5f5f7);
+  border-left: 3px solid #667eea;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 16px;
+}
+
+.reminder-preview-author {
+  font-size: 12px;
+  font-weight: 600;
+  color: #667eea;
+  margin-bottom: 4px;
+}
+
+.reminder-preview-text {
+  font-size: 13px;
+  color: var(--page-text-primary, #333);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.reminder-hint {
+  font-size: 12px;
+  color: var(--text-secondary, #888);
+  line-height: 1.4;
+  margin: 4px 0 0;
+}
+
+.schedule-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.schedule-preset {
+  padding: 6px 12px;
+  border: 1px solid var(--border-color, rgba(0, 0, 0, 0.12));
+  border-radius: 16px;
+  background: var(--bg-secondary, #f5f5f7);
+  color: var(--page-text-primary, #333);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.schedule-preset:hover {
+  border-color: #667eea;
+  background: var(--hover-bg, #ececf1);
+}
+
+/* ===== Напоминания о сообщениях в календаре ===== */
+.calendar-task-item.is-reminder {
+  border-left-color: #f39c12;
+}
+
+.calendar-task-item.is-reminder .calendar-task-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.calendar-task-item.is-reminder .calendar-task-title svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: #f39c12;
 }
 

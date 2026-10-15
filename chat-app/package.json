@@ -1,6 +1,6 @@
 {
     "name": "chat-app",
-    "version": "1.0.208",
+    "version": "1.0.210",
     "description": "РљРѕСЂРїРѕСЂР°С‚РёРІРЅС‹Р№ РјРµСЃСЃРµРЅРґР¶РµСЂ",
     "main": "electron/main.js",
     "scripts": {
@@ -33,28 +33,37 @@
             {
                 "filter": [
                     "**/*",
+                    "!backups/**/*",
+                    "!.env",
+                    "!*.db",
+                    "!*.db-wal",
+                    "!*.db-shm",
+                    "!*.log",
                     "!node_modules/sqlite3/**/*"
                 ],
                 "from": "backend",
                 "to": "app/backend"
             },
             {
-                "from": "frontend/build",
-                "to": "app/frontend/build"
+                "from": "backend/.env.dist",
+                "to": "app/backend/.env"
             },
             {
-                "filter": [
-                    "**/*"
-                ],
-                "from": "uploads",
-                "to": "app/uploads"
+                "from": "frontend/build",
+                "to": "app/frontend/build"
             }
         ],
         "files": [
             "electron/**/*",
             "backend/**/*",
-            "frontend/build/**/*",
-            "uploads/**/*"
+            "!backend/backups/**/*",
+            "!backend/.env",
+            "!backend/*.db",
+            "!backend/*.db-wal",
+            "!backend/*.db-shm",
+            "!backend/*.log",
+            "!backend/node_modules/sqlite3/**/*",
+            "frontend/build/**/*"
         ],
         "msi": {
             "artifactName": "ChatApp-${version}.${ext}",

@@ -3,33 +3,7 @@ import './EmojiInlinePicker.css';
 import emojiData from './emojiData.json';
 import stickerData from './stickerData.json';
 import TgsSticker from './TgsSticker';
-
-/** Извлекает unified код из emoji-символа (с удалением variation selectors) */
-function getUnified(emoji) {
-  const codePoints = [...emoji]
-    .map(c => c.codePointAt(0))
-    // Исключаем variation selectors (FE00-FE0F) и keycap (20E3)
-    .filter(code => !(code >= 0xFE00 && code <= 0xFE0F) && code !== 0x20E3)
-    .map(code => code.toString(16));
-
-  let result = codePoints.join('-');
-
-  // Для символов из диапазонов Miscellaneous Symbols (U+2600–U+26FF)
-  // и Dingbats (U+2700–U+27BF), которые не являются полноценными emoji,
-  // требуется добавление Variation Selector-16 (-fe0f) для корректного
-  // отображения в стиле Apple. Без VS16 файл не существует в CDN.
-  if (codePoints.length === 1) {
-    const code = parseInt(codePoints[0], 16);
-    if ((code >= 0x2600 && code <= 0x26FF) || (code >= 0x2700 && code <= 0x27BF)) {
-      result += '-fe0f';
-    }
-  }
-
-  return result;
-}
-
-// CDN для Apple emoji PNG (совпадает с App.js)
-const APPLE_EMOJI_CDN = 'https://cdn.jsdelivr.net/npm/emoji-datasource-apple@15.0.1/img/apple/64';
+import { EmojiImg } from './emojiUnified';
 
 // Ключ localStorage для истории эмодзи
 const RECENT_EMOJIS_KEY = 'recent_emojis';
@@ -106,8 +80,7 @@ const BASE_CATEGORIES = Object.entries(emojiData).map(([name, data]) => ({
   id: name.toLowerCase().replace(/\s+/g, '_'),
   label: name,
   icon: data.icon,
-  iconUnified: getUnified(data.icon),
-  emojis: data.emojis.map(e => ({ emoji: e.emoji, unified: getUnified(e.emoji) })),
+  emojis: data.emojis,
 }));
 
 // Создаём финальный список категорий с "Последние" в начале
@@ -116,7 +89,6 @@ const EMOJI_CATEGORIES = [
     id: 'recent',
     label: 'Последние',
     icon: '🕐',
-    iconUnified: getUnified('🕐'), // Часы как иконка для "последних"
     isRecent: true,
     emojis: [], // Заполняется динамически
   },
@@ -124,18 +96,15 @@ const EMOJI_CATEGORIES = [
 ];
 
 /** Компонент для рендеринга эмодзи как <img> из Apple CDN */
-function EmojiImage({ unified, size = '22px', className = '', emoji = '' }) {
-  if (!unified) {
-    return <span className={className} style={{ fontSize: size, lineHeight: 1, display: 'inline-block', verticalAlign: 'middle' }}>{emoji}</span>;
-  }
+function EmojiImage({ size = '22px', className = '', emoji = '' }) {
   return (
-    <img
-      src={`${APPLE_EMOJI_CDN}/${unified}.png`}
+    <EmojiImg
+      cluster={emoji}
+      size={size}
+      className={className}
       alt=""
       draggable={false}
-      className={className}
-      style={{ width: size, height: size, objectFit: 'contain', pointerEvents: 'none' }}
-      onError={(e) => { e.target.style.display = 'none'; }}
+      style={{ pointerEvents: 'none' }}
     />
   );
 }
@@ -199,16 +168,15 @@ export default function EmojiInlinePicker({ show, onEmojiClick, onClose, theme, 
   const pickerRef = useRef(null);
 
   // Получаем последние эмодзи из localStorage
-  const recentEmojis = getRecentEmojis(32).map(e => ({ emoji: e, unified: getUnified(e) }));
+  const recentEmojis = getRecentEmojis(32);
 
   // Добавляем последние эмодзи в начало списка категорий
   const categoriesWithRecent = [
     {
       id: 'recent',
       label: 'Последние',
-      iconUnified: getUnified('🕐'),
       isRecent: true,
-      emojis: recentEmojis,
+      emojis: recentEmojis.map((e) => ({ emoji: e })),
     },
     ...BASE_CATEGORIES,
   ];
@@ -303,7 +271,7 @@ export default function EmojiInlinePicker({ show, onEmojiClick, onClose, theme, 
               {cat.isRecent ? (
                 <span style={{ fontSize: '16px' }}>🕐</span>
               ) : (
-                <EmojiImage unified={cat.iconUnified} size="18px" emoji={cat.icon} />
+                <EmojiImage size="18px" emoji={cat.icon} />
               )}
             </button>
           ))}
@@ -321,7 +289,7 @@ export default function EmojiInlinePicker({ show, onEmojiClick, onClose, theme, 
               onClick={() => handleEmojiClick(item.emoji)}
               title={item.emoji}
             >
-              <EmojiImage unified={item.unified} size="22px" emoji={item.emoji} />
+              <EmojiImage size="22px" emoji={item.emoji} />
             </button>
           ))}
         </div>

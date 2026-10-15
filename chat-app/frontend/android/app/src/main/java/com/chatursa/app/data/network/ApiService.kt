@@ -30,7 +30,10 @@ interface ApiService {
     suspend fun sendMessage(@Body body: Map<String, String>): Response<Map<String, Any>>
 
     @POST("api/upload-avatar")
-    suspend fun uploadAvatar(@Part avatar: MultipartBody.Part): Response<Map<String, Any>>
+    suspend fun uploadAvatar(
+        @Part("userId") userId: okhttp3.RequestBody,
+        @Part avatar: MultipartBody.Part
+    ): Response<Map<String, Any>>
 
     @GET("api/health")
     suspend fun healthCheck(): Response<HealthResponse>
@@ -43,4 +46,25 @@ interface ApiService {
 
     @POST("api/push/fcm/register")
     suspend fun registerFcmToken(@Body body: Map<String, String>): Response<Map<String, Any>>
+
+    @PUT("api/chats/{chatId}/pin")
+    suspend fun pinChat(@Path("chatId") chatId: String, @Body body: Map<String, Any>): Response<Map<String, Any>>
+
+    @PUT("api/chats/{chatId}/mute")
+    suspend fun muteChat(@Path("chatId") chatId: String, @Body body: Map<String, Any>): Response<Map<String, Any>>
+
+    @PUT("api/chats/{chatId}/unread")
+    suspend fun markChatUnread(@Path("chatId") chatId: String, @Body body: Map<String, Any>): Response<Map<String, Any>>
+
+    @POST("api/chats/{chatId}/clear")
+    suspend fun clearChat(@Path("chatId") chatId: String, @Body body: Map<String, Any>): Response<Map<String, Any>>
+
+    @POST("api/chats/{chatId}/hide")
+    suspend fun hideChat(@Path("chatId") chatId: String, @Body body: Map<String, Any>): Response<Map<String, Any>>
+
+    @DELETE("api/chats/{chatId}")
+    suspend fun deleteChat(@Path("chatId") chatId: String, @Query("userId") userId: String): Response<Map<String, Any>>
+
+    @POST("api/chats/{chatId}/leave")
+    suspend fun leaveChat(@Path("chatId") chatId: String, @Body body: Map<String, Any>): Response<Map<String, Any>>
 }

@@ -58,6 +58,7 @@ import com.chatursa.app.data.model.Reaction
 import com.chatursa.app.data.model.User
 import com.chatursa.app.data.sticker.StickerManager
 import com.chatursa.app.ui.ChatAvatar
+import com.chatursa.app.ui.avatarOrPeer
 import com.chatursa.app.ui.theme.*
 import java.io.File
 import kotlinx.coroutines.delay
@@ -71,17 +72,12 @@ fun ChatScreen(
     viewModel: ChatViewModel,
     onBack: () -> Unit,
     pendingShareText: String? = null,
-    pendingShareImageUri: String? = null
+    pendingShareMediaUris: List<String> = emptyList()
 ) {
     val uiState by viewModel.uiState.collectAsState()
     var messageText by rememberSaveable { mutableStateOf("") }
     var editText by rememberSaveable { mutableStateOf("") }
-
-    LaunchedEffect(Unit) {
-        if (pendingShareText != null || pendingShareImageUri != null) {
-            messageText = pendingShareText ?: ""
-        }
-    }
+    var sharedHandled by remember { mutableStateOf(false) }
 
     val chatId = uiState.chat?.id
     LaunchedEffect(chatId) {
@@ -98,6 +94,20 @@ fun ChatScreen(
     val listState = rememberLazyListState()
     val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
     val context = androidx.compose.ui.platform.LocalContext.current
+
+    LaunchedEffect(Unit) {
+        if (!sharedHandled && (pendingShareText != null || pendingShareMediaUris.isNotEmpty())) {
+            sharedHandled = true
+            if (!pendingShareText.isNullOrBlank()) messageText = pendingShareText
+            pendingShareMediaUris.forEach { uriStr ->
+                runCatching {
+                    val uri = Uri.parse(uriStr)
+                    val mt = context.contentResolver.getType(uri)
+                    viewModel.uploadAndSendFile(context, uri, mt)
+                }
+            }
+        }
+    }
 
     val recordPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -314,7 +324,7 @@ fun ChatScreen(
                     } else {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             ChatAvatar(
-                                avatarUrl = uiState.chat?.avatar,
+                                avatarUrl = uiState.chat?.avatarOrPeer(),
                                 name = uiState.chat?.name,
                                 size = 40.dp,
                                 modifier = Modifier.clickable {
@@ -400,7 +410,7 @@ fun ChatScreen(
                             Icon(Icons.Default.PhotoLibrary, "Медиа")
                         }
                         if (uiState.chat?.type == "group") {
-                            IconButton(onClick = { /* TODO: group info */ }) {
+                            IconButton(onClick = { viewModel.showGroupInfo() }) {
                                 Icon(Icons.Default.Info, "Инфо")
                             }
                         }
@@ -690,6 +700,17 @@ fun ChatScreen(
                     )
                 }
 
+                // Group info dialog
+                if (uiState.showGroupInfo) {
+                    GroupInfoDialog(
+                        chat = uiState.chat,
+                        users = uiState.users,
+                        currentUserId = uiState.currentUser?.id,
+                        onDismiss = { viewModel.hideGroupInfo() },
+                        onAvatarClick = { url -> viewModel.showImageViewer(url); viewModel.hideGroupInfo() }
+                    )
+                }
+
                 // Search results count
                 if (uiState.isSearching && uiState.searchQuery.isNotBlank()) {
                     val filteredCount = uiState.messages.count { msg ->
@@ -727,6 +748,18 @@ fun ChatScreen(
                 val scope = rememberCoroutineScope()
                 val isRefreshing = remember { mutableStateOf(false) }
 
+                val listItems = remember(displayMessages, uiState.isSearching, uiState.searchQuery) {
+                    buildChatListItems(displayMessages.distinctBy { it.id })
+                }
+
+                LaunchedEffect(listState.firstVisibleItemIndex, uiState.hasMore, uiState.isSearching) {
+                    if (listState.firstVisibleItemIndex <= 2 && uiState.hasMore &&
+                        !uiState.isLoadingOlder && !uiState.isSearching
+                    ) {
+                        viewModel.loadOlder()
+                    }
+                }
+
                 PullToRefreshBox(
                     isRefreshing = isRefreshing.value,
                     onRefresh = {
@@ -747,16 +780,20 @@ fun ChatScreen(
                         state = listState,
                         contentPadding = PaddingValues(vertical = 8.dp)
                     ) {
-                        items(displayMessages.distinctBy { it.id }, key = { it.id }) { message ->
-                            MessageBubble(
-                                message = message,
-                                isOwn = message.senderId == uiState.currentUser?.id,
-                                currentUserId = uiState.currentUser?.id,
-                                onLongClick = { viewModel.showContextMenu(message) },
-                                onImageClick = { url -> viewModel.showImageViewer(allImageUrls, allImageUrls.indexOf(url)) },
-                                linkPreviews = uiState.linkPreviews,
-                                onFetchLinkPreview = { url -> viewModel.fetchLinkPreview(url) }
-                            )
+                        items(listItems, key = { it.key }) { item ->
+                            when (item) {
+                                is ChatListItem.Header -> DateSeparator(item.label)
+                                is ChatListItem.Msg -> MessageBubble(
+                                    message = item.message,
+                                    isOwn = item.message.senderId == uiState.currentUser?.id,
+                                    currentUserId = uiState.currentUser?.id,
+                                    onLongClick = { viewModel.showContextMenu(item.message) },
+                                    onImageClick = { url -> viewModel.showImageViewer(allImageUrls, allImageUrls.indexOf(url)) },
+                                    linkPreviews = uiState.linkPreviews,
+                                    onFetchLinkPreview = { url -> viewModel.fetchLinkPreview(url) },
+                                    onRetry = { viewModel.retryMessage(it) }
+                                )
+                            }
                         }
                     }
                 }
@@ -953,7 +990,28 @@ fun MessageBubble(
     onImageClick: (String) -> Unit = {},
     linkPreviews: Map<String, LinkPreview> = emptyMap(),
     onFetchLinkPreview: (String) -> Unit = {},
+    onRetry: (Message) -> Unit = {},
 ) {
+    if (message.isSystem) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 6.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = StickerManager.stripStickerMarkers(message.text),
+                style = MaterialTheme.typography.bodySmall,
+                color = TextSecondary,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0x22000000))
+                    .padding(horizontal = 12.dp, vertical = 4.dp)
+            )
+        }
+        return
+    }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -1085,13 +1143,29 @@ fun MessageBubble(
                     )
                     if (isOwn) {
                         Spacer(modifier = Modifier.width(4.dp))
-                        Icon(
-                            imageVector = if (message.readAt != null) Icons.Default.DoneAll
-                            else Icons.Default.Done,
-                            contentDescription = null,
-                            modifier = Modifier.size(14.dp),
-                            tint = if (message.readAt != null) Color(0xFF53D769) else Color.White.copy(alpha = 0.5f)
-                        )
+                        when (message.status) {
+                            "sending" -> Icon(
+                                Icons.Default.Schedule,
+                                contentDescription = null,
+                                modifier = Modifier.size(14.dp),
+                                tint = Color.White.copy(alpha = 0.5f)
+                            )
+                            "failed" -> Icon(
+                                Icons.Default.ErrorOutline,
+                                contentDescription = "Не отправлено",
+                                modifier = Modifier
+                                    .size(16.dp)
+                                    .clickable { onRetry(message) },
+                                tint = Color(0xFFFF5252)
+                            )
+                            else -> Icon(
+                                imageVector = if (message.readAt != null) Icons.Default.DoneAll
+                                else Icons.Default.Done,
+                                contentDescription = null,
+                                modifier = Modifier.size(14.dp),
+                                tint = if (message.readAt != null) Color(0xFF53D769) else Color.White.copy(alpha = 0.5f)
+                            )
+                        }
                     }
                 }
 
@@ -1320,16 +1394,25 @@ private fun UserInfoDialog(
     onAvatarClick: (String) -> Unit
 ) {
     val otherUserId = if (chat?.type == "direct" && currentUserId != null) {
-        chat.participants.find { it != currentUserId }
+        chat.participantsDetails.firstOrNull { it.id.isNotEmpty() && it.id != currentUserId }?.id
+            ?: chat.participants.find { it != currentUserId }
+    } else null
+    val otherParticipant = if (chat?.type == "direct" && currentUserId != null) {
+        chat.participantsDetails.firstOrNull { it.id.isNotEmpty() && it.id != currentUserId }
     } else null
     val otherUser = otherUserId?.let { id -> users.find { it.id == id } }
-    val name = otherUser?.username?.ifBlank { null } ?: otherUser?.fullName ?: chat?.name ?: "Пользователь"
-    val avatar = otherUser?.avatar ?: chat?.avatar
-    val statusText = otherUser?.statusText
+    val name = otherParticipant?.fullName?.takeIf { it.isNotBlank() }
+        ?: otherUser?.username?.ifBlank { null }
+        ?: otherParticipant?.username?.takeIf { it.isNotBlank() }
+        ?: otherUser?.fullName
+        ?: chat?.name
+        ?: "Пользователь"
+    val avatar = otherParticipant?.avatar ?: otherUser?.avatar ?: chat?.avatar
+    val statusText = otherParticipant?.statusText ?: otherUser?.statusText
     val about = otherUser?.about
     val phone = otherUser?.mobilePhone
-    val userStatus = otherUser?.status ?: "offline"
-    val userLastSeen = otherUser?.lastSeen
+    val userStatus = otherParticipant?.status ?: otherUser?.status ?: "offline"
+    val userLastSeen = otherParticipant?.lastSeen ?: otherUser?.lastSeen
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1418,5 +1501,79 @@ private fun writeCameraErrorToLog(context: Context, e: Exception) {
         }
         File(context.cacheDir, "crash_log.txt").writeText(text)
     } catch (_: Exception) {
+    }
+}
+
+private sealed interface ChatListItem {
+    val key: String
+    data class Header(val day: String, val label: String) : ChatListItem {
+        override val key: String = "h_$day"
+    }
+    data class Msg(val message: Message) : ChatListItem {
+        override val key: String = "m_${message.id}"
+    }
+}
+
+private fun buildChatListItems(messages: List<Message>): List<ChatListItem> {
+    val out = mutableListOf<ChatListItem>()
+    var lastDay = ""
+    for (m in messages) {
+        val day = dayKey(m.timestamp)
+        if (day != lastDay) {
+            out.add(ChatListItem.Header(day, dateLabel(m.timestamp)))
+            lastDay = day
+        }
+        out.add(ChatListItem.Msg(m))
+    }
+    return out
+}
+
+private fun dayKey(timestamp: String): String {
+    if (timestamp.isBlank()) return ""
+    return timestamp.replace("T", " ").take(10)
+}
+
+private fun dateLabel(timestamp: String): String {
+    val day = dayKey(timestamp)
+    if (day.isBlank()) return ""
+    return try {
+        val fmt = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault())
+        val date = fmt.parse(day) ?: return day
+        val now = java.util.Calendar.getInstance()
+        val target = java.util.Calendar.getInstance().apply { time = date }
+        val yesterday = now.clone() as java.util.Calendar
+        yesterday.add(java.util.Calendar.DAY_OF_YEAR, -1)
+        when {
+            isSameDay(now, target) -> "Сегодня"
+            isSameDay(yesterday, target) -> "Вчера"
+            now.get(java.util.Calendar.YEAR) == target.get(java.util.Calendar.YEAR) ->
+                java.text.SimpleDateFormat("d MMMM", java.util.Locale("ru")).format(date)
+            else ->
+                java.text.SimpleDateFormat("d MMMM yyyy", java.util.Locale("ru")).format(date)
+        }
+    } catch (e: Exception) { day }
+}
+
+private fun isSameDay(a: java.util.Calendar, b: java.util.Calendar): Boolean =
+    a.get(java.util.Calendar.YEAR) == b.get(java.util.Calendar.YEAR) &&
+    a.get(java.util.Calendar.DAY_OF_YEAR) == b.get(java.util.Calendar.DAY_OF_YEAR)
+
+@Composable
+private fun DateSeparator(label: String) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = TextSecondary,
+            modifier = Modifier
+                .clip(RoundedCornerShape(10.dp))
+                .background(Color(0x22000000))
+                .padding(horizontal = 10.dp, vertical = 3.dp)
+        )
     }
 }

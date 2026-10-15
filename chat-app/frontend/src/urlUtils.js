@@ -4,8 +4,17 @@
  */
 const URL_REGEX = /(?:https?:\/\/)?(?:www\.)?[-a-zA-Z0-9@:%._+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_+.~#?&/=]*)/gi;
 
+// Адрес почты (в т.ч. в виде `mailto:a@b.co`) — это НЕ ссылка на сайт.
+// Такие совпадения отбрасываем: иначе превью подгружало бы сайт почтового домена.
+const EMAIL_RE = /^[^\s/]+@[^\s/]+\.[^\s/]+$/;
+
+function looksLikeEmail(url) {
+  return EMAIL_RE.test(url);
+}
+
 /**
  * Находит все URL в тексте и возвращает массив объектов { url, start, end }.
+ * Адреса электронной почты (в т.ч. `mailto:`) игнорируются.
  */
 export function detectUrls(text) {
   if (!text || typeof text !== 'string') return [];
@@ -27,6 +36,11 @@ export function detectUrls(text) {
 
     // Убедимся что URL начинается с протокола или содержит доменную точку
     if (!url.startsWith('http') && !/\.[a-zA-Z]{2,}/.test(url)) continue;
+
+    // Пропускаем почтовые адреса: без протокола `user@host.tld` и `mailto:user@host.tld`
+    if (!url.startsWith('http') && looksLikeEmail(url.replace(/^mailto:/i, ''))) continue;
+    // Упоминание вроде `@user.com` тоже не ссылка
+    if (/^@/.test(url)) continue;
 
     urls.push({ url, start: match.index, end: match.index + match[0].length });
   }

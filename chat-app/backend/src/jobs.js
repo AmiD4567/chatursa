@@ -12,12 +12,59 @@ let db, emitToUser, SERVER_URL, encryptText, uuidv4, ensureBotChat, deliverBotMe
 const pendingReminders = new Map();
 
 /**
- * Отправить напоминание пользователю через бота «Помощник»
+ * Человекочитаемое имя чата — для текста напоминания о сообщении.
+ * Самодостаточно (не зависит от deps), чтобы работать и после рестарта.
  */
-function sendTaskReminder(userId, username, taskTitle, taskDate, taskTime) {
+function resolveChatLabel(chatId, userId) {
+  try {
+    if (!chatId) return '';
+    if (chatId === 'general') return 'Общий чат';
+    if (chatId.startsWith('bot-chat-')) return 'Помощник';
+    if (chatId.startsWith('ai-chat-')) return 'ИИ-Агент';
+    const chat = db.prepare('SELECT id, type, name FROM chats WHERE id = ?').get(chatId);
+    if (!chat) return '';
+    if (chat.name) return chat.name;
+    if (chat.type === 'direct' && userId) {
+      const row = db.prepare(`
+        SELECT u.username FROM chat_participants cp
+        JOIN users u ON u.id = cp.user_id
+        WHERE cp.chat_id = ? AND cp.user_id != ?
+        LIMIT 1
+      `).get(chatId, userId);
+      if (row && row.username) return row.username;
+    }
+    return '';
+  } catch (e) {
+    return '';
+  }
+}
+
+/**
+ * Отправить напоминание пользователю через бота «Помощник».
+ * meta = { kind, chatId, messageId, preview, chatName } — для напоминаний о сообщении.
+ */
+function sendTaskReminder(userId, username, taskTitle, taskDate, taskTime, meta = {}) {
   try {
     const botChatId = `bot-chat-${userId}`;
-    const reminderText = `⏰ *Напоминание о задаче:*\n\n📅 **${taskTitle}**\n\nДата: ${new Date(taskDate).toLocaleDateString('ru-RU')}${taskTime ? `\nВремя: ${taskTime}` : ''}\n\n💡 *Совет:* Подготовьтесь заранее!`;
+
+    let reminderText;
+    let buttons;
+    if (meta.kind === 'message_reminder') {
+      const preview = (meta.preview || '').trim() || 'сообщение';
+      const chatName = meta.chatName || resolveChatLabel(meta.chatId, userId);
+      const chatLabel = chatName ? `\n\n💬 *Чат:* ${chatName}` : '';
+      reminderText = `🔔 *Напоминание о сообщении*\n\n📝 «${preview}»${chatLabel}\n\n🕐 ${new Date().toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}`;
+      buttons = [
+        ...(meta.chatId && meta.messageId ? [{ label: '↗ Перейти к сообщению', action: `jump:${meta.chatId}:${meta.messageId}` }] : []),
+        { label: '📅 Календарь', action: '/календарь' }
+      ];
+    } else {
+      reminderText = `⏰ *Напоминание о задаче:*\n\n📅 **${taskTitle}**\n\nДата: ${new Date(taskDate).toLocaleDateString('ru-RU')}${taskTime ? `\nВремя: ${taskTime}` : ''}\n\n💡 *Совет:* Подготовьтесь заранее!`;
+      buttons = [
+        { label: '📅 Календарь', action: '/календарь' },
+        { label: '✅ Отметить выполненной', action: '/задача' }
+      ];
+    }
 
     const botResult = db.prepare("SELECT id FROM users WHERE username = 'Помощник'").get();
     if (!botResult) return;
@@ -41,10 +88,7 @@ function sendTaskReminder(userId, username, taskTitle, taskDate, taskTime) {
       text: reminderText,
       timestamp: new Date().toISOString(),
       isBotMessage: true,
-      buttons: [
-        { label: '📅 Календарь', action: '/календарь' },
-        { label: '✅ Отметить выполненной', action: '/задача' }
-      ]
+      buttons
     });
 
   } catch (err) {
@@ -112,8 +156,9 @@ function sendMeetingReminder(userId, reminder) {
 /**
  * Запланировать напоминание для задачи.
  * reminderTime — ISO timestamp, когда нужно отправить напоминание.
+ * meta = { kind, chatId, messageId, preview, chatName } — для напоминаний о сообщении.
  */
-function scheduleTaskReminder(taskId, userId, username, taskTitle, taskDate, taskTime, reminderTime) {
+function scheduleTaskReminder(taskId, userId, username, taskTitle, taskDate, taskTime, reminderTime, meta = {}) {
   // Отменяем старый таймер если есть
   const existing = pendingReminders.get(taskId);
   if (existing) {
@@ -129,7 +174,7 @@ function scheduleTaskReminder(taskId, userId, username, taskTitle, taskDate, tas
   const delay = remindAt - now;
 
   pendingReminders.set(taskId, setTimeout(() => {
-    sendTaskReminder(userId, username, taskTitle, taskDate, taskTime);
+    sendTaskReminder(userId, username, taskTitle, taskDate, taskTime, meta);
     pendingReminders.delete(taskId);
   }, delay));
 
@@ -143,7 +188,8 @@ function restorePendingReminders() {
     // SQLite datetime comparison: we store ISO like '2026-06-05T10:00:00'
     // Replace 'T' with space for comparison, or use strftime for consistency
     const tasksRows = db.prepare(`
-      SELECT ct.id, ct.title, ct.task_date, ct.task_time, ct.user_id, u.username, ct.reminder_time
+      SELECT ct.id, ct.title, ct.task_date, ct.task_time, ct.user_id, u.username, ct.reminder_time,
+             ct.kind, ct.source_chat_id, ct.source_message_id, ct.source_message_preview
       FROM calendar_tasks ct
       JOIN users u ON ct.user_id = u.id
       WHERE ct.reminder_time IS NOT NULL AND REPLACE(ct.reminder_time, 'T', ' ') > datetime('now')
@@ -160,7 +206,18 @@ function restorePendingReminders() {
       const username = row.username;
       const reminderTime = row.reminder_time; // ISO string from DB
 
-      scheduleTaskReminder(taskId, userId, username, taskTitle, taskDate, taskTime, reminderTime);
+      const kind = row.kind || 'task';
+      const meta = kind === 'message_reminder'
+        ? {
+            kind,
+            chatId: row.source_chat_id || null,
+            messageId: row.source_message_id || null,
+            preview: row.source_message_preview || taskTitle || '',
+            chatName: resolveChatLabel(row.source_chat_id, userId)
+          }
+        : {};
+
+      scheduleTaskReminder(taskId, userId, username, taskTitle, taskDate, taskTime, reminderTime, meta);
     });
 
   } catch (err) {

@@ -475,17 +475,21 @@ function getChatMessages(chatId, limit = 100, userId = null, beforeTs = null) {
     const messagesReversed = db.prepare(`
       SELECT m.id, m.chat_id, m.sender_id, m.text, m.file_data, m.reply_to, m.timestamp, m.read_at,
              m.forwarded_from, m.e2ee, m.e2ee_nonce, m.e2ee_ephemeral, m.expires_at, m.edited, m.edited_at,
-             m.poll_id,
-             u.username as senderName, u.avatar as senderAvatar
+             m.poll_id, m.deleted_at, m.deleted_by,
+             u.username as senderName, u.avatar as senderAvatar,
+             d.username as deletedByName
       FROM messages m
       JOIN users u ON m.sender_id = u.id
+      LEFT JOIN users d ON m.deleted_by = d.id
       WHERE m.chat_id = ?
         AND (m.expires_at IS NULL OR m.expires_at > ?)
         AND (? IS NULL OR m.timestamp > ?)
         AND (? IS NULL OR m.timestamp < ?)
+        -- Исключаем сообщения, удалённые «только у себя» именно этим пользователем
+        AND (m.id NOT IN (SELECT message_id FROM message_hidden WHERE user_id = ?))
       ORDER BY m.timestamp DESC
       LIMIT ?
-    `).all(chatId, new Date().toISOString(), clearedAt, clearedAt, beforeTs, beforeTs, limit);
+    `).all(chatId, new Date().toISOString(), clearedAt, clearedAt, beforeTs, beforeTs, userId || '', limit);
 
     // Переворачиваем чтобы получить в правильном порядке (старые первые)
     const messages = [];
@@ -559,7 +563,11 @@ function getChatMessages(chatId, limit = 100, userId = null, beforeTs = null) {
         e2ee: isE2EE ? 1 : 0,
         e2ee_nonce: isE2EE ? (row.e2ee_nonce || '') : undefined,
         e2ee_ephemeral: isE2EE ? (row.e2ee_ephemeral || '') : undefined,
-        expires_at: row.expires_at || null
+        expires_at: row.expires_at || null,
+        // Мягкое удаление «у обоих»: клиент рисует заглушку вместо содержимого
+        deleted_at: row.deleted_at || null,
+        deleted_by: row.deleted_by || null,
+        deletedByName: row.deletedByName || null
       });
     }
     const replyCounts = {};
@@ -925,6 +933,10 @@ try {
   sharedDeps.scheduleTaskReminder = jobsApi.scheduleTaskReminder;
   sharedDeps.pendingReminders = jobsApi.pendingReminders;
 
+  // ── Планировщик отложенных сообщений ──
+  const scheduledApi = require('./src/scheduled');
+  scheduledApi.setupScheduled(sharedDeps);
+
   // ── Socket-обработчики ──
   require('./src/socket')(sharedDeps);
 
@@ -953,6 +965,7 @@ try {
   require('./src/routes/announcements')(app, sharedDeps);
   require('./src/routes/polls')(app, sharedDeps);
   require('./src/routes/calls')(app, sharedDeps);
+  require('./src/routes/scheduled')(app, sharedDeps);
 
   // Инициализация бота-помощника (после того как db готов)
   bot = initBotEngine({ db, io, uuidv4, encryptText });
@@ -1123,12 +1136,6 @@ try {
   } catch (e) {
     console.error('Ошибка восстановления сессий:', e.message);
   }
-
-  const { registerPbiRoutes } = require('./pbi-proxy.js');
-  registerPbiRoutes(app, db);
-
-  const { registerKpiRoutes } = require('./kpi.js');
-  registerKpiRoutes(app, db);
 
   // Global error handler — returns JSON instead of HTML
   app.use((err, req, res, next) => {

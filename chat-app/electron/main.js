@@ -2,6 +2,7 @@ const { app, BrowserWindow, Tray, Menu, ipcMain, Notification, nativeImage, dial
 const path = require('path');
 const { spawn } = require('child_process');
 const fs = require('fs');
+const crypto = require('crypto');
 const { autoUpdater } = require('electron-updater');
 
 const isDev = !app.isPackaged;
@@ -176,6 +177,34 @@ const userDataPath = app.getPath('userData');
 const dbPath = path.join(userDataPath, 'database');
 const uploadsPath = path.join(userDataPath, 'uploads');
 
+/**
+ * Ключ шифрования для установленного приложения.
+ *
+ * В установщик ключ не попадает (там лежит только backend/.env.dist), иначе каждый
+ * получатель получил бы ключ разработчика вместе с его базой. Поэтому при первом
+ * запуске генерируем случайный и храним рядом с данными приложения.
+ *
+ * В dev ничего не делаем: там ключ приходит из backend\.env, и подмена сломала бы
+ * чтение рабочей chat.db.
+ */
+function loadOrCreateEncryptionKey() {
+  if (isDev) return null;
+  const keyFile = path.join(userDataPath, 'encryption.key');
+  try {
+    if (fs.existsSync(keyFile)) {
+      const existing = fs.readFileSync(keyFile, 'utf8').trim();
+      if (existing) return existing;
+    }
+    const generated = crypto.randomBytes(36).toString('base64');
+    fs.writeFileSync(keyFile, generated, { encoding: 'utf8', mode: 0o600 });
+    logToFile('Создан новый ключ шифрования для этого компьютера');
+    return generated;
+  } catch (e) {
+    logError(`Не удалось подготовить ключ шифрования: ${e.message}`);
+    return null;
+  }
+}
+
 function startBackend() {
   logToFile('Запуск бэкенда...');
   if (!fs.existsSync(backendScript)) {
@@ -191,6 +220,11 @@ function startBackend() {
     CHAT_APP_DB_PATH: dbPath,
     CHAT_APP_UPLOADS_PATH: uploadsPath
   };
+
+  // Переменная окружения важнее backend/.env (dotenv не перезаписывает её),
+  // поэтому ключ из сгенерированного файла перекрывает отсутствующий в .env.dist.
+  const encryptionKey = loadOrCreateEncryptionKey();
+  if (encryptionKey) backendEnv.CHAT_ENCRYPTION_KEY = encryptionKey;
 
   backendProcess = spawn(process.execPath, [backendScript], {
     cwd: backendPath,

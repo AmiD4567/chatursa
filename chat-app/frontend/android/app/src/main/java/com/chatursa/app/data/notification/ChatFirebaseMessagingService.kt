@@ -54,6 +54,7 @@ class ChatFirebaseMessagingService : FirebaseMessagingService() {
             .setContentText(body)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(true)
+            .setGroup(NOTIFICATION_GROUP)
             .setContentIntent(pendingIntent)
 
         // Mark Read action
@@ -104,6 +105,13 @@ class ChatFirebaseMessagingService : FirebaseMessagingService() {
 
         val notificationId = chatId?.hashCode() ?: System.currentTimeMillis().toInt()
         NotificationManagerCompat.from(this).notify(notificationId, notificationBuilder.build())
+
+        val summary = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setGroup(NOTIFICATION_GROUP)
+            .setGroupSummary(true)
+            .build()
+        NotificationManagerCompat.from(this).notify(0, summary)
     }
 
     private fun saveFcmToken(token: String) {
@@ -122,5 +130,6 @@ class ChatFirebaseMessagingService : FirebaseMessagingService() {
 
     companion object {
         const val NOTIFICATION_CHANNEL_ID = "chat_messages"
+        const val NOTIFICATION_GROUP = "chat_messages_group"
     }
 }

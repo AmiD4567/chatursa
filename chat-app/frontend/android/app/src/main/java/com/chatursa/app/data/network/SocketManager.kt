@@ -3,12 +3,14 @@ package com.chatursa.app.data.network
 import android.util.Log
 import com.chatursa.app.AppConfig
 import com.chatursa.app.data.model.Chat
+import com.chatursa.app.data.model.ChatParticipant
 import com.chatursa.app.data.model.FileData
 import com.chatursa.app.data.model.ForwardedFrom
 import com.chatursa.app.data.model.Message
 import com.chatursa.app.data.model.Reaction
 import com.chatursa.app.data.model.ReplyTo
 import com.chatursa.app.data.model.User
+import io.socket.client.Ack
 import io.socket.client.IO
 import io.socket.client.Socket
 import io.socket.engineio.client.transports.WebSocket
@@ -22,20 +24,25 @@ import java.util.concurrent.TimeUnit
 sealed class SocketEvent {
     data class Connected(val user: User, val chats: List<Chat>) : SocketEvent()
     data class NewMessage(val message: Message, val chat: Chat? = null) : SocketEvent()
-    data class ChatHistory(val chatId: String, val messages: List<Message>, val chat: Chat? = null) : SocketEvent()
+    data class ChatHistory(val chatId: String, val messages: List<Message>, val chat: Chat? = null, val hasMore: Boolean = false) : SocketEvent()
+    data class OlderMessages(val chatId: String, val messages: List<Message>, val hasMore: Boolean) : SocketEvent()
     data class ChatCreated(val chat: Chat) : SocketEvent()
     data class ChatUpdated(val chat: Chat) : SocketEvent()
     data class UserStatusChanged(val userId: String, val status: String, val lastSeen: String? = null) : SocketEvent()
-    data class UserTyping(val chatId: String, val userId: String, val userName: String) : SocketEvent()
+    data class UserTyping(val chatId: String, val userId: String, val userName: String, val isTyping: Boolean = true) : SocketEvent()
     data class UsersList(val users: List<User>) : SocketEvent()
     data class MessageDeleted(val chatId: String, val messageId: String) : SocketEvent()
     data class MessageEdited(val chatId: String, val messageId: String, val text: String) : SocketEvent()
     data class ReactionAdded(val messageId: String, val userId: String, val emoji: String, val userName: String) : SocketEvent()
     data class ReactionRemoved(val messageId: String, val userId: String, val emoji: String) : SocketEvent()
-    data class MessagesRead(val chatId: String, val userId: String, val messageIds: List<String>) : SocketEvent()
+    data class MessagesRead(val chatId: String, val userId: String, val readAt: String? = null) : SocketEvent()
     data class UserProfileUpdated(val userId: String, val username: String, val statusText: String, val fullName: String, val mobilePhone: String, val workPhone: String) : SocketEvent()
+    data class UserAvatarUpdated(val userId: String, val avatar: String?) : SocketEvent()
+    data class ChatAvatarUpdated(val chatId: String, val avatar: String?, val chat: Chat? = null) : SocketEvent()
     data class MessagePinned(val chatId: String, val messageId: String, val message: Message? = null) : SocketEvent()
     data class MessageUnpinned(val chatId: String, val messageId: String) : SocketEvent()
+    data class PinnedMessages(val chatId: String, val messages: List<Message>) : SocketEvent()
+    data class MessageAck(val localId: String, val ok: Boolean, val messageId: String? = null, val error: String? = null) : SocketEvent()
     data class Error(val message: String) : SocketEvent()
     object Disconnected : SocketEvent()
 }
@@ -167,7 +174,7 @@ class SocketManager {
                         val chatObj = if (data.has("chat") && !data.isNull("chat")) {
                             parseChat(data.getJSONObject("chat"), currentUsername)
                         } else null
-                        _events.trySend(SocketEvent.ChatHistory(chatId, msgs, chatObj))
+                        _events.trySend(SocketEvent.ChatHistory(chatId, msgs, chatObj, data.optBoolean("hasMore", false)))
                     }
                 } catch (e: Exception) { Log.e(TAG, "chat_history parse error", e) }
             }
@@ -210,8 +217,10 @@ class SocketManager {
                     if (args.isNotEmpty()) {
                         val data = args[0] as JSONObject
                         _events.trySend(SocketEvent.UserTyping(
-                            data.getString("chatId"), data.getString("userId"),
-                            data.optString("userName", "")
+                            data.getString("chatId"),
+                            data.optString("userId", ""),
+                            data.optString("username", data.optString("userName", "")),
+                            data.optBoolean("isTyping", true)
                         ))
                     }
                 } catch (e: Exception) { Log.e(TAG, "user_typing parse error", e) }
@@ -292,12 +301,10 @@ class SocketManager {
                 try {
                     if (args.isNotEmpty()) {
                         val data = args[0] as JSONObject
-                        val ids = if (data.has("messageIds")) {
-                            val arr = data.getJSONArray("messageIds")
-                            (0 until arr.length()).map { arr.getString(it) }
-                        } else emptyList()
                         _events.trySend(SocketEvent.MessagesRead(
-                            data.getString("chatId"), data.getString("userId"), ids
+                            data.getString("chatId"),
+                            data.optString("readBy", data.optString("userId", "")),
+                            data.optString("readAt", null)?.ifEmpty { null }
                         ))
                     }
                 } catch (e: Exception) { Log.e(TAG, "messages_read parse error", e) }
@@ -327,6 +334,46 @@ class SocketManager {
                 } catch (e: Exception) { Log.e(TAG, "message_unpinned parse error", e) }
             }
 
+            socket?.on("user_avatar_updated") { args ->
+                try {
+                    if (args.isNotEmpty()) {
+                        val data = args[0] as JSONObject
+                        _events.trySend(SocketEvent.UserAvatarUpdated(
+                            data.getString("userId"),
+                            data.optString("avatar", null)?.ifEmpty { null }
+                        ))
+                    }
+                } catch (e: Exception) { Log.e(TAG, "user_avatar_updated parse error", e) }
+            }
+
+            socket?.on("chat_avatar_updated") { args ->
+                try {
+                    if (args.isNotEmpty()) {
+                        val data = args[0] as JSONObject
+                        val chatObj = if (data.has("chat") && !data.isNull("chat"))
+                            parseChat(data.getJSONObject("chat"), currentUsername) else null
+                        _events.trySend(SocketEvent.ChatAvatarUpdated(
+                            data.optString("chatId", ""),
+                            data.optString("avatar", null)?.ifEmpty { null },
+                            chatObj
+                        ))
+                    }
+                } catch (e: Exception) { Log.e(TAG, "chat_avatar_updated parse error", e) }
+            }
+
+            socket?.on("pinned_messages_list") { args ->
+                try {
+                    if (args.isNotEmpty()) {
+                        val data = args[0] as JSONObject
+                        val msgs = if (data.has("messages") && !data.isNull("messages")) {
+                            val arr = data.getJSONArray("messages")
+                            (0 until arr.length()).map { parseMessage(arr.getJSONObject(it)) }
+                        } else emptyList()
+                        _events.trySend(SocketEvent.PinnedMessages(data.optString("chatId", ""), msgs))
+                    }
+                } catch (e: Exception) { Log.e(TAG, "pinned_messages_list parse error", e) }
+            }
+
             socket?.connect()
             Log.d(TAG, "Socket connect() called")
         } catch (e: Exception) {
@@ -348,14 +395,57 @@ class SocketManager {
         socket?.emit("join_chat", chatId)
     }
 
-    fun sendMessage(chatId: String, text: String, replyTo: String? = null, file: JSONObject? = null) {
-        socket?.emit("send_message", JSONObject().apply {
+    fun sendMessage(chatId: String, text: String, replyTo: String? = null, file: JSONObject? = null, localId: String? = null, expiresAt: String? = null) {
+        val payload = JSONObject().apply {
             put("chatId", chatId)
             put("senderId", currentUserId)
             put("text", text)
             if (replyTo != null) put("replyTo", replyTo)
             if (file != null) put("file", file)
+            if (expiresAt != null) put("expiresAt", expiresAt)
+        }
+        if (localId == null) {
+            socket?.emit("send_message", payload)
+        } else {
+            socket?.emit("send_message", payload, Ack { args ->
+                try {
+                    val data = args.getOrNull(0) as? JSONObject
+                    val ok = data?.optBoolean("ok", false) ?: false
+                    _events.trySend(SocketEvent.MessageAck(
+                        localId, ok,
+                        data?.optString("messageId", null)?.ifEmpty { null },
+                        data?.optString("error", null)?.ifEmpty { null }
+                    ))
+                } catch (e: Exception) {
+                    _events.trySend(SocketEvent.MessageAck(localId, false, null, e.message))
+                }
+            })
+        }
+    }
+
+    fun getMessagesBefore(chatId: String, before: String, limit: Int = 50) {
+        val payload = JSONObject().apply {
+            put("chatId", chatId)
+            put("before", before)
+            put("limit", limit)
+        }
+        socket?.emit("get_messages_before", payload, Ack { args ->
+            try {
+                val data = args.getOrNull(0) as? JSONObject ?: return@Ack
+                val msgs = if (data.has("messages") && !data.isNull("messages")) {
+                    val arr = data.getJSONArray("messages")
+                    (0 until arr.length()).map { parseMessage(arr.getJSONObject(it)) }
+                } else emptyList()
+                _events.trySend(SocketEvent.OlderMessages(chatId, msgs, data.optBoolean("hasMore", false)))
+            } catch (e: Exception) {
+                Log.e(TAG, "get_messages_before ack error", e)
+                _events.trySend(SocketEvent.OlderMessages(chatId, emptyList(), false))
+            }
         })
+    }
+
+    fun getPinnedMessages(chatId: String) {
+        socket?.emit("get_pinned_messages", JSONObject().apply { put("chatId", chatId) })
     }
 
     fun markRead(chatId: String, messageIds: List<String>) {
@@ -469,6 +559,23 @@ class SocketManager {
             m
         } else emptyMap()
 
+        val details = if (json.has("participantsDetails") && !json.isNull("participantsDetails")) {
+            val arr = json.getJSONArray("participantsDetails")
+            (0 until arr.length()).map { i ->
+                val o = arr.getJSONObject(i)
+                ChatParticipant(
+                    id = o.optString("id", ""),
+                    username = o.optString("username", ""),
+                    avatar = o.optString("avatar", null)?.ifEmpty { null },
+                    status = o.optString("status", "offline"),
+                    statusText = o.optString("status_text", null)?.ifEmpty { null },
+                    fullName = o.optString("full_name", null)?.ifEmpty { null },
+                    lastSeen = o.optString("last_seen", null)?.ifEmpty { null },
+                    role = o.optString("role", "member")
+                )
+            }
+        } else emptyList()
+
         val type = json.optString("type", "direct")
         var name = json.optString("name", "")
         var avatar = json.optString("avatar", null)?.ifEmpty { null }
@@ -476,31 +583,31 @@ class SocketManager {
         var otherStatus: String? = null
         var lastSeen: String? = null
 
-        // For direct chats, find the other participant and use their data
-        if (type == "direct" && json.has("participantsDetails") && !json.isNull("participantsDetails")) {
-            val arr = json.getJSONArray("participantsDetails")
-            val uname = opUsername ?: currentUsername ?: ""
-            var other: JSONObject? = null
-            for (i in 0 until arr.length()) {
-                val o = arr.getJSONObject(i)
-                if (!o.optString("username", "").equals(uname, ignoreCase = true)) {
-                    other = o
-                    break
-                }
+        if (type == "direct") {
+            // Match the peer by id first (usernames can be blank/duplicated);
+            // fall back to username comparison only when the id is unavailable.
+            val meId = currentUserId
+            val meName = (opUsername ?: currentUsername ?: "").trim()
+            val other = details.firstOrNull { d ->
+                when {
+                    meId != null && d.id.isNotEmpty() -> d.id != meId
+                    else -> !d.username.equals(meName, ignoreCase = true)
+                } && (d.id.isNotEmpty() || d.username.isNotEmpty())
+            } ?: details.firstOrNull { d ->
+                // single-participant edge case: nothing to exclude
+                details.size == 1
             }
+
             if (other != null) {
-                val otherName = other.optString("username", "")
-                val otherAvatar = other.optString("avatar", null)?.ifEmpty { null }
-                if (name.isBlank()) name = otherName
-                if (avatar.isNullOrBlank()) avatar = otherAvatar
-                otherStatus = other.optString("status", null)?.ifEmpty { null }
-                lastSeen = other.optString("last_seen", null)?.ifEmpty { null }
-            } else {
-                // Fallback: use first non-self participant name from participant list
-                val selfIdx = participants.indexOfFirst { it.equals(uname, ignoreCase = true) }
-                if (name.isBlank() && participants.size > 1) {
-                    name = if (selfIdx == 0) participants[1] else participants.firstOrNull() ?: ""
-                }
+                name = other.fullName?.takeIf { it.isNotBlank() } ?: other.username
+                if (avatar.isNullOrBlank()) avatar = other.avatar
+                otherStatus = other.status
+                lastSeen = other.lastSeen
+            } else if (name.isBlank() && participants.size > 1) {
+                val idx = participants.indexOfFirst { it.trim().equals(meName, ignoreCase = true) }
+                name = if (idx == 0) participants[1] else participants.firstOrNull() ?: ""
+            } else if (name.isBlank() && participants.size == 1) {
+                name = participants.first()
             }
         }
 
@@ -514,10 +621,18 @@ class SocketManager {
             unreadCount = json.optInt("unreadCount", 0),
             participants = participants,
             participantNames = pNames,
+            participantsDetails = details,
             lastActivity = json.optString("lastActivity", null),
-            createdBy = json.optString("createdBy", null),
+            createdBy = json.optString("createdBy", json.optString("created_by", null))?.ifEmpty { null },
             isOnline = otherStatus == "online",
-            lastSeen = lastSeen
+            lastSeen = lastSeen,
+            pinned = json.optBoolean("pinned", false),
+            muted = json.optBoolean("muted", false),
+            forceUnread = json.optBoolean("forceUnread", json.optBoolean("force_unread", false)),
+            restricted = json.optBoolean("restricted", false),
+            description = json.optString("description", null)?.ifEmpty { null },
+            announcement = json.optString("announcement", null)?.ifEmpty { null },
+            e2ee = json.optBoolean("e2ee", false)
         )
     }
 
@@ -596,7 +711,10 @@ class SocketManager {
             readAt = json.optString("readAt", json.optString("read_at", null)),
             edited = json.optBoolean("edited", false),
             reactions = reactions,
-            isPinned = json.optBoolean("isPinned", false)
+            isPinned = json.optBoolean("isPinned", json.optBoolean("is_pinned", false)),
+            isSystem = json.optBoolean("isSystem", json.optBoolean("is_system", false)),
+            expiresAt = json.optString("expiresAt", json.optString("expires_at", null))?.ifEmpty { null },
+            replyCount = json.optInt("replyCount", json.optInt("reply_count", 0))
         )
     }
 }

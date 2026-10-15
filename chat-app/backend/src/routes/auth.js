@@ -117,7 +117,7 @@ app.post('/api/login', async (req, res) => {
 
 // API для получения профиля пользователя
 app.get('/api/profile/:userId', (req, res) => {
-  const user = db.prepare('SELECT id, username, email, avatar, full_name, birth_date, about, mobile_phone, work_phone, status_text, is_admin, can_edit_wiki, can_book_meeting_room, can_view_kpi FROM users WHERE id = ?').get(req.params.userId);
+  const user = db.prepare('SELECT id, username, email, avatar, full_name, birth_date, about, mobile_phone, work_phone, status_text, is_admin, can_edit_wiki, can_book_meeting_room FROM users WHERE id = ?').get(req.params.userId);
   if (!user) {
     return res.status(404).json({ error: 'Пользователь не найден' });
   }

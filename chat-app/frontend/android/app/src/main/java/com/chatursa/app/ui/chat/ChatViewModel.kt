@@ -9,8 +9,10 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import com.chatursa.app.data.model.Chat
+import com.chatursa.app.data.model.FileData
 import com.chatursa.app.data.model.LinkPreview
 import com.chatursa.app.data.model.Message
+import com.chatursa.app.data.model.ReplyTo
 import com.chatursa.app.data.model.User
 import com.chatursa.app.data.network.AudioRecorder
 import com.chatursa.app.data.network.AudioUploader
@@ -18,6 +20,7 @@ import com.chatursa.app.data.network.FileUploader
 import com.chatursa.app.data.network.RetrofitClient
 import com.chatursa.app.data.network.SocketEvent
 import com.chatursa.app.data.network.SocketManager
+import com.chatursa.app.data.sticker.StickerManager
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -50,7 +53,12 @@ data class ChatUiState(
     val linkPreviews: Map<String, LinkPreview> = emptyMap(),
     val searchQuery: String = "",
     val isSearching: Boolean = false,
-    val showUserInfo: Boolean = false
+    val showUserInfo: Boolean = false,
+    val showGroupInfo: Boolean = false,
+    val showStickerPicker: Boolean = false,
+    val showEmojiPicker: Boolean = false,
+    val hasMore: Boolean = false,
+    val isLoadingOlder: Boolean = false
 )
 
 class ChatViewModel(
@@ -134,9 +142,22 @@ class ChatViewModel(
                             _uiState.value = _uiState.value.copy(
                                 messages = event.messages.distinctBy { it.id },
                                 chat = event.chat ?: _uiState.value.chat,
-                                isLoading = false
+                                isLoading = false,
+                                hasMore = event.hasMore
                             )
                             markMessagesAsRead(event.messages)
+                            socketManager.getPinnedMessages(event.chatId)
+                        }
+                    }
+                    is SocketEvent.OlderMessages -> {
+                        if (event.chatId == chatId) {
+                            val existing = _uiState.value.messages
+                            val older = event.messages.filter { m -> existing.none { it.id == m.id } }
+                            _uiState.value = _uiState.value.copy(
+                                messages = older + existing,
+                                hasMore = event.hasMore,
+                                isLoadingOlder = false
+                            )
                         }
                     }
                     is SocketEvent.NewMessage -> {
@@ -150,14 +171,30 @@ class ChatViewModel(
                             markMessagesAsRead(listOf(event.message))
                         }
                     }
+                    is SocketEvent.MessageAck -> {
+                        _uiState.value = _uiState.value.copy(
+                            messages = _uiState.value.messages.map { m ->
+                                if (m.localId == event.localId) {
+                                    m.copy(
+                                        id = event.messageId ?: m.id,
+                                        status = if (event.ok) "sent" else "failed"
+                                    )
+                                } else m
+                            }
+                        )
+                    }
                     is SocketEvent.UserTyping -> {
                         if (event.chatId == chatId && event.userId != _uiState.value.currentUser?.id) {
-                            _uiState.value = _uiState.value.copy(
-                                typingText = "${event.userName} печатает..."
-                            )
-                            viewModelScope.launch {
-                                delay(4000)
+                            if (!event.isTyping) {
                                 _uiState.value = _uiState.value.copy(typingText = "")
+                            } else {
+                                _uiState.value = _uiState.value.copy(
+                                    typingText = "${event.userName} печатает..."
+                                )
+                                viewModelScope.launch {
+                                    delay(4000)
+                                    _uiState.value = _uiState.value.copy(typingText = "")
+                                }
                             }
                         }
                     }
@@ -190,10 +227,11 @@ class ChatViewModel(
                     }
                     is SocketEvent.MessagesRead -> {
                         if (event.chatId == chatId) {
+                            val myId = _uiState.value.currentUser?.id
                             _uiState.value = _uiState.value.copy(
                                 messages = _uiState.value.messages.map { msg ->
-                                    if (event.messageIds.contains(msg.id) && msg.readAt == null) {
-                                        msg.copy(readAt = "read")
+                                    if (msg.senderId == myId && msg.readAt == null) {
+                                        msg.copy(readAt = event.readAt ?: "read")
                                     } else msg
                                 }
                             )
@@ -218,6 +256,42 @@ class ChatViewModel(
                                 messages = _uiState.value.messages.map {
                                     if (it.id == event.messageId) it.copy(isPinned = false) else it
                                 }
+                            )
+                        }
+                    }
+                    is SocketEvent.PinnedMessages -> {
+                        if (event.chatId == chatId) {
+                            val latest = event.messages.firstOrNull()
+                            _uiState.value = _uiState.value.copy(pinnedMessage = latest)
+                        }
+                    }
+                    is SocketEvent.UserProfileUpdated -> {
+                        _uiState.value = _uiState.value.copy(
+                            users = _uiState.value.users.map { u ->
+                                if (u.id == event.userId) u.copy(
+                                    username = event.username.ifBlank { u.username },
+                                    statusText = event.statusText.ifEmpty { null },
+                                    fullName = event.fullName.ifEmpty { null },
+                                    mobilePhone = event.mobilePhone.ifEmpty { null }
+                                ) else u
+                            }
+                        )
+                    }
+                    is SocketEvent.UserAvatarUpdated -> {
+                        _uiState.value = _uiState.value.copy(
+                            users = _uiState.value.users.map { u ->
+                                if (u.id == event.userId) u.copy(avatar = event.avatar) else u
+                            },
+                            chat = _uiState.value.chat?.let { c ->
+                                if (c.participants.contains(event.userId) && c.type == "direct")
+                                    c.copy(avatar = event.avatar) else c
+                            }
+                        )
+                    }
+                    is SocketEvent.ChatAvatarUpdated -> {
+                        if (event.chatId == chatId) {
+                            _uiState.value = _uiState.value.copy(
+                                chat = event.chat ?: _uiState.value.chat?.copy(avatar = event.avatar)
                             )
                         }
                     }
@@ -264,9 +338,83 @@ class ChatViewModel(
                 put("mimetype", fileMimetype ?: "audio/mp4")
             }
         } else null
-        socketManager.sendMessage(chat.id, text, replyTo?.id, file)
-        _uiState.value = _uiState.value.copy(replyToMessage = null)
+
+        val localId = "local_${java.util.UUID.randomUUID()}"
+        val me = _uiState.value.currentUser
+        val optimistic = Message(
+            id = localId,
+            localId = localId,
+            chatId = chat.id,
+            senderId = me?.id ?: "",
+            senderName = me?.username ?: "",
+            senderAvatar = me?.avatar,
+            text = text,
+            fileData = fileUrl?.let { FileData(name = filename ?: "", url = it, size = fileSize, mimetype = fileMimetype ?: "") },
+            replyTo = replyTo?.let { ReplyTo(it.id, it.text, it.senderName) },
+            timestamp = nowTimestamp(),
+            status = "sending"
+        )
+        _uiState.value = _uiState.value.copy(
+            messages = _uiState.value.messages + optimistic,
+            replyToMessage = null
+        )
+        socketManager.sendMessage(chat.id, text, replyTo?.id, file, localId)
     }
+
+    fun sendSticker(file: String) {
+        val chat = _uiState.value.chat ?: return
+        val localId = "local_${java.util.UUID.randomUUID()}"
+        val me = _uiState.value.currentUser
+        val text = StickerManager.wrapStickerText(file)
+        val optimistic = Message(
+            id = localId,
+            localId = localId,
+            chatId = chat.id,
+            senderId = me?.id ?: "",
+            senderName = me?.username ?: "",
+            senderAvatar = me?.avatar,
+            text = text,
+            timestamp = nowTimestamp(),
+            status = "sending"
+        )
+        _uiState.value = _uiState.value.copy(
+            messages = _uiState.value.messages + optimistic,
+            showStickerPicker = false
+        )
+        socketManager.sendMessage(chat.id, text, null, null, localId)
+    }
+
+    fun retryMessage(message: Message) {
+        val chat = _uiState.value.chat ?: return
+        val localId = message.localId ?: return
+        _uiState.value = _uiState.value.copy(
+            messages = _uiState.value.messages.map {
+                if (it.localId == localId) it.copy(status = "sending") else it
+            }
+        )
+        val file = message.fileData?.let {
+            JSONObject().apply {
+                put("filename", it.name)
+                put("url", it.url)
+                put("size", it.size)
+                put("mimetype", it.mimetype)
+            }
+        }
+        socketManager.sendMessage(chat.id, message.text, message.replyTo?.messageId, file, localId)
+    }
+
+    fun loadOlder() {
+        val state = _uiState.value
+        val chat = state.chat ?: return
+        if (!state.hasMore || state.isLoadingOlder) return
+        val oldest = state.messages.firstOrNull { it.localId == null } ?: return
+        _uiState.value = state.copy(isLoadingOlder = true)
+        socketManager.getMessagesBefore(chat.id, oldest.timestamp)
+    }
+
+    private fun nowTimestamp(): String =
+        java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
+            .format(java.util.Date())
 
     fun startRecording(cacheDir: java.io.File) {
         try {
@@ -409,6 +557,32 @@ class ChatViewModel(
 
     fun hideUserInfo() {
         _uiState.value = _uiState.value.copy(showUserInfo = false)
+    }
+
+    fun showGroupInfo() {
+        _uiState.value = _uiState.value.copy(showGroupInfo = true)
+    }
+
+    fun hideGroupInfo() {
+        _uiState.value = _uiState.value.copy(showGroupInfo = false)
+    }
+
+    fun toggleStickerPicker() {
+        _uiState.value = _uiState.value.copy(
+            showStickerPicker = !_uiState.value.showStickerPicker,
+            showEmojiPicker = false
+        )
+    }
+
+    fun toggleEmojiPicker() {
+        _uiState.value = _uiState.value.copy(
+            showEmojiPicker = !_uiState.value.showEmojiPicker,
+            showStickerPicker = false
+        )
+    }
+
+    fun hidePickers() {
+        _uiState.value = _uiState.value.copy(showStickerPicker = false, showEmojiPicker = false)
     }
 
     fun uploadAndSendFile(context: android.content.Context, uri: android.net.Uri, mimeType: String? = null) {

@@ -39,6 +39,7 @@ import kotlinx.coroutines.launch
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.asRequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
 import com.chatursa.app.data.network.RetrofitClient
 import java.io.File
 import java.io.FileOutputStream
@@ -91,9 +92,11 @@ fun ProfileScreen(
                     }
                     val requestBody = file.asRequestBody("image/*".toMediaTypeOrNull())
                     val part = MultipartBody.Part.createFormData("avatar", file.name, requestBody)
-                    val response = RetrofitClient.apiService.uploadAvatar(part)
+                    val userIdPart = user.id.toRequestBody("text/plain".toMediaTypeOrNull())
+                    val response = RetrofitClient.apiService.uploadAvatar(userIdPart, part)
                     if (response.isSuccessful) {
-                        onUserUpdated(user)
+                        val newAvatar = response.body()?.get("avatar") as? String
+                        onUserUpdated(user.copy(avatar = newAvatar ?: user.avatar))
                     }
                 } catch (e: Exception) { e.printStackTrace() }
                 isUploading = false
@@ -208,7 +211,7 @@ fun ProfileScreen(
             shape = RoundedCornerShape(12.dp)
         ) {
             Column {
-                ProfileMenuItem(Icons.Default.Info, "Версия", "1.0.0")
+                ProfileMenuItem(Icons.Default.Info, "Версия", AppConfig.APP_VERSION)
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
                 ProfileMenuItem(
                     icon = Icons.Default.Palette,
