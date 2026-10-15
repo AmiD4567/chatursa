@@ -120,10 +120,11 @@ echo   Новая версия: !NEW_VERSION!
 REM Обновление package.json
 powershell -Command "(Get-Content 'package.json') -replace '\"version\":\s*\"[^\"]+\"', '\"version\": \"!NEW_VERSION!\"' | Set-Content 'package.json'" >nul 2>&1
 
-REM Git init + remote (если нет)
+REM Git init + remote (если нет). Репозиторий — тот же, что и в publish
+REM в package.json (AmiD4567/chatursa); прежний тут был chat-app.git.
 if not exist ".git" (
     call git init >nul 2>&1
-    call git remote add origin https://%GH_TOKEN%@github.com/AmiD4567/chat-app.git 2>nul || true
+    call git remote add origin https://%GH_TOKEN%@github.com/%GITHUB_REPO%.git 2>nul || true
 )
 
 REM Git add + commit
@@ -180,7 +181,19 @@ powershell -Command "
         $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/'%GITHUB_REPO'/releases/tags/'%NEW_VERSION%' `
             -Headers $headers
         
-        Get-ChildItem '%DIST_DIR%\*.exe' | ForEach-Object {
+        # Только файлы текущей версии: старые .exe из dist лежат рядом.
+        # latest.yml обязателен — electron-updater ищет именно его, без него
+        # проверка обновлений падает с 404. *.blockmap нужен для частичного обновления.
+        $pattern = "%DIST_DIR%\*$NEW_VERSION*"
+        $files = Get-ChildItem $pattern -File | Where-Object { $_.Extension -in '.exe', '.blockmap' }
+        $latest = Get-ChildItem '%DIST_DIR%\latest.yml' -File
+        $files = @($files) + @($latest)
+
+        if (-not $files) {
+            Write-Error ("Не найдено файлов релиза по шаблону: " + $pattern)
+        }
+
+        $files | ForEach-Object {
             $file = $_
             $uploadUrl = ($release.upload_url -split '\{')[0] + 'name=' + [System.Uri]::EscapeDataString($file.Name)
             
