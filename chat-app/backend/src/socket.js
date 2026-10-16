@@ -19,6 +19,10 @@ module.exports = function registerSocketHandlers(deps) {
   // Звонки 1:1 — сигналинг WebRTC
   // ══════════════════════════════════════════
   const CALL_RING_TIMEOUT = parseInt(process.env.CALL_RING_TIMEOUT_MS || '45000', 10);
+
+    // Ключи вида `${userId}:${chatId}`. Отказ постоянный, повторно писать в лог
+    // незачем: клиент со старой версией стучится по пять раз на одну попытку.
+    const warnedNoMembership = new Set();
   const callRings = new Map();   // callId -> timeout гудков
   const callPeers  = new Map();  // callId -> { initiatorId, peerId, status, callType }
   const callBusy   = new Map();  // userId -> callId (занят существующим звонком)
@@ -98,13 +102,27 @@ io.on('connection', (socket) => {
   const userAgent = socket.handshake?.headers?.['user-agent'] || 'unknown';
 
   // Middleware: проверка членства в чате для отправки сообщений
-  socket.use(([event, data], next) => {
+  socket.use(([event, data, ack], next) => {
     if (event === 'send_message' && data && data.chatId) {
       const onlineUser = onlineUsers.get(socket.id);
       if (onlineUser) {
         const isParticipant = db.prepare('SELECT 1 FROM chat_participants WHERE chat_id = ? AND user_id = ?').get(data.chatId, onlineUser.id);
         if (!isParticipant) {
-          console.warn(`WS middleware: socket ${socket.id} пытается отправить сообщение в чат ${data.chatId} без членства`);
+          // Пишем один раз на пару «пользователь+чат»: условие постоянное, а
+          // клиент без новой классификации ошибок повторяет попытку пять раз.
+          const warnKey = `${onlineUser.id}:${data.chatId}`;
+          if (!warnedNoMembership.has(warnKey)) {
+            warnedNoMembership.add(warnKey);
+            console.warn(
+              `WS middleware: ${onlineUser.username} (${clientIp}, socket ${socket.id}) ` +
+              `пытается отправить сообщение в чат ${data.chatId} без членства`
+            );
+          }
+          // Отвечаем через ack ДО return. Иначе пакет отбрасывается, акк клиента
+          // не вызывается никогда, и клиент молчит до своего таймаута, не понимая,
+          // отказ постоянный или временный. Из-за этого очередь офлайн-сообщений
+          // повторяла одно и то же по пять раз подряд.
+          if (typeof ack === 'function') ack({ ok: false, error: 'not_participant' });
           socket.emit('error', { message: 'Вы не являетесь участником этого чата. Попробуйте переподключиться.' });
           return;
         }

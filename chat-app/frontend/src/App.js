@@ -354,6 +354,16 @@ const CONFETTI_EMOJIS = ['🎉', '🥳', '🎊'];
 // Сколько превью показывать в одном сообщении. Дальше — просто ссылки.
 const MAX_LINK_PREVIEWS = 2;
 
+// Отказы сервера, при которых повтор бесполезен: чат удалён, участника исключили,
+// сообщение невалидно. Такие сразу помечаем «не доставлено», без пяти попыток.
+// Всё остальное (таймаут, обрыв, rate_limited) — временное, повторяем с откатом.
+const OUTBOX_PERMANENT_ERRORS = new Set([
+  'not_participant',
+  'chat_not_found',
+  'bad_chat',
+  'no_session',
+]);
+
 // Диагностика скролла: включается localStorage.chatScrollDebug = '1'
 function sdbg(...a) {
   try { if (localStorage.getItem('chatScrollDebug') === '1') console.log('[scroll]', ...a); } catch (e) {}
@@ -5180,6 +5190,16 @@ useEffect(() => {
   const outboxRetryTimerRef = useRef(null);
   const OUTBOX_RETRY_DELAYS = [2000, 5000, 10000, 20000, 30000];
 
+  /** Помечает запись очереди и её пузырь в чате как «не доставлено». */
+  const markOutboxFailed = async (msg) => {
+    await setOutboxStatus(msg.id, 'failed');
+    if (msg._localId) {
+      setMessages(prev => prev.map(m =>
+        m._localId === msg._localId ? { ...m, _pending: false, _failed: true } : m
+      ));
+    }
+  };
+
   const flushOutbox = async () => {
     const conn = socketRef.current;
     if (!conn || !conn.connected) return;
@@ -5194,20 +5214,31 @@ useEffect(() => {
       console.log(`[Offline] Отправка ${queue.length} накопленных сообщений...`);
       for (const msg of queue) {
         if (!conn.connected) break;
-        const ok = await new Promise((resolve) => {
+        const resp = await new Promise((resolve) => {
           let settled = false;
           const timer = setTimeout(() => {
-            if (!settled) { settled = true; resolve(false); }
+            if (!settled) { settled = true; resolve(null); }
           }, 10000);
-          conn.emit('send_message', msg, (resp) => {
+          conn.emit('send_message', msg, (r) => {
             if (settled) return;
             settled = true;
             clearTimeout(timer);
-            resolve(!!(resp && resp.ok));
+            resolve(r || null);
           });
         });
-        if (!ok) break;
-        await removeFromOutbox(msg.id);
+        if (resp && resp.ok) {
+          await removeFromOutbox(msg.id);
+          continue;
+        }
+        // Отказ, который не пройдёт и при повторе: чат удалён, участник исключён.
+        // Повторять такое бессмысленно — раньше клиент молчал 10 секунд на попытку
+        // и делал пять попыток, плодя одинаковые строки в логе сервера.
+        if (resp && OUTBOX_PERMANENT_ERRORS.has(resp.error)) {
+          console.warn('[Offline] Сообщение отклонено безвозвратно:', resp.error, '—', msg.text);
+          await markOutboxFailed(msg);
+          continue;
+        }
+        break;
       }
       const left = await getOutbox();
       if (left.length === 0) {
@@ -5229,17 +5260,13 @@ useEffect(() => {
         }, delay);
         return;
       }
-      // Попытки исчерпаны. Помечаем застрявшее сообщение и снимаем блокировку:
-      // getOutbox() читает только 'pending', поэтому следующие уйдут свободно.
+      // Попытки исчерпаны (значит отказ был временным: таймаут или обрыв).
+      // Помечаем застрявшее сообщение и снимаем блокировку: getOutbox() читает
+      // только 'pending', поэтому следующие уйдут свободно.
       const stuck = left[0];
       console.warn('[Offline] Сообщение не доставлено после нескольких попыток:', stuck.text);
-      await setOutboxStatus(stuck.id, 'failed');
+      await markOutboxFailed(stuck);
       outboxAttemptRef.current = 0;
-      if (stuck._localId) {
-        setMessages(prev => prev.map(m =>
-          m._localId === stuck._localId ? { ...m, _pending: false, _failed: true } : m
-        ));
-      }
       // Дальше по очереди: планируем следующий проход
       clearTimeout(outboxRetryTimerRef.current);
       outboxRetryTimerRef.current = setTimeout(() => {
